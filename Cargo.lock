@@ -88,7 +88,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e01ed3140b2f8d422c68afa1ed2e85d996ea619c988ac834d255db32138655cb"
 dependencies = [
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -205,7 +205,7 @@ dependencies = [
  "actix-router",
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -250,22 +250,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94fb8275041c72129eb51b7d0322c29b8387a0386127718b096429201a5d6ece"
 dependencies = [
  "alloc-no-stdlib",
-]
-
-[[package]]
-name = "any_spawner"
-version = "0.3.0"
-dependencies = [
- "async-executor",
- "futures",
- "futures-lite",
- "glib",
- "serial_test",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "wasm-bindgen-futures",
- "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -330,7 +314,7 @@ checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -347,7 +331,7 @@ checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -376,7 +360,7 @@ dependencies = [
  "manyhow",
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -392,7 +376,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "quote-use",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -512,7 +496,7 @@ checksum = "238b90427dfad9da4a9abd60f3ec1cdee6b80454bde49ed37f1781dd8e9dc7f9"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -586,7 +570,7 @@ checksum = "89385e82b5d1821d2219e0b095efa2cc1f246cbf99080f3be46a1a85c0d392d9"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -824,10 +808,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "const_str_slice_concat"
-version = "0.1.0"
-
-[[package]]
 name = "convert_case"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -977,7 +957,7 @@ checksum = "ef941ded77d15ca19b40374869ac6000af1c9f2a4c0f3d4c70926287e6364a8f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -999,7 +979,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustc_version",
- "syn 2.0.114",
+ "syn",
  "unicode-xid",
 ]
 
@@ -1111,7 +1091,7 @@ checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -1131,14 +1111,6 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
-
-[[package]]
-name = "either_of"
-version = "0.1.9"
-dependencies = [
- "paste",
- "pin-project-lite",
-]
 
 [[package]]
 name = "embedded-io"
@@ -1329,7 +1301,7 @@ checksum = "162ee34ebcb7c64a8abebc059ce0fee27c2262618d7b60ed8faf72fef13c3650"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -1475,7 +1447,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -1573,6 +1545,527 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "zerocopy",
+]
+
+[[package]]
+name = "halyard"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "cfg-if",
+ "dioxus-cli-config",
+ "dioxus-devtools",
+ "futures",
+ "getrandom 0.4.1",
+ "halyard_any_spawner",
+ "halyard_config",
+ "halyard_dom",
+ "halyard_either_of",
+ "halyard_hot_reload",
+ "halyard_hydration_context",
+ "halyard_macro",
+ "halyard_meta",
+ "halyard_oco",
+ "halyard_or_poisoned",
+ "halyard_reactive_graph",
+ "halyard_server",
+ "halyard_server_fn",
+ "halyard_tachys",
+ "halyard_throw_error",
+ "rand 0.9.2",
+ "rustc-hash 2.1.1",
+ "rustc_version",
+ "send_wrapper",
+ "serde",
+ "serde_json",
+ "serde_qs",
+ "slotmap",
+ "subsecond",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "typed-builder",
+ "typed-builder-macro",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm_split_helpers",
+ "web-sys",
+]
+
+[[package]]
+name = "halyard_actix"
+version = "0.1.0"
+dependencies = [
+ "actix-files",
+ "actix-http",
+ "actix-web",
+ "futures",
+ "halyard",
+ "halyard_any_spawner",
+ "halyard_hydration_context",
+ "halyard_integration_utils",
+ "halyard_macro",
+ "halyard_meta",
+ "halyard_or_poisoned",
+ "halyard_router",
+ "halyard_server_fn",
+ "halyard_tachys",
+ "send_wrapper",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "halyard_any_spawner"
+version = "0.1.0"
+dependencies = [
+ "async-executor",
+ "futures",
+ "futures-lite",
+ "glib",
+ "serial_test",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+]
+
+[[package]]
+name = "halyard_axum"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "futures",
+ "halyard",
+ "halyard_any_spawner",
+ "halyard_hydration_context",
+ "halyard_integration_utils",
+ "halyard_macro",
+ "halyard_meta",
+ "halyard_or_poisoned",
+ "halyard_router",
+ "halyard_server_fn",
+ "halyard_tachys",
+ "reqwest",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "halyard_config"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "serde",
+ "temp-env",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "typed-builder",
+]
+
+[[package]]
+name = "halyard_const_str_slice_concat"
+version = "0.1.0"
+
+[[package]]
+name = "halyard_dom"
+version = "0.1.0"
+dependencies = [
+ "halyard",
+ "halyard_or_poisoned",
+ "halyard_reactive_graph",
+ "halyard_tachys",
+ "js-sys",
+ "send_wrapper",
+ "serde",
+ "serde_json",
+ "tracing",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "halyard_either_of"
+version = "0.1.0"
+dependencies = [
+ "pastey",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "halyard_hot_reload"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "camino",
+ "halyard_or_poisoned",
+ "halyard_rstml",
+ "indexmap",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn",
+ "walkdir",
+]
+
+[[package]]
+name = "halyard_hydration_context"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "halyard_or_poisoned",
+ "halyard_throw_error",
+ "js-sys",
+ "pin-project-lite",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "halyard_integration_utils"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "halyard",
+ "halyard_config",
+ "halyard_hydration_context",
+ "halyard_meta",
+ "halyard_reactive_graph",
+ "halyard_router",
+]
+
+[[package]]
+name = "halyard_macro"
+version = "0.1.0"
+dependencies = [
+ "attribute-derive",
+ "cfg-if",
+ "convert_case 0.11.0",
+ "convert_case_extras",
+ "halyard",
+ "halyard_hot_reload",
+ "halyard_macro_diagnostics",
+ "halyard_router",
+ "halyard_rstml",
+ "halyard_server_fn",
+ "halyard_server_fn_macro",
+ "html-escape",
+ "insta",
+ "itertools",
+ "log",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "serde",
+ "syn",
+ "tracing",
+ "trybuild",
+ "typed-builder",
+ "uuid",
+]
+
+[[package]]
+name = "halyard_macro_diagnostics"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "halyard_meta"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "halyard",
+ "halyard_or_poisoned",
+ "indexmap",
+ "send_wrapper",
+ "tracing",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "halyard_next_tuple"
+version = "0.1.0"
+
+[[package]]
+name = "halyard_oco"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "halyard_or_poisoned"
+version = "0.1.0"
+
+[[package]]
+name = "halyard_reactive_graph"
+version = "0.1.0"
+dependencies = [
+ "async-lock",
+ "futures",
+ "guardian",
+ "halyard_any_spawner",
+ "halyard_hydration_context",
+ "halyard_or_poisoned",
+ "indexmap",
+ "pastey",
+ "pin-project-lite",
+ "rustc-hash 2.1.1",
+ "rustc_version",
+ "send_wrapper",
+ "serde",
+ "slotmap",
+ "subsecond",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "typed-builder",
+ "web-sys",
+]
+
+[[package]]
+name = "halyard_reactive_stores"
+version = "0.1.0"
+dependencies = [
+ "guardian",
+ "halyard",
+ "halyard_any_spawner",
+ "halyard_or_poisoned",
+ "halyard_reactive_graph",
+ "halyard_reactive_stores_macro",
+ "indexmap",
+ "itertools",
+ "pastey",
+ "rustc-hash 2.1.1",
+ "send_wrapper",
+ "serde",
+ "slotmap",
+ "tokio",
+ "tokio-test",
+]
+
+[[package]]
+name = "halyard_reactive_stores_macro"
+version = "0.1.0"
+dependencies = [
+ "convert_case 0.11.0",
+ "halyard_macro_diagnostics",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "halyard_router"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "gloo-net",
+ "halyard",
+ "halyard_any_spawner",
+ "halyard_either_of",
+ "halyard_or_poisoned",
+ "halyard_reactive_graph",
+ "halyard_router_macro",
+ "halyard_tachys",
+ "js-sys",
+ "percent-encoding",
+ "rustc_version",
+ "send_wrapper",
+ "thiserror 2.0.17",
+ "tracing",
+ "url",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "halyard_router_macro"
+version = "0.1.0"
+dependencies = [
+ "halyard",
+ "halyard_macro",
+ "halyard_router",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "halyard_rstml"
+version = "0.1.0"
+dependencies = [
+ "derive-where",
+ "halyard_syn_derive",
+ "proc-macro2",
+ "proc-macro2-diagnostics",
+ "quote",
+ "syn",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "halyard_server"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "codee",
+ "futures",
+ "halyard_any_spawner",
+ "halyard_hydration_context",
+ "halyard_or_poisoned",
+ "halyard_reactive_graph",
+ "halyard_server_fn",
+ "halyard_tachys",
+ "js-sys",
+ "send_wrapper",
+ "serde",
+ "serde_json",
+ "tracing",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "halyard_server_fn"
+version = "0.1.0"
+dependencies = [
+ "actix-web",
+ "actix-ws",
+ "axum",
+ "base64",
+ "bitcode",
+ "bytes",
+ "ciborium",
+ "const-str",
+ "const_format",
+ "futures",
+ "gloo-net",
+ "halyard_or_poisoned",
+ "halyard_server_fn_macro_default",
+ "halyard_throw_error",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper",
+ "inventory",
+ "js-sys",
+ "multer",
+ "pin-project-lite",
+ "postcard",
+ "reqwest",
+ "rkyv",
+ "rmp-serde",
+ "rustc_version",
+ "rustversion",
+ "send_wrapper",
+ "serde",
+ "serde-lite",
+ "serde_json",
+ "serde_qs",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
+ "tower-layer",
+ "trybuild",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-streams",
+ "web-sys",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "halyard_server_fn_macro"
+version = "0.1.0"
+dependencies = [
+ "const_format",
+ "convert_case 0.11.0",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "halyard_server_fn_macro_default"
+version = "0.1.0"
+dependencies = [
+ "halyard_server_fn_macro",
+ "syn",
+]
+
+[[package]]
+name = "halyard_syn_derive"
+version = "0.1.0"
+dependencies = [
+ "halyard_macro_diagnostics",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "halyard_tachys"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "drain_filter_polyfill",
+ "erased",
+ "futures",
+ "halyard_any_spawner",
+ "halyard_const_str_slice_concat",
+ "halyard_either_of",
+ "halyard_next_tuple",
+ "halyard_oco",
+ "halyard_or_poisoned",
+ "halyard_reactive_graph",
+ "halyard_reactive_stores",
+ "halyard_throw_error",
+ "html-escape",
+ "indexmap",
+ "itertools",
+ "js-sys",
+ "pastey",
+ "rustc-hash 2.1.1",
+ "rustc_version",
+ "send_wrapper",
+ "serde",
+ "serde_json",
+ "sledgehammer_bindgen",
+ "sledgehammer_utils",
+ "slotmap",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "halyard_throw_error"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -1709,19 +2202,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3944cf8cf766b40e2a1a333ee5e9b563f854d5fa49d6a8ca2764e97c6eddb214"
 dependencies = [
  "typenum",
-]
-
-[[package]]
-name = "hydration_context"
-version = "0.3.1"
-dependencies = [
- "futures",
- "js-sys",
- "or_poisoned",
- "pin-project-lite",
- "serde",
- "throw_error",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -2025,276 +2505,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
-name = "leptos"
-version = "0.8.20"
-dependencies = [
- "any_spawner",
- "base64",
- "cfg-if",
- "dioxus-cli-config",
- "dioxus-devtools",
- "either_of",
- "futures",
- "getrandom 0.4.1",
- "hydration_context",
- "leptos-spin-macro",
- "leptos_config",
- "leptos_dom",
- "leptos_hot_reload",
- "leptos_macro",
- "leptos_server",
- "oco_ref",
- "or_poisoned",
- "paste",
- "rand 0.9.2",
- "reactive_graph",
- "rustc-hash 2.1.1",
- "rustc_version",
- "send_wrapper",
- "serde",
- "serde_json",
- "serde_qs",
- "server_fn",
- "slotmap",
- "subsecond",
- "tachys",
- "thiserror 2.0.17",
- "throw_error",
- "tokio",
- "tokio-test",
- "tracing",
- "typed-builder",
- "typed-builder-macro",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm_split_helpers",
- "web-sys",
-]
-
-[[package]]
-name = "leptos-spin-macro"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87fea27b9871108116e3ca8c8846ab0515b9e70da9554872703a627fac357caf"
-dependencies = [
- "http 1.4.0",
- "proc-macro-error",
- "server_fn_macro 0.6.15",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "leptos_actix"
-version = "0.8.7"
-dependencies = [
- "actix-files",
- "actix-http",
- "actix-web",
- "any_spawner",
- "futures",
- "hydration_context",
- "leptos",
- "leptos_integration_utils",
- "leptos_macro",
- "leptos_meta",
- "leptos_router",
- "or_poisoned",
- "send_wrapper",
- "serde_json",
- "server_fn",
- "tachys",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "leptos_axum"
-version = "0.8.10"
-dependencies = [
- "any_spawner",
- "anyhow",
- "axum",
- "futures",
- "hydration_context",
- "leptos",
- "leptos_integration_utils",
- "leptos_macro",
- "leptos_meta",
- "leptos_router",
- "or_poisoned",
- "reqwest",
- "server_fn",
- "tachys",
- "tempfile",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
-]
-
-[[package]]
-name = "leptos_config"
-version = "0.8.10"
-dependencies = [
- "config",
- "serde",
- "temp-env",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
- "typed-builder",
-]
-
-[[package]]
-name = "leptos_dom"
-version = "0.8.8"
-dependencies = [
- "js-sys",
- "leptos",
- "or_poisoned",
- "reactive_graph",
- "send_wrapper",
- "serde",
- "serde_json",
- "tachys",
- "tracing",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "leptos_hot_reload"
-version = "0.8.6"
-dependencies = [
- "anyhow",
- "camino",
- "indexmap",
- "or_poisoned",
- "proc-macro2",
- "quote",
- "rstml",
- "serde",
- "syn 2.0.114",
- "walkdir",
-]
-
-[[package]]
-name = "leptos_integration_utils"
-version = "0.8.8"
-dependencies = [
- "futures",
- "hydration_context",
- "leptos",
- "leptos_config",
- "leptos_meta",
- "leptos_router",
- "reactive_graph",
-]
-
-[[package]]
-name = "leptos_macro"
-version = "0.8.17"
-dependencies = [
- "attribute-derive",
- "cfg-if",
- "convert_case 0.11.0",
- "convert_case_extras",
- "html-escape",
- "insta",
- "itertools",
- "leptos",
- "leptos_hot_reload",
- "leptos_router",
- "log",
- "prettyplease",
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "rstml",
- "rustc_version",
- "serde",
- "server_fn",
- "server_fn_macro 0.8.10",
- "syn 2.0.114",
- "tracing",
- "trybuild",
- "typed-builder",
- "uuid",
-]
-
-[[package]]
-name = "leptos_meta"
-version = "0.8.6"
-dependencies = [
- "futures",
- "indexmap",
- "leptos",
- "or_poisoned",
- "send_wrapper",
- "tracing",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "leptos_router"
-version = "0.8.15"
-dependencies = [
- "any_spawner",
- "either_of",
- "futures",
- "gloo-net",
- "js-sys",
- "leptos",
- "leptos_router_macro",
- "or_poisoned",
- "percent-encoding",
- "reactive_graph",
- "rustc_version",
- "send_wrapper",
- "tachys",
- "thiserror 2.0.17",
- "tracing",
- "url",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "leptos_router_macro"
-version = "0.8.6"
-dependencies = [
- "leptos",
- "leptos_macro",
- "leptos_router",
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "leptos_server"
-version = "0.8.7"
-dependencies = [
- "any_spawner",
- "base64",
- "codee",
- "futures",
- "hydration_context",
- "js-sys",
- "or_poisoned",
- "reactive_graph",
- "send_wrapper",
- "serde",
- "serde_json",
- "server_fn",
- "tachys",
- "tracing",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.180"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2381,7 +2591,7 @@ dependencies = [
  "manyhow-macros",
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -2449,7 +2659,7 @@ checksum = "2a8df435db5df1dd82a74f77e3c3addf6ab7665079c31e222a64f34f7475d87e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -2529,12 +2739,8 @@ checksum = "4568f25ccbd45ab5d5603dc34318c1ec56b117531781260002151b8530a9f931"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
-
-[[package]]
-name = "next_tuple"
-version = "0.1.0"
 
 [[package]]
 name = "nu-ansi-term"
@@ -2572,15 +2778,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oco_ref"
-version = "0.2.1"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.17",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2597,10 +2794,6 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
-
-[[package]]
-name = "or_poisoned"
-version = "0.1.0"
 
 [[package]]
 name = "parking"
@@ -2632,10 +2825,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "paste"
-version = "1.0.15"
+name = "pastey"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "pathdiff"
@@ -2666,7 +2859,7 @@ checksum = "6e918e4ff8c4549eb882f14b3a4bc8c8bc93de829416eacf579f1207a8fbf861"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -2731,7 +2924,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -2741,52 +2934,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "219cb19e96be00ab2e37d6e299658a0cfa83e52429179969b0f0121b4ac46983"
 dependencies = [
  "toml_edit",
-]
-
-[[package]]
-name = "proc-macro-error"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c"
-dependencies = [
- "proc-macro-error-attr",
- "proc-macro2",
- "quote",
- "syn 1.0.109",
- "version_check",
-]
-
-[[package]]
-name = "proc-macro-error-attr"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1be40180e52ecc98ad80b184934baf3d0d29f979574e439af5a55274b35f869"
-dependencies = [
- "proc-macro2",
- "quote",
- "version_check",
-]
-
-[[package]]
-name = "proc-macro-error-attr2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96de42df36bb9bba5542fe9f1a054b8cc87e172759a1868aa05c1f3acc89dfc5"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "proc-macro-error2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ec05c52be0a07b08061f7dd003e7d7092e0472bc731b4af7bb1ef876109802"
-dependencies = [
- "proc-macro-error-attr2",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
 ]
 
 [[package]]
@@ -2817,7 +2964,7 @@ checksum = "af066a9c399a26e020ada66a034357a868728e72cd426f3adcd35f80d88d88c8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
  "version_check",
  "yansi",
 ]
@@ -2839,7 +2986,7 @@ checksum = "7347867d0a7e1208d93b46767be83e2b8f978c3dad35f775ac8d8847551d6fe1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -2926,7 +3073,7 @@ dependencies = [
  "proc-macro-utils",
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -2989,65 +3136,6 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
-
-[[package]]
-name = "reactive_graph"
-version = "0.2.14"
-dependencies = [
- "any_spawner",
- "async-lock",
- "futures",
- "guardian",
- "hydration_context",
- "indexmap",
- "or_poisoned",
- "paste",
- "pin-project-lite",
- "rustc-hash 2.1.1",
- "rustc_version",
- "send_wrapper",
- "serde",
- "slotmap",
- "subsecond",
- "thiserror 2.0.17",
- "tokio",
- "tokio-test",
- "tracing",
- "typed-builder",
- "web-sys",
-]
-
-[[package]]
-name = "reactive_stores"
-version = "0.4.3"
-dependencies = [
- "any_spawner",
- "guardian",
- "indexmap",
- "itertools",
- "leptos",
- "or_poisoned",
- "paste",
- "reactive_graph",
- "reactive_stores_macro",
- "rustc-hash 2.1.1",
- "send_wrapper",
- "serde",
- "slotmap",
- "tokio",
- "tokio-test",
-]
-
-[[package]]
-name = "reactive_stores_macro"
-version = "0.4.3"
-dependencies = [
- "convert_case 0.11.0",
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
 
 [[package]]
 name = "redox_syscall"
@@ -3182,7 +3270,7 @@ checksum = "bd83f5f173ff41e00337d97f6572e416d022ef8a19f371817259ae960324c482"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -3202,21 +3290,6 @@ checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
 dependencies = [
  "rmp",
  "serde",
-]
-
-[[package]]
-name = "rstml"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61cf4616de7499fc5164570d40ca4e1b24d231c6833a88bff0fe00725080fd56"
-dependencies = [
- "derive-where",
- "proc-macro2",
- "proc-macro2-diagnostics",
- "quote",
- "syn 2.0.114",
- "syn_derive",
- "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -3445,7 +3518,7 @@ checksum = "7a1ecb79433fa63a8977c0dd65bfc59bf5f4f195e10a6c5d6d6e198c650cadb1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -3476,7 +3549,7 @@ checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -3558,92 +3631,7 @@ checksum = "6f50427f258fb77356e4cd4aa0e87e2bd2c66dbcee41dc405282cae2bfc26c83"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "server_fn"
-version = "0.8.13"
-dependencies = [
- "actix-web",
- "actix-ws",
- "axum",
- "base64",
- "bitcode",
- "bytes",
- "ciborium",
- "const-str",
- "const_format",
- "futures",
- "gloo-net",
- "http 1.4.0",
- "http-body-util",
- "hyper",
- "inventory",
- "js-sys",
- "multer",
- "or_poisoned",
- "pin-project-lite",
- "postcard",
- "reqwest",
- "rkyv",
- "rmp-serde",
- "rustc_version",
- "rustversion",
- "send_wrapper",
- "serde",
- "serde-lite",
- "serde_json",
- "serde_qs",
- "server_fn_macro_default",
- "thiserror 2.0.17",
- "throw_error",
- "tokio",
- "tokio-tungstenite",
- "tower",
- "tower-layer",
- "trybuild",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-streams",
- "web-sys",
- "xxhash-rust",
-]
-
-[[package]]
-name = "server_fn_macro"
-version = "0.6.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faaaf648c6967aef78177c0610478abb5a3455811f401f3c62d10ae9bd3901a1"
-dependencies = [
- "const_format",
- "convert_case 0.6.0",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
- "xxhash-rust",
-]
-
-[[package]]
-name = "server_fn_macro"
-version = "0.8.10"
-dependencies = [
- "const_format",
- "convert_case 0.11.0",
- "proc-macro2",
- "quote",
- "rustc_version",
- "syn 2.0.114",
- "xxhash-rust",
-]
-
-[[package]]
-name = "server_fn_macro_default"
-version = "0.8.5"
-dependencies = [
- "server_fn_macro 0.8.10",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -3736,7 +3724,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f62f06db0370222f7f498ef478fce9f8df5828848d1d3517e3331936d7074f55"
 dependencies = [
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -3835,16 +3823,6 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "syn"
-version = "1.0.109"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
-dependencies = [
- "proc-macro2",
- "unicode-ident",
-]
-
-[[package]]
-name = "syn"
 version = "2.0.114"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4d107df263a3013ef9b1879b0df87d706ff80f65a86ea879bd9c31f9b307c2a"
@@ -3852,18 +3830,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "syn_derive"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdb066a04799e45f5d582e8fc6ec8e6d6896040d00898eb4e6a835196815b219"
-dependencies = [
- "proc-macro-error2",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
 ]
 
 [[package]]
@@ -3883,7 +3849,7 @@ checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -3897,43 +3863,6 @@ dependencies = [
  "pkg-config",
  "toml",
  "version-compare",
-]
-
-[[package]]
-name = "tachys"
-version = "0.2.18"
-dependencies = [
- "any_spawner",
- "async-trait",
- "const_str_slice_concat",
- "drain_filter_polyfill",
- "either_of",
- "erased",
- "futures",
- "html-escape",
- "indexmap",
- "itertools",
- "js-sys",
- "next_tuple",
- "oco_ref",
- "or_poisoned",
- "paste",
- "reactive_graph",
- "reactive_stores",
- "rustc-hash 2.1.1",
- "rustc_version",
- "send_wrapper",
- "serde",
- "serde_json",
- "sledgehammer_bindgen",
- "sledgehammer_utils",
- "slotmap",
- "throw_error",
- "tokio",
- "tokio-test",
- "tracing",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -4006,7 +3935,7 @@ checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -4017,15 +3946,7 @@ checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
-]
-
-[[package]]
-name = "throw_error"
-version = "0.3.1"
-dependencies = [
- "anyhow",
- "pin-project-lite",
+ "syn",
 ]
 
 [[package]]
@@ -4109,7 +4030,7 @@ checksum = "af407857209536a95c8e56f8231ef2c2e2aff839b22e07a1ffcbc617e9db9fa5"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -4299,7 +4220,7 @@ checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -4383,7 +4304,7 @@ checksum = "076a02dc54dd46795c2e9c8282ed40bcfb1e22747e955de9389a1de28190fb26"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -4519,7 +4440,7 @@ checksum = "59195a1db0e95b920366d949ba5e0d3fc0e70b67c09be15ce5abb790106b0571"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -4592,7 +4513,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
  "wasm-bindgen-shared",
 ]
 
@@ -4635,7 +4556,7 @@ checksum = "f579cdd0123ac74b94e1a4a72bd963cf30ebac343f2df347da0b8df24cdebed2"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -4698,7 +4619,7 @@ dependencies = [
  "base16",
  "quote",
  "sha2",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -5033,7 +4954,7 @@ dependencies = [
  "heck",
  "indexmap",
  "prettyplease",
- "syn 2.0.114",
+ "syn",
  "wasm-metadata",
  "wit-bindgen-core",
  "wit-component",
@@ -5049,7 +4970,7 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
  "wit-bindgen-core",
  "wit-bindgen-rust",
 ]
@@ -5128,7 +5049,7 @@ checksum = "b659052874eb698efe5b9e8cf382204678a0086ebf46982b79d6ca3182927e5d"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
  "synstructure",
 ]
 
@@ -5149,7 +5070,7 @@ checksum = "d8a8d209fdf45cf5138cbb5a506f6b52522a25afccc534d1475dad8e31105c6a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]
@@ -5169,7 +5090,7 @@ checksum = "d71e5d6e06ab090c67b5e44993ec16b72dcbaabc526db883a360057678b48502"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
  "synstructure",
 ]
 
@@ -5209,7 +5130,7 @@ checksum = "eadce39539ca5cb3985590102671f2567e659fca9666581ad3411d59207951f3"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn",
 ]
 
 [[package]]

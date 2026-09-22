@@ -1,0 +1,64 @@
+[package]
+name = "halyard_axum"
+authors = ["Greg Johnston"]
+license = "MIT"
+repository = "https://github.com/cgorski/halyard"
+description = "Axum integrations for the Halyard web framework."
+version = "0.1.0"
+publish = false
+rust-version.workspace = true
+edition.workspace = true
+
+[dependencies]
+halyard_any_spawner = { workspace = true, features = ["tokio"] }
+halyard_hydration_context = { workspace = true }
+axum = { default-features = false, features = [
+  "matched-path",
+], workspace = true }
+futures = { workspace = true, default-features = true }
+halyard = { workspace = true, features = ["nonce", "ssr"] }
+halyard_server_fn = { workspace = true, features = ["axum-no-default"] }
+halyard_macro = { workspace = true, features = ["axum"] }
+halyard_meta = { workspace = true, features = ["ssr", "nonce"] }
+halyard_router = { workspace = true, features = ["ssr"] }
+halyard_integration_utils = { workspace = true }
+halyard_tachys = { workspace = true }
+tokio = { default-features = false, workspace = true }
+tower = { features = ["util"], workspace = true, default-features = true }
+tower-http = { workspace = true, default-features = true }
+tracing = { optional = true, workspace = true, default-features = true }
+halyard_or_poisoned = { workspace = true, default-features = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true, default-features = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true, default-features = true }
+tokio = { features = [
+  "io-util",
+  "net",
+  "process",
+  "rt-multi-thread",
+  "time",
+], workspace = true, default-features = true }
+
+[features]
+wasm = []
+default = [
+  "tokio/fs",
+  "tokio/sync",
+  "tower-http/fs",
+  "tower/util",
+  "halyard_server_fn/axum",
+]
+islands-router = ["halyard_tachys/islands"]
+tracing = ["dep:tracing"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--generate-link-to-definition"]
+
+[package.metadata.cargo-all-features]
+denylist = ["tracing"]
+extra_features = ["default"]
+max_combination_size = 2

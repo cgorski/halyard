@@ -1,0 +1,81 @@
+[package]
+name = "halyard_router"
+version = "0.1.0"
+publish = false
+authors = ["Greg Johnston", "Ben Wishovich"]
+license = "MIT"
+readme = "../README.md"
+repository = "https://github.com/cgorski/halyard"
+description = "Router for the Halyard web framework."
+rust-version.workspace = true
+edition.workspace = true
+
+[dependencies]
+halyard = { workspace = true }
+halyard_router_macro = { workspace = true }
+halyard_any_spawner = { workspace = true }
+halyard_either_of = { workspace = true }
+halyard_or_poisoned = { workspace = true }
+halyard_reactive_graph = { workspace = true }
+halyard_tachys = { workspace = true, features = ["reactive_graph"] }
+futures = { workspace = true, default-features = true }
+url = { workspace = true, default-features = true }
+js-sys = { workspace = true, default-features = true }
+wasm-bindgen = { workspace = true, default-features = true }
+tracing = { optional = true, workspace = true, default-features = true }
+send_wrapper = { workspace = true, default-features = true }
+thiserror = { workspace = true, default-features = true }
+percent-encoding = { optional = true, workspace = true, default-features = true }
+gloo-net = { workspace = true, default-features = true }
+
+[dependencies.web-sys]
+features = [
+  "Document",
+  "Window",
+  "console",
+  # History/Routing
+  "History",
+  "HtmlAnchorElement",
+  "Location",
+  "MouseEvent",
+  "Url",
+  # Form
+  "FormData",
+  "HtmlButtonElement",
+  "HtmlFormElement",
+  "HtmlInputElement",
+  "SubmitEvent",
+  "Url",
+  "UrlSearchParams",
+  # Fetching in Hydrate Mode
+  "Headers",
+  "Request",
+  "RequestInit",
+  "RequestMode",
+  "Response",
+]
+workspace = true
+default-features = true
+
+[build-dependencies]
+rustc_version = { workspace = true, default-features = true }
+
+[features]
+tracing = ["dep:tracing"]
+ssr = ["dep:percent-encoding"]
+nightly = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--generate-link-to-definition"]
+
+[package.metadata.cargo-all-features]
+denylist = ["tracing"]
+max_combination_size = 2
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(halyard_debuginfo)',
+  'cfg(erase_components)',
+  'cfg(rustc_nightly)',
+] }

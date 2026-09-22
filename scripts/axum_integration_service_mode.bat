@@ -1,2 +1,2 @@
-SET LEPTOS_OUTPUT_NAME="service_mode"
-cargo leptos --manifest-path integrations\axum\tests\service_mode\Cargo.toml build
+SET HALYARD_OUTPUT_NAME="service_mode"
+cargo halyard --manifest-path integrations\axum\tests\service_mode\Cargo.toml build

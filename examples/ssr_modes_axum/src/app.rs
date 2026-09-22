@@ -1,6 +1,6 @@
-use leptos::prelude::*;
-use leptos_meta::{MetaTags, *};
-use leptos_router::{
+use halyard::prelude::*;
+use halyard_meta::{MetaTags, *};
+use halyard_router::{
     components::{FlatRoutes, ProtectedRoute, Route, Router},
     hooks::use_params,
     params::Params,
@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 use thiserror::Error;
 
-pub fn shell(options: LeptosOptions) -> impl IntoView {
+pub fn shell(options: HalyardOptions) -> impl IntoView {
     view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -54,8 +54,8 @@ pub fn App() -> impl IntoView {
         Resource::new(move || toggle_admin.version().get(), |_| is_admin());
 
     view! {
-        <Stylesheet id="leptos" href="/pkg/ssr_modes.css"/>
-        <Title text="Welcome to Leptos"/>
+        <Stylesheet id="halyard" href="/pkg/ssr_modes.css"/>
+        <Title text="Welcome to Halyard"/>
         <Meta name="color-scheme" content="dark light"/>
         <Router>
             <nav>

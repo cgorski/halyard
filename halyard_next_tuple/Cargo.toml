@@ -1,0 +1,13 @@
+[package]
+name = "halyard_next_tuple"
+version = "0.1.0"
+publish = false
+authors = ["Greg Johnston"]
+license = "MIT"
+readme = "../README.md"
+repository = "https://github.com/cgorski/halyard"
+description = "A trait to build and extend tuples."
+rust-version.workspace = true
+edition.workspace = true
+
+[dependencies]

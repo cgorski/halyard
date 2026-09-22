@@ -1,66 +1,81 @@
 name: CI
+
 on:
   push:
-    branches:
-      - main
-      - leptos_0.9
+    branches: [main]
   pull_request:
-    branches:
-      - main
-      - leptos_0.9
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
-  get-leptos-changed:
-    uses: ./.github/workflows/get-leptos-changed.yml
-  get-leptos-matrix:
-    uses: ./.github/workflows/get-leptos-matrix.yml
-  get-example-changed:
-    uses: ./.github/workflows/get-example-changed.yml
-  get-examples-matrix:
-    uses: ./.github/workflows/get-examples-matrix.yml
-  test-members:
-    name: CI (members)
-    needs: [get-leptos-changed, get-leptos-matrix]
-    if: needs.get-leptos-changed.outputs.leptos_changed == 'true'
-    strategy:
-      matrix: ${{ fromJSON(needs.get-leptos-matrix.outputs.matrix) }}
-      fail-fast: false
-    uses: ./.github/workflows/run-cargo-make-task.yml
-    with:
-      directory: ${{ matrix.directory }}
-  test-examples:
-    name: CI (examples)
-    needs: [test-members, get-examples-matrix]
-    if: ${{ success() }}
-    strategy:
-      matrix: ${{ fromJSON(needs.get-examples-matrix.outputs.matrix) }}
-      fail-fast: false
-    uses: ./.github/workflows/run-cargo-make-task.yml
-    with:
-      directory: ${{ matrix.directory }}
-  test-only-examples:
-    name: CI (examples)
-    needs: [get-leptos-changed, get-example-changed]
-    if: needs.get-leptos-changed.outputs.leptos_changed != 'true' && needs.get-example-changed.outputs.example_changed == 'true'
-    strategy:
-      matrix: ${{ fromJSON(needs.get-example-changed.outputs.matrix) }}
-      fail-fast: false
-    uses: ./.github/workflows/run-cargo-make-task.yml
-    with:
-      directory: ${{ matrix.directory }}
-  semver-check:
-    name: SemVer check (stable)
-    needs: [get-leptos-changed, test-members, test-examples]
-    if: ${{ success() && needs.get-leptos-changed.outputs.leptos_changed == 'true' && !contains(github.event.pull_request.labels.*.name, 'breaking') }}
+  check:
+    name: fmt, clippy, tests, wasm check
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
-      - name: Install Glib
+      - uses: actions/checkout@v4
+
+      # toolchain + targets come from rust-toolchain.toml
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: clippy,rustfmt
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      # Library targets only, like upstream's `lint` task (test code carries a few
+      # upstream-era lint hits); clippy lints stay at upstream's levels, which only
+      # additionally deny `clippy::print_stdout`.
+      - name: cargo clippy
+        run: cargo clippy --workspace -- -D warnings -D clippy::print_stdout
+
+      # Tests run per crate, as upstream's CI does: a single `cargo test --workspace`
+      # unifies features across members (e.g. `halyard_reactive_graph/sandboxed-arenas`
+      # from the integrations) and that makes ~7 upstream test targets fail, both here
+      # and upstream. `halyard_axum`'s `axum_integration` test additionally needs a
+      # `cargo halyard build` of a fixture project (the sibling build tool is not
+      # available in this repo's CI), so only its unit and doc tests run.
+      - name: cargo test (per crate)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Semver Checks
-        uses: obi1kenobi/cargo-semver-checks-action@v2
+          set -euo pipefail
+          for pkg in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
+            echo "::group::cargo test -p $pkg"
+            if [ "$pkg" = "halyard_axum" ]; then
+              cargo test -p "$pkg" --lib
+              cargo test -p "$pkg" --doc
+            else
+              cargo test -p "$pkg"
+            fi
+            echo "::endgroup::"
+          done
+          cargo test -p halyard --features ssr
+
+      # Render-mode fingerprint: the same test must pass in both erasure modes.
+      - name: render-mode parity test (typed)
+        run: cargo test -p halyard --features ssr --test render_mode
+      - name: render-mode parity test (erased)
+        run: cargo test -p halyard --features ssr --test render_mode
+        env:
+          RUSTFLAGS: --cfg erase_components
+          CARGO_TARGET_DIR: target/erased
+
+      - name: wasm32 check (hydrate)
+        run: cargo check -p halyard --no-default-features --features hydrate --target wasm32-unknown-unknown
+      - name: wasm32 check (hydrate + islands + router + meta)
+        run: cargo check -p halyard -p halyard_router -p halyard_meta --no-default-features --features halyard/hydrate,halyard/islands --target wasm32-unknown-unknown
+      - name: ssr check
+        run: cargo check -p halyard -p halyard_router -p halyard_meta -p halyard_axum --no-default-features --features halyard/ssr,halyard_router/ssr,halyard_meta/ssr
+
+      - name: lockfile must not contain the replaced crates
+        run: |
+          ! grep -E '^name = "(paste|proc-macro-error2|proc-macro-error)"$' Cargo.lock

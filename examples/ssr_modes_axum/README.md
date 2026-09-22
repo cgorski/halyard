@@ -30,4 +30,4 @@ See the [Examples README](../README.md) for setup and run instructions.
 
 ## Quick Start
 
-Run `cargo leptos watch` to run this example.
+Run `cargo halyard watch` to run this example.

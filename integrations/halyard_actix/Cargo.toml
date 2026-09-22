@@ -1,0 +1,44 @@
+[package]
+name = "halyard_actix"
+authors = ["Greg Johnston"]
+license = "MIT"
+repository = "https://github.com/cgorski/halyard"
+description = "Actix integrations for the Halyard web framework."
+version = "0.1.0"
+publish = false
+rust-version.workspace = true
+edition.workspace = true
+
+[dependencies]
+actix-http = { workspace = true, default-features = true }
+actix-files = { workspace = true, default-features = true }
+actix-web = { workspace = true, default-features = false }
+futures = { workspace = true, default-features = true }
+halyard_any_spawner = { workspace = true, features = ["tokio"] }
+halyard_hydration_context = { workspace = true }
+halyard = { workspace = true, features = ["nonce", "ssr"] }
+halyard_integration_utils = { workspace = true }
+halyard_macro = { workspace = true, features = ["actix"] }
+halyard_meta = { workspace = true, features = ["nonce"] }
+halyard_router = { workspace = true, features = ["ssr"] }
+halyard_server_fn = { workspace = true, features = ["actix-no-default"] }
+halyard_tachys = { workspace = true }
+serde_json = { workspace = true, default-features = true }
+tracing = { optional = true, workspace = true, default-features = true }
+tokio = { features = ["rt", "fs"], workspace = true, default-features = true }
+send_wrapper = { workspace = true, default-features = true }
+halyard_or_poisoned = { workspace = true, default-features = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--generate-link-to-definition"]
+
+[features]
+default = ["actix-default"]
+actix-default = ["actix-web/default"]
+islands-router = ["halyard_tachys/islands"]
+tracing = ["dep:tracing"]
+
+[package.metadata.cargo-all-features]
+denylist = ["tracing"]
+max_combination_size = 2

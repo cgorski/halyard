@@ -1,0 +1,23 @@
+extend = { path = "../cargo-make/main.toml" }
+
+[tasks.test]
+clear = true
+dependencies = [
+  "test-each-feature",
+  "test-halyard_macro-example",
+  "doc-halyard_macro-example",
+]
+
+[tasks.test-halyard_macro-example]
+description = "Tests the halyard_macro/example to check if macro handles doc comments correctly"
+command = "cargo"
+args = ["test", "--doc"]
+cwd = "example"
+install_crate = false
+
+[tasks.doc-halyard_macro-example]
+description = "Docs the halyard_macro/example to check if macro handles doc comments correctly"
+command = "cargo"
+args = ["doc"]
+cwd = "example"
+install_crate = false

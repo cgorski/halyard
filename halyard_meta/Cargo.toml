@@ -1,0 +1,41 @@
+[package]
+name = "halyard_meta"
+version = "0.1.0"
+publish = false
+authors = ["Greg Johnston"]
+license = "MIT"
+repository = "https://github.com/cgorski/halyard"
+description = "Tools to set HTML metadata in the Halyard web framework."
+rust-version.workspace = true
+edition.workspace = true
+
+[dependencies]
+halyard = { workspace = true }
+halyard_or_poisoned = { workspace = true }
+indexmap = { workspace = true, default-features = true }
+send_wrapper = { workspace = true, default-features = true }
+tracing = { optional = true, workspace = true, default-features = true }
+wasm-bindgen = { workspace = true, default-features = true }
+futures = { workspace = true, default-features = true }
+
+[dependencies.web-sys]
+features = ["HtmlLinkElement", "HtmlMetaElement", "HtmlTitleElement"]
+workspace = true
+default-features = true
+
+[features]
+default = []
+ssr = []
+tracing = ["dep:tracing"]
+nonce = ["halyard/nonce"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--generate-link-to-definition"]
+
+[package.metadata.cargo-all-features]
+denylist = ["tracing"]
+max_combination_size = 2
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(halyard_debuginfo)'] }

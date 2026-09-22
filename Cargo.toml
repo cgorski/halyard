@@ -2,73 +2,80 @@
 resolver = "2"
 members = [
   # utilities
-  "any_spawner",
-  "const_str_slice_concat",
-  "either_of",
-  "next_tuple",
-  "oco",
-  "or_poisoned",
+  "halyard_any_spawner",
+  "halyard_const_str_slice_concat",
+  "halyard_either_of",
+  "halyard_next_tuple",
+  "halyard_oco",
+  "halyard_or_poisoned",
 
   # core
-  "hydration_context",
-  "leptos",
-  "leptos_dom",
-  "leptos_config",
-  "leptos_hot_reload",
-  "leptos_macro",
-  "leptos_server",
-  "reactive_graph",
-  "reactive_stores",
-  "reactive_stores_macro",
-  "server_fn",
-  "server_fn_macro",
-  "server_fn/server_fn_macro_default",
-  "tachys",
+  "halyard_hydration_context",
+  "halyard",
+  "halyard_dom",
+  "halyard_config",
+  "halyard_hot_reload",
+  "halyard_macro",
+  "halyard_macro_diagnostics",
+  "halyard_server",
+  "halyard_reactive_graph",
+  "halyard_reactive_stores",
+  "halyard_reactive_stores_macro",
+  "halyard_server_fn",
+  "halyard_server_fn_macro",
+  "halyard_server_fn/halyard_server_fn_macro_default",
+  "halyard_tachys",
 
   # integrations
-  "integrations/actix",
-  "integrations/axum",
-  "integrations/utils",
+  "integrations/halyard_actix",
+  "integrations/halyard_axum",
+  "integrations/halyard_integration_utils",
+
+  # vendored third-party crates (see third_party/*/Cargo.toml and NOTICE)
+  "third_party/halyard_rstml",
+  "third_party/halyard_syn_derive",
 
   # libraries
-  "meta",
-  "router",
-  "router_macro",
-  "any_error",
+  "halyard_meta",
+  "halyard_router",
+  "halyard_router_macro",
+  "halyard_throw_error",
 ]
-exclude = ["benchmarks", "examples", "projects"]
+exclude = ["examples"]
 
 [workspace.package]
 edition = "2021"
 rust-version = "1.88"
 
 [workspace.dependencies]
-# members
-throw_error = { path = "./any_error/", version = "0.3.1" }
-any_spawner = { path = "./any_spawner/", version = "0.3.0" }
-const_str_slice_concat = { path = "./const_str_slice_concat", version = "0.1" }
-either_of = { path = "./either_of/", version = "0.1.9" }
-hydration_context = { path = "./hydration_context", version = "0.3.1" }
-leptos = { path = "./leptos", version = "0.8.20" }
-leptos_config = { path = "./leptos_config", version = "0.8.10" }
-leptos_dom = { path = "./leptos_dom", version = "0.8.8" }
-leptos_hot_reload = { path = "./leptos_hot_reload", version = "0.8.6" }
-leptos_integration_utils = { path = "./integrations/utils", version = "0.8.8" }
-leptos_macro = { path = "./leptos_macro", version = "0.8.17" }
-leptos_router = { path = "./router", version = "0.8.15" }
-leptos_router_macro = { path = "./router_macro", version = "0.8.6" }
-leptos_server = { path = "./leptos_server", version = "0.8.7" }
-leptos_meta = { path = "./meta", version = "0.8.6" }
-next_tuple = { path = "./next_tuple", version = "0.1.0" }
-oco_ref = { path = "./oco", version = "0.2.1" }
-or_poisoned = { path = "./or_poisoned", version = "0.1.0" }
-reactive_graph = { path = "./reactive_graph", version = "0.2.14" }
-reactive_stores = { path = "./reactive_stores", version = "0.4.3" }
-reactive_stores_macro = { path = "./reactive_stores_macro", version = "0.4.3" }
-server_fn = { path = "./server_fn", version = "0.8.13" }
-server_fn_macro = { path = "./server_fn_macro", version = "0.8.10" }
-server_fn_macro_default = { path = "./server_fn/server_fn_macro_default", version = "0.8.5" }
-tachys = { path = "./tachys", version = "0.2.18" }
+# members (directory names are kept from upstream to ease `git merge upstream/main`;
+# the crate names are what matter)
+halyard_throw_error = { path = "./halyard_throw_error/", version = "0.1.0" }
+halyard_any_spawner = { path = "./halyard_any_spawner/", version = "0.1.0" }
+halyard_const_str_slice_concat = { path = "./halyard_const_str_slice_concat", version = "0.1.0" }
+halyard_either_of = { path = "./halyard_either_of/", version = "0.1.0" }
+halyard_hydration_context = { path = "./halyard_hydration_context", version = "0.1.0" }
+halyard = { path = "./halyard", version = "0.1.0" }
+halyard_config = { path = "./halyard_config", version = "0.1.0" }
+halyard_dom = { path = "./halyard_dom", version = "0.1.0" }
+halyard_hot_reload = { path = "./halyard_hot_reload", version = "0.1.0" }
+halyard_integration_utils = { path = "./integrations/halyard_integration_utils", version = "0.1.0" }
+halyard_macro = { path = "./halyard_macro", version = "0.1.0" }
+halyard_macro_diagnostics = { path = "./halyard_macro_diagnostics", version = "0.1.0" }
+halyard_router = { path = "./halyard_router", version = "0.1.0" }
+halyard_router_macro = { path = "./halyard_router_macro", version = "0.1.0" }
+halyard_server = { path = "./halyard_server", version = "0.1.0" }
+halyard_meta = { path = "./halyard_meta", version = "0.1.0" }
+halyard_next_tuple = { path = "./halyard_next_tuple", version = "0.1.0" }
+halyard_oco = { path = "./halyard_oco", version = "0.1.0" }
+halyard_or_poisoned = { path = "./halyard_or_poisoned", version = "0.1.0" }
+halyard_reactive_graph = { path = "./halyard_reactive_graph", version = "0.1.0" }
+halyard_reactive_stores = { path = "./halyard_reactive_stores", version = "0.1.0" }
+halyard_reactive_stores_macro = { path = "./halyard_reactive_stores_macro", version = "0.1.0" }
+halyard_server_fn = { path = "./halyard_server_fn", version = "0.1.0" }
+halyard_server_fn_macro = { path = "./halyard_server_fn_macro", version = "0.1.0" }
+halyard_server_fn_macro_default = { path = "./halyard_server_fn/halyard_server_fn_macro_default", version = "0.1.0" }
+halyard_tachys = { path = "./halyard_tachys", version = "0.1.0" }
 
 # members deps
 async-once-cell = { default-features = false, version = "0.5" }
@@ -82,7 +89,7 @@ typed-builder-macro = { default-features = false, version = "0.23" }
 thiserror = { default-features = false, version = "2.0" }
 wasm-bindgen = { default-features = false, version = "0.2" }
 indexmap = { default-features = false, version = "2.13" }
-rstml = { default-features = false, version = "0.12" }
+rstml = { package = "halyard_rstml", path = "./third_party/halyard_rstml", version = "0.1.0" }
 rustc_version = { default-features = false, version = "0.4" }
 guardian = { default-features = false, version = "1.3" }
 rustc-hash = { default-features = false, version = "2.1" }
@@ -94,7 +101,6 @@ pin-project-lite = { default-features = false, version = "0.2" }
 send_wrapper = { default-features = false, version = "0.6" }
 tokio-test = { default-features = false, version = "0.4" }
 html-escape = { default-features = false, version = "0.2" }
-proc-macro-error2 = { default-features = false, version = "2.0" }
 const_format = { default-features = false, version = "0.2" }
 gloo-net = { default-features = false, version = "0.6" }
 url = { default-features = false, version = "2.5" }
@@ -110,7 +116,7 @@ axum = { default-features = false, version = "0.8" }
 serde_qs = { default-features = false, version = "0.15" }
 syn = { default-features = false, version = "2.0" }
 xxhash-rust = { default-features = false, version = "0.8" }
-paste = { default-features = false, version = "1.0" }
+pastey = { default-features = false, version = "0.2" }
 quote = { default-features = false, version = "1.0" }
 web-sys = { default-features = false, version = "0.3" }
 js-sys = { default-features = false, version = "0.3" }
@@ -132,7 +138,6 @@ camino = { default-features = false, version = "1.2" }
 ciborium = { default-features = false, version = "0.2" }
 bitcode = { default-features = false, version = "0.6" }
 multer = { default-features = false, version = "3.1" }
-leptos-spin-macro = { default-features = false, version = "0.2" }
 sledgehammer_utils = { default-features = false, version = "0.3" }
 sledgehammer_bindgen = { default-features = false, version = "0.6" }
 wasm-streams = { default-features = false, version = "0.5" }
@@ -182,6 +187,6 @@ max_combination_size = 2
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
-  'cfg(leptos_debuginfo)',
+  'cfg(halyard_debuginfo)',
   'cfg(erase_components)',
 ] }

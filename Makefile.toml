@@ -1,39 +1,11 @@
 ############
-# A make file for cargo-make, please install it with:
-#     cargo install --force cargo-make
+# A make file for cargo-make (`cargo install --force cargo-make`).
+#
+# Upstream's per-example tasks were removed together with the examples; the
+# member-crate tasks live in `cargo-make/*.toml` and are pulled in through
+# CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE. The canonical check list is in
+# `.github/workflows/ci.yml`.
 ############
 
 [env]
 CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
-
-[tasks.check-stable]
-workspace = false
-clear = true
-dependencies = [
-  { name = "lint", path = "examples/counter_without_macros" },
-  { name = "lint", path = "examples/counters_stable" },
-]
-
-[tasks.ci-examples]
-workspace = false
-cwd = "examples"
-command = "cargo"
-args = ["make", "ci-clean"]
-
-[tasks.check-examples]
-workspace = false
-cwd = "examples"
-command = "cargo"
-args = ["make", "check-clean"]
-
-[tasks.build-examples]
-workspace = false
-cwd = "examples"
-command = "cargo"
-args = ["make", "build-clean"]
-
-[tasks.clean-examples]
-workspace = false
-cwd = "examples"
-command = "cargo"
-args = ["make", "clean"]

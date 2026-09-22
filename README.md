@@ -1,179 +1,124 @@
-<picture>
-    <source srcset="https://raw.githubusercontent.com/leptos-rs/leptos/main/docs/logos/Leptos_logo_pref_dark_RGB.svg" media="(prefers-color-scheme: dark)">
-    <img src="https://raw.githubusercontent.com/leptos-rs/leptos/main/docs/logos/Leptos_logo_RGB.svg" alt="Leptos Logo">
-</picture>
+# halyard
 
-[![crates.io](https://img.shields.io/crates/v/leptos.svg)](https://crates.io/crates/leptos)
-[![docs.rs](https://docs.rs/leptos/badge.svg)](https://docs.rs/leptos)
-![Crates.io MSRV](https://img.shields.io/crates/msrv/leptos)
-[![Discord](https://img.shields.io/discord/1031524867910148188?color=%237289DA&label=discord)](https://discord.gg/YdRAhS7eQB)
-[![Matrix](https://img.shields.io/badge/Matrix-leptos-grey?logo=matrix&labelColor=white&logoColor=black)](https://matrix.to/#/#leptos:matrix.org)
+halyard is a maintained fork of the [Leptos](https://github.com/leptos-rs/leptos) web
+framework (MIT, © 2022 Greg Johnston — see [`LICENSE`](./LICENSE) and
+[`NOTICE`](./NOTICE)). It was forked on 2026-09-22 from upstream commit `c94f4aefd`
+(leptos 0.8.20). Every crate is renamed so nothing collides with crates.io
+(`leptos` → `halyard`, `leptos_router` → `halyard_router`, `tachys` → `halyard_tachys`,
+…; full map below). The crates are consumed by path/git and are never published.
 
-[Website](https://leptos.dev) | [Book](https://leptos-rs.github.io/leptos/) | [Docs.rs](https://docs.rs/leptos/latest/leptos/) | [Playground](https://codesandbox.io/p/devbox/playground-j23dz7?file=%2Fsrc%2Fmain.rs) | [Discord](https://discord.gg/YdRAhS7eQB)
+## Why fork
 
-You can find a list of useful libraries and example projects at [`awesome-leptos`](https://github.com/leptos-rs/awesome-leptos).
+We hit six defects in production (reproduced in Chromium and WebKit) that are better
+fixed at the source than worked around in every application:
 
-# Leptos
+1. **WASM file name baked in at compile time.** Upstream decided between `<name>.wasm`
+   and `<name>_bg.wasm` with `option_env!("LEPTOS_OUTPUT_NAME")`, so a server built by
+   plain `cargo build` requested a file the build tool never wrote (404, hydration never
+   ran). halyard resolves the name at **runtime** from `HalyardOptions` (new
+   `wasm_file_name` option, default `output_name`); no `option_env!`/`env!` influences
+   rendered output any more (`leptos/src/hydration/mod.rs`, `leptos_config`).
+2. **`--cfg erase_components` mismatch.** Debug builds run through the build tool are
+   compiled with `--cfg erase_components`, which changes the hydration marker comments the
+   server emits; a server built without it made the client panic with
+   "expected a marker node". halyard records the server's mode in a
+   `<meta name="halyard-render-mode">` tag and the client checks it before hydrating: on a
+   mismatch it logs **one** clear error naming both modes and how to fix it, then skips
+   hydration — no panic (`leptos/src/hydration/mod.rs`, `leptos/src/mount.rs`,
+   `leptos/tests/render_mode.rs`).
+3. **Hydration mismatches were panics with useless context.** halyard logs the view's
+   source location (in debug / `--cfg halyard_debuginfo` builds), what was expected, what
+   was found (tag/text snippet) and the DOM path, then abandons hydration cleanly and
+   renders the app on the client instead. The old behaviour is behind the
+   `panic-on-hydration-mismatch` feature (`tachys/src/hydration.rs`).
+4. **Bootstrap script had no rejection handler** (WebKit: "Unhandled Promise Rejection:
+   TypeError: Load failed" when navigating away mid-load). The inline script now ends in a
+   `.catch` that logs one concise `console.warn`.
+5. **WebKit downloaded the WASM twice** because `<link rel="preload" as="fetch">` is not
+   matched against wasm-bindgen's `fetch()`. halyard drops the preload and instead starts
+   the `fetch()` itself, immediately, from a classic inline script, handing the pending
+   `Response` to `init` — exactly one request in every browser, started as early as the
+   preload was.
+6. **Two unmaintained proc-macro helpers.** `paste` is replaced by
+   [`pastey`](https://crates.io/crates/pastey); `proc-macro-error2` is replaced by
+   `halyard_macro_diagnostics` (a few dozen lines on `syn::Error::to_compile_error`).
+   Because `rstml` pulled `proc-macro-error2` in through `syn_derive`, both are vendored
+   under `third_party/` with that dependency removed. Neither crate is in the lockfile.
 
-```rust
-use leptos::*;
+## Crate map
 
-#[component]
-pub fn SimpleCounter(initial_value: i32) -> impl IntoView {
-    // create a reactive signal with the initial value
-    let (value, set_value) = signal(initial_value);
+| upstream (dir kept)                           | halyard                           |
+| --------------------------------------------- | --------------------------------- |
+| `leptos` (`leptos/`)                          | `halyard`                         |
+| `leptos_macro`                                | `halyard_macro`                   |
+| `leptos_router` (`router/`)                   | `halyard_router`                  |
+| `leptos_router_macro` (`router_macro/`)       | `halyard_router_macro`            |
+| `leptos_meta` (`meta/`)                       | `halyard_meta`                    |
+| `leptos_axum` (`integrations/axum/`)          | `halyard_axum`                    |
+| `leptos_actix` (`integrations/actix/`)        | `halyard_actix`                   |
+| `leptos_integration_utils` (`integrations/utils/`) | `halyard_integration_utils`  |
+| `leptos_server`, `leptos_config`, `leptos_dom`, `leptos_hot_reload` | `halyard_server`, `halyard_config`, `halyard_dom`, `halyard_hot_reload` |
+| `tachys`                                      | `halyard_tachys`                  |
+| `reactive_graph`, `reactive_stores`, `reactive_stores_macro` | `halyard_reactive_graph`, `halyard_reactive_stores`, `halyard_reactive_stores_macro` |
+| `hydration_context`                           | `halyard_hydration_context`       |
+| `server_fn`, `server_fn_macro`, `server_fn_macro_default` | `halyard_server_fn`, `halyard_server_fn_macro`, `halyard_server_fn_macro_default` |
+| `any_spawner`, `either_of`, `next_tuple`, `or_poisoned`, `const_str_slice_concat` | `halyard_any_spawner`, `halyard_either_of`, `halyard_next_tuple`, `halyard_or_poisoned`, `halyard_const_str_slice_concat` |
+| `oco_ref` (`oco/`)                            | `halyard_oco`                     |
+| `throw_error` (`any_error/`)                  | `halyard_throw_error`             |
+| — (new)                                       | `halyard_macro_diagnostics`       |
+| `rstml` 0.12.1, `syn_derive` 0.2.0 (vendored, `third_party/`) | `halyard_rstml`, `halyard_syn_derive` |
 
-    // create event handlers for our buttons
-    // note that `value` and `set_value` are `Copy`, so it's super easy to move them into closures
-    let clear = move |_| set_value(0);
-    let decrement = move |_| set_value.update(|value| *value -= 1);
-    let increment = move |_| set_value.update(|value| *value += 1);
+Inside `halyard` the re-export names are unchanged: `halyard::tachys`, `halyard::server_fn`,
+`halyard::reactive`, `halyard::prelude::*`, and the `view!`, `#[component]`, `#[server]`
+macros keep their names. Types named `Leptos*` are now `Halyard*` (`HalyardOptions`,
+`HalyardRoutes`, …).
 
-    // create user interfaces with the declarative `view!` macro
-    view! {
-        <div>
-            <button on:click=clear>Clear</button>
-            <button on:click=decrement>-1</button>
-            // text nodes can be quoted or unquoted
-            <span>"Value: " {value} "!"</span>
-            <button on:click=increment>+1</button>
-        </div>
-    }
-}
+## Configuration
 
-// we also support a builder syntax rather than the JSX-like `view` macro
-#[component]
-pub fn SimpleCounterWithBuilder(initial_value: i32) -> impl IntoView {
-    use leptos::html::*;
+Every runtime setting is read from `HALYARD_<NAME>` with the legacy `LEPTOS_<NAME>` as a
+fallback (`HALYARD_OUTPUT_NAME` / `LEPTOS_OUTPUT_NAME`, `..._SITE_ROOT`, `..._SITE_PKG_DIR`,
+`..._SITE_ADDR`, `..._RELOAD_PORT`, `..._ENV`, `..._HASH_FILES`, `..._HASH_FILE_NAME`,
+`..._WATCH`, and the new `..._WASM_FILE_NAME`), so existing `cargo-leptos` configurations and
+deployments keep working. Likewise `get_configuration(Some("Cargo.toml"))` reads
+`[package.metadata.halyard]` and falls back to `[package.metadata.leptos]`.
 
-    let (value, set_value) = signal(initial_value);
-    let clear = move |_| set_value(0);
-    let decrement = move |_| set_value.update(|value| *value -= 1);
-    let increment = move |_| set_value.update(|value| *value += 1);
+## Tracking upstream
 
-    // the `view` macro above expands to this builder syntax
-    div().child((
-        button().on(ev::click, clear).child("Clear"),
-        button().on(ev::click, decrement).child("-1"),
-        span().child(("Value: ", value, "!")),
-        button().on(ev::click, increment).child("+1")
-    ))
-}
+The `upstream` remote points at `leptos-rs/leptos` (push disabled). Upstream directory names
+were kept so that `git fetch upstream && git merge upstream/main` applies cleanly; after a
+merge, re-run the rename for any new `leptos` paths and the checks in `.github/workflows/ci.yml`:
 
-// Easy to use with Trunk (trunk-rs.github.io/trunk) or with a simple wasm-bindgen setup
-pub fn main() {
-    mount_to_body(|| view! {
-        <SimpleCounter initial_value=3 />
-    })
-}
+```sh
+cargo fmt --check
+cargo clippy --workspace -- -D warnings
+cargo test --workspace
+cargo check -p halyard --no-default-features --features hydrate --target wasm32-unknown-unknown
+cargo test -p halyard --features ssr --test render_mode
+RUSTFLAGS="--cfg erase_components" cargo test -p halyard --features ssr --test render_mode
 ```
 
-## About the Framework
+`examples/ssr_modes_axum` is kept as an SSR + hydration smoke test for the sibling build
+tool (`cargo-halyard`).
 
-Leptos is a full-stack, isomorphic Rust web framework leveraging fine-grained reactivity to build declarative user interfaces.
+Upstream documentation: <https://book.leptos.dev/> — the API is the same apart from the
+crate names and the changes listed above. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for
+how the crates fit together.
 
-## What does that mean?
+## Fork policy: this is our framework now
 
-- **Full-stack**: Leptos can be used to build apps that run in the browser (client-side rendering), on the server (server-side rendering), or by rendering HTML on the server and then adding interactivity in the browser (server-side rendering with hydration). This includes support for HTTP streaming of both data ([`Resource`s](https://docs.rs/leptos/latest/leptos/prelude/struct.Resource.html)) and HTML (out-of-order or in-order streaming of [`<Suspense/>`](https://docs.rs/leptos/latest/leptos/suspense/fn.Suspense.html) components.)
-- **Isomorphic**: Leptos provides primitives to write isomorphic [server functions](https://docs.rs/server_fn/latest/server_fn/), i.e., functions that can be called with the “same shape” on the client or server, but only run on the server. This means you can write your server-only logic (database requests, authentication etc.) alongside the client-side components that will consume it, and call server functions as if they were running in the browser, without needing to create and maintain a separate REST or other API.
-- **Web**: Leptos is built on the Web platform and Web standards. The [router](https://docs.rs/leptos_router/latest/leptos_router/) is designed to use Web fundamentals (like links and forms) and build on top of them rather than trying to replace them.
-- **Framework**: Leptos provides most of what you need to build a modern web app: a reactive system, templating library, and a router that works on both the server and client side.
-- **Fine-grained reactivity**: The entire framework is built from reactive primitives. This allows for extremely performant code with minimal overhead: when a reactive signal’s value changes, it can update a single text node, toggle a single class, or remove an element from the DOM without any other code running. (So, no virtual DOM overhead!)
-- **Declarative**: Tell Leptos how you want the page to look, and let the framework tell the browser how to do it.
+halyard is **not** a patch set that has to stay mergeable with upstream. It is a
+framework we own and improve for our own needs:
 
-## Learn more
-
-Here are some resources for learning more about Leptos:
-
-- [Book](https://leptos-rs.github.io/leptos/) (work in progress)
-- [Examples](https://github.com/leptos-rs/leptos/tree/main/examples)
-- [API Documentation](https://docs.rs/leptos/latest/leptos/)
-- [Common Bugs](https://github.com/leptos-rs/leptos/tree/main/docs/COMMON_BUGS.md) (and how to fix them!)
-
-### Random numbers on wasm (`rand` / `getrandom`)
-
-When you compile a Leptos app to `wasm32-unknown-unknown`, `rand` and `getrandom` need a JavaScript-backed source of randomness. If that backend isn’t enabled, your build can fail or randomness just won’t work in the browser.
-
-Leptos itself takes care of this for its own code, but that does **not** automatically configure your app’s own `rand` / `getrandom` dependencies. If you use them directly, you need to turn on the JS backend yourself.
-
-A simple setup in your `Cargo.toml` might look like this:
-
-```toml
-[dependencies]
-# Make sure getrandom works on wasm by enabling its JS backend
-getrandom = { version = "0.2", features = ["js"] }
-rand      = { version = "0.8", features = ["small_rng"] }
-```
-
-Some of the examples in this repo (for example `js-framework-benchmark` and `hackernews_js_fetch`) already do this, so you can use them as a reference if you’re unsure.
-
-## `cargo-leptos`
-
-[`cargo-leptos`](https://github.com/leptos-rs/cargo-leptos) is a build tool that's designed to make it easy to build apps that run on both the client and the server, with seamless integration. The best way to get started with a real Leptos project right now is to use `cargo-leptos` and our starter templates for [Actix](https://github.com/leptos-rs/start) or [Axum](https://github.com/leptos-rs/start-axum).
-
-```bash
-cargo install cargo-leptos --locked
-cargo leptos new --git https://github.com/leptos-rs/start-axum
-cd [your project name]
-cargo leptos watch
-```
-
-Open browser to [http://localhost:3000/](http://localhost:3000/).
-
-## FAQs
-
-### What’s up with the name?
-
-_Leptos_ (λεπτός) is an ancient Greek word meaning “thin, light, refined, fine-grained.” To me, a classicist and not a dog owner, it evokes the lightweight reactive system that powers the framework. I've since learned the same word is at the root of the medical term “leptospirosis,” a blood infection that affects humans and animals... My bad. No dogs were harmed in the creation of this framework.
-
-### Is it production ready?
-
-People usually mean one of three things by this question.
-
-1. **Are the APIs stable?** i.e., will I have to rewrite my whole app from Leptos 0.1 to 0.2 to 0.3 to 0.4, or can I write it now and benefit from new features and updates as new versions come?
-
-The APIs are basically settled. We’re adding new features, but we’re very happy with where the type system and patterns have landed. I would not expect major breaking changes to your code to adapt to future releases, in terms of architecture.
-
-2. **Are there bugs?**
-
-Yes, I’m sure there are. You can see from the state of our issue tracker over time that there aren’t that _many_ bugs and they’re usually resolved pretty quickly. But for sure, there may be moments where you encounter something that requires a fix at the framework level, which may not be immediately resolved.
-
-3. **Am I a consumer or a contributor?**
-
-This may be the big one: “production ready” implies a certain orientation to a library: that you can basically use it, without any special knowledge of its internals or ability to contribute. Everyone has this at some level in their stack: for example I (@gbj) don’t have the capacity or knowledge to contribute to something like `wasm-bindgen` at this point: I simply rely on it to work.
-
-There are several people in the community using Leptos right now for many websites at work, who have also become significant contributors. There may be missing features that you need, and you may end up building them! But, if you're willing to contribute a few missing pieces along the way, the framework is most definitely usable for production applications, especially given the ecosystem of libraries that have sprung up around it.
-
-### Can I use this for native GUI?
-
-Sure! Obviously the `view` macro is for generating DOM nodes but you can use the reactive system to drive any native GUI toolkit that uses the same kind of object-oriented, event-callback-based framework as the DOM pretty easily. The principles are the same:
-
-- Use signals, derived signals, and memos to create your reactive system
-- Create GUI widgets
-- Use event listeners to update signals
-- Create effects to update the UI
-
-The 0.7 update originally set out to create a "generic rendering" approach that would allow us to reuse most of the same view logic to do all of the above. Unfortunately, this has had to be shelved for now due to difficulties encountered by the Rust compiler when building larger-scale applications with the number of generics spread throughout the codebase that this required. It's an approach I'm looking forward to exploring again in the future; feel free to reach out if you're interested in this kind of work.
-
-### How is this different from Yew?
-
-Yew is the most-used library for Rust web UI development, but there are several differences between Yew and Leptos, in philosophy, approach, and performance.
-
-- **VDOM vs. fine-grained:** Yew is built on the virtual DOM (VDOM) model: state changes cause components to re-render, generating a new virtual DOM tree. Yew diffs this against the previous VDOM, and applies those patches to the actual DOM. Component functions rerun whenever state changes. Leptos takes an entirely different approach. Components run once, creating (and returning) actual DOM nodes and setting up a reactive system to update those DOM nodes.
-- **Performance:** This has huge performance implications: Leptos is simply much faster at both creating and updating the UI than Yew is.
-- **Server integration:** Yew was created in an era in which browser-rendered single-page apps (SPAs) were the dominant paradigm. While Leptos supports client-side rendering, it also focuses on integrating with the server side of your application via server functions and multiple modes of serving HTML, including out-of-order streaming.
-
-### How is this different from Dioxus?
-
-Like Leptos, Dioxus is a framework for building UIs using web technologies. However, there are significant differences in approach and features.
-
-- **VDOM vs. fine-grained:** While Dioxus has a performant virtual DOM (VDOM), it still uses coarse-grained/component-scoped reactivity: changing a stateful value reruns the component function and diffs the old UI against the new one. Leptos components use a different mental model, creating (and returning) actual DOM nodes and setting up a reactive system to update those DOM nodes.
-- **Web vs. desktop priorities:** Dioxus uses Leptos server functions in its fullstack mode, but does not have the same `<Suspense>`-based support for things like streaming HTML rendering, or share the same focus on holistic web performance. Leptos tends to prioritize holistic web performance (streaming HTML rendering, smaller WASM binary sizes, etc.), whereas Dioxus has an unparalleled experience when building desktop apps, because your application logic runs as a native Rust binary.
-
-### How is this different from Sycamore?
-
-Sycamore and Leptos are both heavily influenced by SolidJS. At this point, Leptos has a larger community and ecosystem and is more actively developed. Other differences:
-
-- **Templating DSLs:** Sycamore uses a custom templating language for its views, while Leptos uses a JSX-like template format.
-- **`'static` signals:** One of Leptos’s main innovations was the creation of `Copy + 'static` signals, which have excellent ergonomics. Sycamore is in the process of adopting the same pattern, but this is not yet released.
-- **Perseus vs. server functions:** The Perseus metaframework provides an opinionated way to build Sycamore apps that include server functionality. Leptos instead provides primitives like server functions in the core of the framework.
+- **Refactor freely.** Rename directories, modules, types and features; delete
+  what we do not use; restructure crates. Do not hold back a good change to keep
+  `git merge upstream/main` clean.
+- **Improve as we go.** When our application needs something (a clearer error, a
+  safer default, a missing hook), change halyard rather than working around it.
+- **Upstream is a source of ideas, not a merge target.** When Leptos ships
+  something we want, we read it and port it deliberately — by hand if the trees
+  have diverged — and record where it came from. We will worry about that when
+  the time comes, not before.
+- **Never write upstream.** The `upstream` remote is read-only (its push URL is
+  disabled). We do not open issues or pull requests there from this project.
+- **Attribution stays.** `LICENSE` (MIT, © 2022 Greg Johnston) and `NOTICE`
+  travel with every copy.

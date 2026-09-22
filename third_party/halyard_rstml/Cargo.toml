@@ -1,0 +1,51 @@
+# Vendored copy of rstml 0.12.1 (https://github.com/rs-tml/rstml, MIT).
+# Only this manifest differs from upstream: the package is renamed so it
+# cannot collide with crates.io, and `syn_derive` points at the vendored
+# `halyard_syn_derive` (whose `proc-macro-error2` dependency was removed).
+# The dependency key is kept as `syn_derive` so the sources are untouched.
+# See `Cargo.toml.upstream` for the original manifest.
+[package]
+name = "halyard_rstml"
+version = "0.1.0"
+publish = false
+description = "Rust templating for XML-based formats (HTML, SVG, MathML) implemented on top of proc-macro::TokenStreams (vendored rstml 0.12.1)"
+authors = ["vldm <me@vldm.cc>"]
+license = "MIT"
+repository = "https://github.com/rs-tml/rstml"
+edition = "2021"
+
+[lib]
+bench = false
+# upstream doctests refer to the crate as `rstml`, which is not this package's name
+doctest = false
+
+[dependencies]
+proc-macro2 = { workspace = true, default-features = true, features = ["span-locations"] }
+quote = { workspace = true, default-features = true }
+syn = { workspace = true, default-features = true, features = [
+  "full",
+  "parsing",
+  "extra-traits",
+  "visit-mut",
+] }
+thiserror = { workspace = true, default-features = true }
+syn_derive = { package = "halyard_syn_derive", path = "../halyard_syn_derive" }
+proc-macro2-diagnostics = { version = "0.10", default-features = false }
+derive-where = "1.2.7"
+
+[features]
+default = ["colors"]
+# Hack that parse input two times, using `proc-macro2::fallback` to recover spaces, and persist original spans.
+# It has no penalty in nightly, but in stable it parses input two times.
+# In order to use this feature, one should also set `ParserConfig::macro_call_pattern`.
+rawtext-stable-hack = ["rawtext-stable-hack-module"]
+# Export inters of rawtext_stable_hack. It is usefull if you need support of `UnquotedText` on stable but your macro is called from other one.
+rawtext-stable-hack-module = []
+colors = ["proc-macro2-diagnostics/colors"]
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(rstml_signal_nightly)'] }
+
+# vendored code: keep it byte-identical to upstream rather than chase lints
+[lints.clippy]
+all = "allow"

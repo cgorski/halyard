@@ -6,7 +6,7 @@ extend = [
 
 [env]
 RUSTFLAGS = ""
-LEPTOS_OUTPUT_NAME = "ci" # allows examples to check/build without cargo-leptos
+HALYARD_OUTPUT_NAME = "ci" # allows examples to check/build without cargo-halyard
 
 [env.github-actions]
 RUSTFLAGS = "-D warnings"

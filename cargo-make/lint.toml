@@ -2,8 +2,8 @@
 dependencies = ["check-format-flow", "clippy-each-feature"]
 
 [tasks.check-format]
-env = { LEPTOS_PROJECT_DIRECTORY = "../" }
-args = ["fmt", "--", "--check", "--config-path", "${LEPTOS_PROJECT_DIRECTORY}"]
+env = { HALYARD_PROJECT_DIRECTORY = "../" }
+args = ["fmt", "--", "--check", "--config-path", "${HALYARD_PROJECT_DIRECTORY}"]
 
 [tasks.clippy-each-feature]
 command = "cargo"

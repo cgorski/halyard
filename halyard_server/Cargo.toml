@@ -1,0 +1,52 @@
+[package]
+name = "halyard_server"
+version = "0.1.0"
+publish = false
+authors = ["Greg Johnston"]
+license = "MIT"
+repository = "https://github.com/cgorski/halyard"
+description = "RPC for the Halyard web framework."
+readme = "../README.md"
+rust-version.workspace = true
+edition.workspace = true
+
+[dependencies]
+base64 = { workspace = true, default-features = true }
+codee = { features = ["json_serde"], workspace = true, default-features = true }
+halyard_hydration_context = { workspace = true }
+halyard_reactive_graph = { workspace = true, features = ["hydration"] }
+halyard_server_fn = { workspace = true }
+tracing = { optional = true, workspace = true, default-features = true }
+futures = { workspace = true, default-features = true }
+
+halyard_any_spawner = { workspace = true }
+halyard_or_poisoned = { workspace = true }
+halyard_tachys = { workspace = true, optional = true, features = ["reactive_graph"] }
+send_wrapper = { workspace = true, default-features = true }
+
+# serialization formats
+serde = { workspace = true, default-features = true }
+js-sys = { optional = true, workspace = true, default-features = true }
+wasm-bindgen = { workspace = true, optional = true, default-features = true }
+serde_json = { workspace = true, default-features = true }
+
+[features]
+ssr = []
+hydration = []
+miniserde = ["codee/miniserde"]
+rkyv = ["codee/rkyv"]
+serde-wasm-bindgen = ["codee/json_serde_wasm"]
+serde-lite = ["codee/serde_lite"]
+tachys = ["dep:halyard_tachys"]
+tracing = ["dep:tracing"]
+
+[package.metadata.cargo-all-features]
+denylist = ["tracing"]
+max_combination_size = 2
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--generate-link-to-definition", "--cfg", "docsrs"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(halyard_debuginfo)'] }

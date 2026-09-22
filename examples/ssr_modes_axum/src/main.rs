@@ -5,26 +5,26 @@ async fn main() {
         http::{HeaderName, HeaderValue},
         Router,
     };
-    use leptos::{logging::log, prelude::*};
-    use leptos_axum::{generate_route_list, LeptosRoutes};
+    use halyard::{logging::log, prelude::*};
+    use halyard_axum::{generate_route_list, HalyardRoutes};
     use ssr_modes_axum::app::*;
 
     let conf = get_configuration(None).unwrap();
-    let addr = conf.leptos_options.site_addr;
-    let leptos_options = conf.leptos_options;
-    // Generate the list of routes in your Leptos App
+    let addr = conf.halyard_options.site_addr;
+    let halyard_options = conf.halyard_options;
+    // Generate the list of routes in your Halyard App
     let routes = generate_route_list(App);
 
     let app = Router::new()
-        .leptos_routes(&leptos_options, routes, {
-            let leptos_options = leptos_options.clone();
-            move || shell(leptos_options.clone())
+        .halyard_routes(&halyard_options, routes, {
+            let halyard_options = halyard_options.clone();
+            move || shell(halyard_options.clone())
         })
-        .fallback(leptos_axum::file_and_error_handler_with_context(
+        .fallback(halyard_axum::file_and_error_handler_with_context(
             move || {
                 // if you want to add custom headers to the static file handler response,
                 // you can do that by providing `ResponseOptions` via context
-                let opts = use_context::<leptos_axum::ResponseOptions>()
+                let opts = use_context::<halyard_axum::ResponseOptions>()
                     .unwrap_or_default();
                 opts.insert_header(
                     HeaderName::from_static("cross-origin-opener-policy"),
@@ -38,7 +38,7 @@ async fn main() {
             },
             shell,
         ))
-        .with_state(leptos_options);
+        .with_state(halyard_options);
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`

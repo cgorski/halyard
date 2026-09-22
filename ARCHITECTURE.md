@@ -3,9 +3,19 @@
 The goal of this document is to make it easier for contributors (and anyone
 who’s interested!) to understand the architecture of the framework.
 
-The whole Leptos framework is built from a series of layers. Each of these layers
+> halyard is a fork of Leptos (see `NOTICE`). This document is upstream's architecture
+> overview with the crate names updated; the crate layout is unchanged, and the
+> upstream directory names are kept (e.g. `halyard_router` lives in `router/`,
+> `halyard_tachys` in `tachys/`). Crates this fork adds: `halyard_macro_diagnostics`
+> (compile-error reporting for the proc macros, replacing `proc-macro-error2`) and the
+> vendored `third_party/halyard_rstml` + `third_party/halyard_syn_derive`. Note that upstream's
+> `leptos_reactive` is today the `reactive_graph` crate (`halyard_reactive_graph`) and
+> the renderer is `tachys` (`halyard_tachys`); `halyard_dom` is now a thin layer of
+> browser helpers on top of it.
+
+The whole Halyard framework is built from a series of layers. Each of these layers
 depends on the one below it, but each can be used independently from the ones
-built on top of it. While running a command like `cargo leptos new --git 
+built on top of it. While running a command like `cargo halyard new --git
 leptos-rs/start` pulls in the whole framework, it’s important to remember that
 none of this is magic: each layer of that onion can be stripped away and
 reimplemented, configured, or adapted as needed, incrementally.
@@ -15,7 +25,7 @@ reimplemented, configured, or adapted as needed, incrementally.
 > or fit together, but these are not docs. They assume you know what I’m
 > talking about.
 
-## The Reactive System: `leptos_reactive`
+## The Reactive System: `halyard_reactive_graph`
 
 The reactive system allows you to define dynamic values (signals),
 the relationships between them (derived signals and memos), and the side effects
@@ -38,11 +48,11 @@ slotmap.
 
 > Items owned by the reactive system are dropped when the corresponding reactive
 > scope is dropped, i.e., when the component or section of the UI they’re
-> created in is removed. In a sense, Leptos implements a “garbage collector”
+> created in is removed. In a sense, Halyard implements a “garbage collector”
 > in which the lifetime of data is tied to the lifetime of the UI, not Rust’s
 > lexical scopes.
 
-## The DOM Renderer: `leptos_dom`
+## The DOM Renderer: `halyard_dom`
 
 The reactive system can be used to drive any kinds of side effects. One very
 common side effect is calling an imperative method, for example to update the
@@ -58,13 +68,13 @@ divinely ordained, but it’s a useful convention because it allows us to use
 zero-overhead derived signals as one of several ways to indicate dynamic
 content.
 
-`leptos_dom` also contains code for server-side rendering of the same
+`halyard_dom` also contains code for server-side rendering of the same
 UI views to HTML, either for out-of-order streaming (`src/ssr.rs`) or
 in-order streaming/async rendering (`src/ssr_in_order.rs`).
 
-## The Macros: `leptos_macro`
+## The Macros: `halyard_macro`
 
-It’s entirely possible to write Leptos code with no macros at all. The
+It’s entirely possible to write Halyard code with no macros at all. The
 `view` and `component` macros, the most common, can be replaced by
 the builder syntax and simple functions (see the `counter_without_macros`
 example). But the macros enable a JSX-like syntax for describing views.
@@ -74,7 +84,7 @@ queries and route params in the router.
 
 ### Macro-based Optimizations
 
-Leptos 0.0.x was built much more heavily on macros. Taking its cues  
+Halyard 0.0.x was built much more heavily on macros. Taking its cues  
 from SolidJS, the `view` macro emitted different code for CSR, SSR, and
 hydration, optimizing each. The CSR/hydrate versions worked by compiling
 the view to an HTML template string, cloning that `<template>`, and
@@ -88,7 +98,7 @@ macro to use that builder syntax instead. It moved the optimized-but-buggy
 CSR version of the macro to a more-limited `template` macro.
 
 The `view` macro now separately optimizes SSR to use the same static-string
-optimizations, which (by our benchmarks) makes Leptos about 3-4x faster
+optimizations, which (by our benchmarks) makes Halyard about 3-4x faster
 than similar Rust frontend frameworks in its HTML rendering.
 
 > The optimization is pretty straightforward. Consider the following view:
@@ -148,7 +158,7 @@ than similar Rust frontend frameworks in its HTML rendering.
 >   </main>"#
 > ```
 
-## Server Functions (`leptos_server`, `server_fn`, and `server_fn_macro`)
+## Server Functions (`halyard_server`, `halyard_server_fn`, and `halyard_server_fn_macro`)
 
 Server functions are a framework-agnostic shorthand for converting
 a function, whose body can only be run on the server, into an ad hoc
@@ -164,10 +174,10 @@ with URL-encoded form data) they allow easy graceful degradation and the
 use of the `<form>` element.
 
 This function is split across three packages so that `server_fn` and
-`server_fn_macro` can be used by other frameworks. `leptos_server`
-includes some Leptos-specific reactive functionality (like actions).
+`halyard_server_fn_macro` can be used by other frameworks. `halyard_server`
+includes some Halyard-specific reactive functionality (like actions).
 
-## `leptos`
+## `halyard`
 
 This package is built on and reexports most of the layers already
 mentioned, and implements a number of control-flow components (`<Show/>`,
@@ -176,56 +186,56 @@ public APIs of the other packages.
 
 This is the main entrypoint for users, but is relatively light itself.
 
-## `leptos_meta`
+## `halyard_meta`
 
 This package exists to allow you to work with tags normally found in
 the `<head>`, from within your components.
 
 It is implemented as a distinct package, rather than part of
-`leptos_dom`, on the principle that “what can be implemented in userland,
+`halyard_dom`, on the principle that “what can be implemented in userland,
 should be.” The framework can be used without it, so it’s not in core.
 
-## `leptos_router`
+## `halyard_router`
 
 The router originates as a direct port of `solid-router`, which is the
 origin of most of its terminology, architecture, and route-matching logic.
 
 Subsequent developments (like animated routing, and managing route transitions
-given the lack of `useTransition` in Leptos) have caused it to diverge
+given the lack of `useTransition` in Halyard) have caused it to diverge
 slightly from Solid’s exact code, but it is still very closely related.
 
 The core principle here is “nested routing,” dividing a single page
 into independently-rendered parts. This is described in some detail in the docs.
 
-Like `leptos_meta`, it is implemented as a distinct package, because it
+Like `halyard_meta`, it is implemented as a distinct package, because it
 can be replaced with another router or with none. The framework can be used
 without it, so it’s not in core.
 
 ## Server Integrations
 
 The server integrations are the most “frameworky” layer of the whole framework.
-These **do** assume the use of `leptos`, `leptos_router`, and `leptos_meta`.
-They specifically draw routing data from `leptos_router`, and inject the
-metadata from `leptos_meta` into the `<head>` appropriately.
+These **do** assume the use of `halyard`, `halyard_router`, and `halyard_meta`.
+They specifically draw routing data from `halyard_router`, and inject the
+metadata from `halyard_meta` into the `<head>` appropriately.
 
-But of course, if you one day create `leptos-helmet` and `leptos-better-router`,
+But of course, if you one day create `halyard-helmet` and `halyard-better-router`,
 you can create new server integrations that plug them into the SSR rendering
-methods from `leptos_dom` instead. Everything involved is quite modular.
+methods from `halyard_dom` instead. Everything involved is quite modular.
 
 These packages essentially provide helpers that save the templates and user apps
 from including a huge amount of boilerplate to connect the various other packages
 correctly. Again, early versions of the framework examples are illustrative here
 for reference: they include large amounts of manual SSR route handling, etc.
 
-## `cargo-leptos` helpers
+## `cargo-halyard` helpers
 
-`leptos_config` and `leptos_hot_reload` exist to support two different features
-of `cargo-leptos`, namely its configuration and its view-patching/hot-reloading 
+`halyard_config` and `halyard_hot_reload` exist to support two different features
+of `cargo-halyard`, namely its configuration and its view-patching/hot-reloading 
 features.
 
-It’s important to say that the main feature `cargo-leptos` remains its ability
+It’s important to say that the main feature `cargo-halyard` remains its ability
 to conveniently tie together different build tooling, compiling your app to
 WASM for the browser, building the server version, pulling in SASS and
 Tailwind, etc. It is an extremely good build tool, not a magic formula. Each
 of the examples includes instructions for how to run the examples without
-`cargo-leptos`.
+`cargo-halyard`.
