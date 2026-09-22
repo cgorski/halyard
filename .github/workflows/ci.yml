@@ -39,6 +39,11 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace -- -D warnings -D clippy::print_stdout
 
+      # No panics, ever (README, "Project policy"): the count of panicking
+      # constructs in library code may only fall. Lower it with --update.
+      - name: panic ratchet
+        run: scripts/panic-ratchet.sh
+
       # Tests run per crate, as upstream's CI does: a single `cargo test --workspace`
       # unifies features across members (e.g. `halyard_reactive_graph/sandboxed-arenas`
       # from the integrations) and that makes ~7 upstream test targets fail, both here

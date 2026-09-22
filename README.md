@@ -1,14 +1,15 @@
 # halyard
 
-halyard is a maintained fork of the [Leptos](https://github.com/leptos-rs/leptos) web
-framework (MIT, © 2022 Greg Johnston — see [`LICENSE`](./LICENSE) and
-[`NOTICE`](./NOTICE)). It was forked on 2026-09-22 from upstream commit `c94f4aefd`
-(leptos 0.8.20). Every crate is renamed so nothing collides with crates.io
-(`leptos` → `halyard`, `leptos_router` → `halyard_router`, `tachys` → `halyard_tachys`,
-…; full map below). The crates are published on crates.io under those names
-(`halyard = "0.1"`); its build tool is [`cargo-halyard`](https://github.com/cgorski/cargo-halyard).
+halyard is a full-stack Rust web framework: server-side rendering, hydration and
+fine-grained reactivity, with an axum integration. It is its own project. It began on
+2026-09-22 as a fork of [Leptos](https://github.com/leptos-rs/leptos) 0.8.20 (MIT, © 2022
+Greg Johnston — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE)) and no longer tracks
+it. Every crate is renamed (`leptos` → `halyard`, `leptos_router` → `halyard_router`,
+`tachys` → `halyard_tachys`, …; full map below) and published on crates.io under those
+names (`halyard = "0.1"`); its build tool is
+[`cargo-halyard`](https://github.com/cgorski/cargo-halyard).
 
-## Why fork
+## Why it began as a fork
 
 We hit six defects in production (reproduced in Chromium and WebKit) that are better
 fixed at the source than worked around in every application:
@@ -83,16 +84,15 @@ fallback (`HALYARD_OUTPUT_NAME` / `LEPTOS_OUTPUT_NAME`, `..._SITE_ROOT`, `..._SI
 deployments keep working. Likewise `get_configuration(Some("Cargo.toml"))` reads
 `[package.metadata.halyard]` and falls back to `[package.metadata.leptos]`.
 
-## Upstream and checks
+## Checks
 
-The `upstream` remote points at `leptos-rs/leptos` (push disabled). It is read, never
-merged: directories and crates are renamed, and the fork policy below explains why and how
-upstream ideas are ported instead. The checks CI runs (`.github/workflows/ci.yml`), each
-crate tested on its own (see the known issue below):
+What CI runs (`.github/workflows/ci.yml`), each crate tested on its own (see the known
+issue below):
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace -- -D warnings
+scripts/panic-ratchet.sh       # panic sites per crate may only fall (panic-baseline.txt)
 cargo test -p <crate>          # for each crate
 cargo check -p halyard --no-default-features --features hydrate --target wasm32-unknown-unknown
 cargo test -p halyard --features ssr --test render_mode
@@ -106,28 +106,32 @@ crates.io the way `cargo publish` will. A dev-dependency on a crate that is publ
 `examples/ssr_modes_axum` is kept as an SSR + hydration smoke test for the sibling build
 tool (`cargo-halyard`).
 
-Upstream documentation: <https://book.leptos.dev/> — the API is the same apart from the
-crate names and the changes listed above. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for
-how the crates fit together.
+The Leptos book (<https://book.leptos.dev/>) still describes most of the API, apart from
+the crate names and the changes listed above. See [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+for how the crates fit together.
 
-## Fork policy: this is our framework now
+## Project policy
 
-halyard is **not** a patch set that has to stay mergeable with upstream. It is a
-framework we own and improve for our own needs:
+halyard is our framework, taken wherever the applications built on it need; it does
+not follow Leptos.
 
-- **Refactor freely.** Rename directories, modules, types and features; delete
-  what we do not use; restructure crates. Do not hold back a good change to keep
-  `git merge upstream/main` clean.
-- **Improve as we go.** When our application needs something (a clearer error, a
-  safer default, a missing hook), change halyard rather than working around it.
-- **Upstream is a source of ideas, not a merge target.** When Leptos ships
-  something we want, we read it and port it deliberately — by hand if the trees
-  have diverged — and record where it came from. We will worry about that when
-  the time comes, not before.
-- **Never write upstream.** The `upstream` remote is read-only (its push URL is
-  disabled). We do not open issues or pull requests there from this project.
-- **Attribution stays.** `LICENSE` (MIT, © 2022 Greg Johnston) and `NOTICE`
-  travel with every copy.
+- **Refactor freely.** Rename, restructure, delete and redesign. Nothing is kept
+  mergeable with Leptos, and nothing is merged or ported from it on a schedule.
+- **Improve as we go.** When an application needs something (a clearer error, a safer
+  default, a missing hook), change halyard rather than working around it.
+- **No panics, ever.** A panic in the browser kills the application (release wasm is
+  built with `panic = "abort"`); on the server it fails a request. Library code returns
+  typed errors (`Result`, `thiserror` enums) or recovers visibly (log, fall back to
+  client rendering, render nothing), and uses the strongest types that are practical so
+  the impossible states cannot be written. The inherited code does not meet this yet:
+  `scripts/panic-ratchet.sh` counts every `unwrap`, `expect`, `panic!`, `unreachable!`,
+  `todo!`, unchecked index and unchecked arithmetic per crate, CI fails if a count rises,
+  and each crate's lints go to `deny` once its count reaches zero. The hydration and
+  server request paths go first.
+- **Never write to Leptos.** The old `upstream` remote is push-disabled; we do not open
+  issues or pull requests there.
+- **Attribution stays.** `LICENSE` (MIT, © 2022 Greg Johnston) and `NOTICE` travel with
+  every copy.
 
 ## Known issues (fork backlog)
 
