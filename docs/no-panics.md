@@ -119,6 +119,15 @@ Recommendation: **A now, B next.** A is needed under both B and C, and lands wit
 touching application code. B is the one that makes the guarantee total at a cost we can
 measure; do it before the application grows (the transaction form's 179 types).
 
+**Decided (2026-09-22): A, then B.** halyard stays a full client framework (SSR plus
+hydrated WebAssembly), and the guarantee is by type. The model is the standard library's
+`Rc`/`Weak`: a `Copy` arena handle does not keep its value alive, so, like
+`Weak::upgrade`, reading through it returns an `Option` (`try_get`, `try_with`, `try_run`,
+...). A reference-counted handle (`ArcRwSignal`, `ArcMemo`, `ArcCallback`, ...) keeps its
+value alive, so reading through it is total (`get`, `with`, `run`). The panicking
+accessors on `Copy` handles are removed, not deprecated. Inside halyard, reactive
+rendering of a weak handle whose value is gone renders or updates nothing and logs once.
+
 ## Dependencies considered
 
 Well-maintained crates can remove code we would otherwise have to make panic-free, as
@@ -141,5 +150,5 @@ they can be swapped later.
 - [x] `or_poisoned` recovers instead of panicking (removes the panic at 228 call sites)
 - [x] FECfile+ app: every spawned task is owner-scoped (lint enforced); a disposed read
       after an `await` in the contact dialog uses `try_with_value`
-- [ ] Changes 1 to 7 above
-- [ ] Decision on A/B/C
+- [x] Decision: A then B (all-Rust, hardened)
+- [ ] Changes 1 to 7 above, and B
