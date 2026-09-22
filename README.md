@@ -5,7 +5,8 @@ framework (MIT, © 2022 Greg Johnston — see [`LICENSE`](./LICENSE) and
 [`NOTICE`](./NOTICE)). It was forked on 2026-09-22 from upstream commit `c94f4aefd`
 (leptos 0.8.20). Every crate is renamed so nothing collides with crates.io
 (`leptos` → `halyard`, `leptos_router` → `halyard_router`, `tachys` → `halyard_tachys`,
-…; full map below). The crates are consumed by path/git and are never published.
+…; full map below). The crates are published on crates.io under those names
+(`halyard = "0.1"`); its build tool is [`cargo-halyard`](https://github.com/cgorski/cargo-halyard).
 
 ## Why fork
 
@@ -82,20 +83,25 @@ fallback (`HALYARD_OUTPUT_NAME` / `LEPTOS_OUTPUT_NAME`, `..._SITE_ROOT`, `..._SI
 deployments keep working. Likewise `get_configuration(Some("Cargo.toml"))` reads
 `[package.metadata.halyard]` and falls back to `[package.metadata.leptos]`.
 
-## Tracking upstream
+## Upstream and checks
 
-The `upstream` remote points at `leptos-rs/leptos` (push disabled). Upstream directory names
-were kept so that `git fetch upstream && git merge upstream/main` applies cleanly; after a
-merge, re-run the rename for any new `leptos` paths and the checks in `.github/workflows/ci.yml`:
+The `upstream` remote points at `leptos-rs/leptos` (push disabled). It is read, never
+merged: directories and crates are renamed, and the fork policy below explains why and how
+upstream ideas are ported instead. The checks CI runs (`.github/workflows/ci.yml`), each
+crate tested on its own (see the known issue below):
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace -- -D warnings
-cargo test --workspace
+cargo test -p <crate>          # for each crate
 cargo check -p halyard --no-default-features --features hydrate --target wasm32-unknown-unknown
 cargo test -p halyard --features ssr --test render_mode
 RUSTFLAGS="--cfg erase_components" cargo test -p halyard --features ssr --test render_mode
 ```
+
+Before a release, `cargo package --workspace` packages and verifies every crate against
+crates.io the way `cargo publish` will. A dev-dependency on a crate that is published
+*later* must be path-only (no `version`), or the publish of the earlier crate fails.
 
 `examples/ssr_modes_axum` is kept as an SSR + hydration smoke test for the sibling build
 tool (`cargo-halyard`).
