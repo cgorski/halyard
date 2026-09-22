@@ -5,7 +5,7 @@ license = "MIT"
 repository = "https://github.com/cgorski/halyard"
 description = "The default implementation of the server_fn macro without a context"
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 edition.workspace = true
 
 [lib]

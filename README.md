@@ -122,3 +122,11 @@ framework we own and improve for our own needs:
   disabled). We do not open issues or pull requests there from this project.
 - **Attribution stays.** `LICENSE` (MIT, © 2022 Greg Johnston) and `NOTICE`
   travel with every copy.
+
+## Known issues (fork backlog)
+
+- `cargo test --workspace` fails 8 targets because Cargo unifies the
+  `sandboxed-arenas` feature (enabled by the axum integration's tests) into
+  crates whose tests assume it is off. Every crate passes when tested on its
+  own (`cargo test -p <crate>`), which is how CI runs them. Inherited from
+  upstream; to be fixed by making those tests feature-aware.

@@ -1,0 +1,6 @@
+This crate is a vendored copy of syn_derive 0.2.0 (https://github.com/Kyuuhachi/syn_derive), included in halyard
+(https://github.com/cgorski/halyard) so that the framework does not depend on
+the unmaintained proc-macro-error2 crate. The original authors' copyright and
+licence are retained (see the LICENSE file(s) in this directory); the only
+changes are the package name, the removal of proc-macro-error2 in favour of
+syn::Error diagnostics, and the dependency paths.

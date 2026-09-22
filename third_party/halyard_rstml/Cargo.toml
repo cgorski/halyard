@@ -7,11 +7,12 @@
 [package]
 name = "halyard_rstml"
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 description = "Rust templating for XML-based formats (HTML, SVG, MathML) implemented on top of proc-macro::TokenStreams (vendored rstml 0.12.1)"
 authors = ["vldm <me@vldm.cc>"]
 license = "MIT"
-repository = "https://github.com/rs-tml/rstml"
+repository = "https://github.com/cgorski/halyard"
+homepage = "https://github.com/rs-tml/rstml"
 edition = "2021"
 
 [lib]
@@ -29,7 +30,7 @@ syn = { workspace = true, default-features = true, features = [
   "visit-mut",
 ] }
 thiserror = { workspace = true, default-features = true }
-syn_derive = { package = "halyard_syn_derive", path = "../halyard_syn_derive" }
+syn_derive = { package = "halyard_syn_derive", path = "../halyard_syn_derive", version = "0.1.0" }
 proc-macro2-diagnostics = { version = "0.10", default-features = false }
 derive-where = "1.2.7"
 

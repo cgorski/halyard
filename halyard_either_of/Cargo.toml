@@ -1,10 +1,10 @@
 [package]
 name = "halyard_either_of"
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 authors = ["Greg Johnston"]
 license = "MIT"
-readme = "../README.md"
+readme = "README.md"
 repository = "https://github.com/cgorski/halyard"
 description = "Utilities for working with enumerated types that contain one of 2..n other types."
 rust-version.workspace = true

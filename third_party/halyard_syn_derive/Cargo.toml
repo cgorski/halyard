@@ -6,11 +6,12 @@
 [package]
 name = "halyard_syn_derive"
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 edition = "2021"
 authors = ["Kyuuhachi <caagr98@gmail.com>"]
 description = "Derive macros for `syn::Parse` and `quote::ToTokens` (vendored syn_derive 0.2.0)"
-repository = "https://github.com/Kyuuhachi/syn_derive"
+repository = "https://github.com/cgorski/halyard"
+homepage = "https://github.com/Kyuuhachi/syn_derive"
 license = "MIT OR Apache-2.0"
 categories = ["development-tools::procedural-macro-helpers"]
 

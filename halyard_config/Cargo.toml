@@ -6,7 +6,7 @@ repository = "https://github.com/cgorski/halyard"
 description = "Configuration for the Halyard web framework."
 readme = "../README.md"
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 rust-version.workspace = true
 edition.workspace = true
 

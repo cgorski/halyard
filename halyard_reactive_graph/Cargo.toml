@@ -1,10 +1,10 @@
 [package]
 name = "halyard_reactive_graph"
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 authors = ["Greg Johnston"]
 license = "MIT"
-readme = "../README.md"
+readme = "README.md"
 repository = "https://github.com/cgorski/halyard"
 description = "A fine-grained reactive graph for building user interfaces."
 rust-version.workspace = true

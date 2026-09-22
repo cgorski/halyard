@@ -5,7 +5,7 @@ license = "MIT"
 repository = "https://github.com/cgorski/halyard"
 description = "Utilities to help build server integrations for the Halyard web framework."
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 rust-version.workspace = true
 edition.workspace = true
 

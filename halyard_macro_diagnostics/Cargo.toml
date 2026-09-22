@@ -1,7 +1,7 @@
 [package]
 name = "halyard_macro_diagnostics"
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 license = "MIT"
 repository = "https://github.com/cgorski/halyard"
 description = "Minimal compile-error diagnostics for the halyard proc-macro crates (replaces proc-macro-error2)."

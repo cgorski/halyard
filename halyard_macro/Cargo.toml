@@ -1,7 +1,7 @@
 [package]
 name = "halyard_macro"
 version = "0.1.0"
-publish = false
+publish = ["crates-io"]
 authors = ["Greg Johnston"]
 license = "MIT"
 repository = "https://github.com/cgorski/halyard"
@@ -37,9 +37,9 @@ tracing = { optional = true, workspace = true, default-features = true }
 log = { workspace = true, default-features = true }
 typed-builder = { workspace = true, default-features = true }
 trybuild = { workspace = true, default-features = true }
-halyard = { path = "../halyard" }
-halyard_router = { path = "../halyard_router", features = ["ssr"] }
-halyard_server_fn = { path = "../halyard_server_fn", features = ["cbor"] }
+halyard = { path = "../halyard", version = "0.1.0" }
+halyard_router = { path = "../halyard_router", features = ["ssr"], version = "0.1.0" }
+halyard_server_fn = { path = "../halyard_server_fn", features = ["cbor"], version = "0.1.0" }
 insta = { workspace = true, default-features = true }
 serde = { workspace = true, default-features = true }
 
