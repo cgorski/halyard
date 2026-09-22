@@ -19,9 +19,12 @@ quote = { workspace = true, default-features = true }
 syn = { features = ["full"], workspace = true, default-features = true }
 
 [dev-dependencies]
-halyard = { path = "../halyard", version = "0.1.0" }
-halyard_router = { path = "../halyard_router", version = "0.1.0" }
-halyard_macro = { path = "../halyard_macro", version = "0.1.0" }
+# Path only, no version: halyard and halyard_router depend on this crate, so
+# they are published later; cargo strips versionless dev-dependencies when
+# publishing.
+halyard = { path = "../halyard" }
+halyard_router = { path = "../halyard_router" }
+halyard_macro = { path = "../halyard_macro" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(halyard_debuginfo)'] }

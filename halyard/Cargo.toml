@@ -131,8 +131,10 @@ tokio = { features = [
 ], workspace = true, default-features = true }
 tokio-test = { workspace = true, default-features = true }
 halyard_any_spawner = { workspace = true, features = ["futures-executor", "tokio"] }
-# for tests/render_mode.rs (dev-dependency cycles are allowed by cargo)
-halyard_meta = { workspace = true, features = ["ssr"] }
+# for tests/render_mode.rs (dev-dependency cycles are allowed by cargo).
+# Path only, no version: halyard_meta depends on this crate, so it is
+# published later; cargo strips versionless dev-dependencies when publishing.
+halyard_meta = { path = "../halyard_meta", features = ["ssr"] }
 
 [build-dependencies]
 rustc_version = { workspace = true, default-features = true }

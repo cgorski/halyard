@@ -36,7 +36,9 @@ tokio = { features = [
 tokio-test = { workspace = true, default-features = true }
 halyard_any_spawner = { workspace = true, features = ["futures-executor", "tokio"] }
 halyard_reactive_graph = { workspace = true, features = ["effects"] }
-halyard = { path = "../halyard", features = ["csr"], version = "0.1.0" }
+# Path only, no version: halyard depends on this crate, so it is published
+# later; cargo strips versionless dev-dependencies when publishing.
+halyard = { path = "../halyard", features = ["csr"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(halyard_debuginfo)'] }
