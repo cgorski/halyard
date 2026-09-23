@@ -1,6 +1,7 @@
 use super::{
-    add_attr::AddAnyAttr, Mountable, Position, PositionState, Render,
-    RenderHtml,
+    add_attr::AddAnyAttr,
+    list_diff::{never, ListError},
+    Mountable, Position, PositionState, Render, RenderHtml,
 };
 use crate::{
     html::attribute::{any_attribute::AnyAttribute, Attribute},
@@ -79,7 +80,7 @@ where
 
     fn html_len(&self) -> usize {
         match self {
-            Some(i) => i.html_len() + 3,
+            Some(i) => i.html_len().saturating_add(3),
             None => 3,
         }
     }
@@ -190,8 +191,8 @@ where
             }
             old.clear();
         } else {
+            let new_len = self.len();
             let mut adds = vec![];
-            let mut removes_at_end = 0;
             for item in self.into_iter().zip_longest(old.iter_mut()) {
                 match item {
                     itertools::EitherOrBoth::Both(new, old) => {
@@ -202,13 +203,11 @@ where
                         Rndr::try_mount_before(&mut new_state, marker.as_ref());
                         adds.push(new_state);
                     }
-                    itertools::EitherOrBoth::Right(old) => {
-                        removes_at_end += 1;
-                        old.unmount()
-                    }
+                    itertools::EitherOrBoth::Right(old) => old.unmount(),
                 }
             }
-            old.truncate(old.len() - removes_at_end);
+            // drops the old items past the new length, unmounted above
+            old.truncate(new_len);
             old.append(&mut adds);
         }
     }
@@ -310,7 +309,10 @@ where
     }
 
     fn html_len(&self) -> usize {
-        self.iter().map(|n| n.html_len()).sum::<usize>() + 3
+        self.iter()
+            .map(|n| n.html_len())
+            .fold(0, usize::saturating_add)
+            .saturating_add(3)
     }
 
     fn to_html_with_buf(
@@ -538,8 +540,8 @@ where
             }
             old.clear();
         } else {
+            let new_len = self.0.len();
             let mut adds = vec![];
-            let mut removes_at_end = 0;
             for item in self.0.into_iter().zip_longest(old.iter_mut()) {
                 match item {
                     itertools::EitherOrBoth::Both(new, old) => {
@@ -550,13 +552,11 @@ where
                         Rndr::mount_before(&mut new_state, marker.as_ref());
                         adds.push(new_state);
                     }
-                    itertools::EitherOrBoth::Right(old) => {
-                        removes_at_end += 1;
-                        old.unmount()
-                    }
+                    itertools::EitherOrBoth::Right(old) => old.unmount(),
                 }
             }
-            old.truncate(old.len() - removes_at_end);
+            // drops the old items past the new length, unmounted above
+            old.truncate(new_len);
             old.append(&mut adds);
         }
     }
@@ -609,7 +609,11 @@ where
     }
 
     fn html_len(&self) -> usize {
-        self.0.iter().map(RenderHtml::html_len).sum::<usize>() + 3
+        self.0
+            .iter()
+            .map(RenderHtml::html_len)
+            .fold(0, usize::saturating_add)
+            .saturating_add(3)
     }
 
     fn to_html_with_buf(
@@ -801,16 +805,25 @@ where
     }
 
     async fn resolve(self) -> Self::AsyncOutput {
-        futures::future::join_all(self.into_iter().map(T::resolve))
-            .await
-            .into_iter()
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap_or_else(|_| unreachable!())
+        let resolved =
+            futures::future::join_all(self.into_iter().map(T::resolve)).await;
+        let found = resolved.len();
+        // `join_all` gives one output per future
+        if let Ok(resolved) = <[T::AsyncOutput; N]>::try_from(resolved) {
+            return resolved;
+        }
+        never(ListError::ArrayLength {
+            what: "resolving",
+            expected: N,
+            found,
+        })
+        .await
     }
 
     fn html_len(&self) -> usize {
-        self.iter().map(RenderHtml::html_len).sum::<usize>()
+        self.iter()
+            .map(RenderHtml::html_len)
+            .fold(0, usize::saturating_add)
     }
 
     fn to_html_with_buf(
@@ -872,17 +885,189 @@ where
         for child in self {
             states.push(child.hydrate_async(cursor, position).await);
         }
-        let Ok(states) = <[<T as Render>::State; N]>::try_from(states) else {
-            unreachable!()
-        };
-        ArrayState { states }
+        let found = states.len();
+        // an array iterates over each of its `N` items once
+        if let Ok(states) = <[<T as Render>::State; N]>::try_from(states) {
+            return ArrayState { states };
+        }
+        never(ListError::ArrayLength {
+            what: "hydrating",
+            expected: N,
+            found,
+        })
+        .await
     }
 
     fn into_owned(self) -> Self::Owned {
-        self.into_iter()
-            .map(RenderHtml::into_owned)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap_or_else(|_| unreachable!())
+        self.map(RenderHtml::into_owned)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StaticVec, StaticVecState, VecState};
+    use crate::{
+        renderer::types::{Element, Node, Placeholder},
+        view::{Mountable, Render, RenderHtml},
+        view_error::test_support::HugeView,
+    };
+    use futures::executor::block_on;
+    use std::{cell::RefCell, rc::Rc};
+    use wasm_bindgen::{JsCast, JsValue};
+
+    #[test]
+    fn option_html_len_saturates() {
+        assert_eq!(Some(HugeView).html_len(), usize::MAX);
+        assert_eq!(None::<HugeView>.html_len(), 3);
+        assert_eq!(Some("ab").html_len(), 5);
+    }
+
+    #[test]
+    fn vec_html_len_saturates() {
+        assert_eq!(vec![HugeView].html_len(), usize::MAX);
+        assert_eq!(vec![HugeView, HugeView].html_len(), usize::MAX);
+        assert_eq!(vec!["ab", "c"].html_len(), 6);
+    }
+
+    #[test]
+    fn static_vec_html_len_saturates() {
+        assert_eq!(StaticVec::from(vec![HugeView]).html_len(), usize::MAX);
+        assert_eq!(
+            StaticVec::from(vec![HugeView, HugeView]).html_len(),
+            usize::MAX
+        );
+        assert_eq!(StaticVec::from(vec!["ab", "c"]).html_len(), 6);
+    }
+
+    #[test]
+    fn array_html_len_saturates() {
+        assert_eq!([HugeView, HugeView].html_len(), usize::MAX);
+        assert_eq!(["ab", "c"].html_len(), 3);
+    }
+
+    #[test]
+    fn arrays_resolve_and_convert_every_item_in_order() {
+        let resolved = block_on(["a".to_string(), "b".to_string()].resolve());
+        assert_eq!(resolved, ["a", "b"]);
+        let owned: [String; 2] = ["a", "b"].into_owned();
+        assert_eq!(owned, ["a", "b"]);
+        let empty: [String; 0] = block_on(<[String; 0]>::default().resolve());
+        assert!(empty.is_empty());
+    }
+
+    /// What the recorded views were asked to do, in order.
+    #[derive(Clone, Default)]
+    struct Log(Rc<RefCell<Vec<String>>>);
+
+    impl Log {
+        fn push(&self, entry: String) {
+            self.0.borrow_mut().push(entry);
+        }
+
+        fn entries(&self) -> Vec<String> {
+            self.0.borrow().clone()
+        }
+    }
+
+    /// A view that records its lifecycle instead of touching a DOM.
+    struct Recorded(&'static str, Log);
+
+    struct RecordedState(&'static str, Log);
+
+    impl Render for Recorded {
+        type State = RecordedState;
+
+        fn build(self) -> Self::State {
+            self.1.push(format!("build {}", self.0));
+            RecordedState(self.0, self.1)
+        }
+
+        fn rebuild(self, state: &mut Self::State) {
+            self.1.push(format!("rebuild {} over {}", self.0, state.0));
+            state.0 = self.0;
+        }
+    }
+
+    impl Mountable for RecordedState {
+        fn unmount(&mut self) {
+            self.1.push(format!("unmount {}", self.0));
+        }
+
+        fn mount(&mut self, _parent: &Element, _marker: Option<&Node>) {
+            self.1.push(format!("mount {}", self.0));
+        }
+
+        fn insert_before_this(&self, _child: &mut dyn Mountable) -> bool {
+            false
+        }
+
+        fn elements(&self) -> Vec<Element> {
+            Vec::new()
+        }
+    }
+
+    /// A marker that is never in a DOM. Updates that only rebuild or remove items never
+    /// touch it, so no JavaScript is called (which a native test cannot do).
+    fn detached_marker() -> Placeholder {
+        JsValue::NULL.unchecked_into()
+    }
+
+    fn states(names: &[&'static str], log: &Log) -> Vec<RecordedState> {
+        names
+            .iter()
+            .map(|name| RecordedState(name, log.clone()))
+            .collect()
+    }
+
+    fn views(names: &[&'static str], log: &Log) -> Vec<Recorded> {
+        names
+            .iter()
+            .map(|name| Recorded(name, log.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_shorter_vec_rebuilds_the_start_and_unmounts_the_rest() {
+        let log = Log::default();
+        let mut state = VecState {
+            states: states(&["a", "b", "c"], &log),
+            marker: detached_marker(),
+        };
+        views(&["x"], &log).rebuild(&mut state);
+        assert_eq!(
+            log.entries(),
+            ["rebuild x over a", "unmount b", "unmount c"]
+        );
+        assert_eq!(state.states.len(), 1);
+
+        views(&["y"], &log).rebuild(&mut state);
+        assert_eq!(state.states.len(), 1);
+        views(&[], &log).rebuild(&mut state);
+        assert!(state.states.is_empty());
+        assert_eq!(
+            log.entries(),
+            [
+                "rebuild x over a",
+                "unmount b",
+                "unmount c",
+                "rebuild y over x",
+                "unmount y"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shorter_static_vec_rebuilds_the_start_and_unmounts_the_rest() {
+        let log = Log::default();
+        let mut state = StaticVecState {
+            states: states(&["a", "b", "c"], &log),
+            marker: detached_marker(),
+        };
+        StaticVec::from(views(&["x", "y"], &log)).rebuild(&mut state);
+        assert_eq!(
+            log.entries(),
+            ["rebuild x over a", "rebuild y over b", "unmount c"]
+        );
+        assert_eq!(state.states.len(), 2);
     }
 }

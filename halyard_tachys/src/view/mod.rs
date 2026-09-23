@@ -25,6 +25,7 @@ pub mod fragment;
 pub mod iterators;
 /// Keyed list iteration.
 pub mod keyed;
+mod list_diff;
 mod primitives;
 /// Optimized types for static strings known at compile time.
 #[cfg(all(feature = "nightly", rustc_nightly))]
