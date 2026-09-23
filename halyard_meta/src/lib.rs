@@ -129,10 +129,21 @@ const NOT_HYDRATED: &str =
 /// https://developer.mozilla.org/en-US/docs/Web/API/Node/nodeType#node.comment_node
 const COMMENT_NODE: u16 = 8;
 
+/// The document; `None` outside a browser's main thread, logged once with what is done
+/// instead (`recovery`).
+pub(crate) fn document_or_warn(recovery: &str) -> Option<web_sys::Document> {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    let document = document();
+    if document.is_none() && !WARNED.swap(true, Ordering::Relaxed) {
+        MetaError::NoDocument.warn(recovery);
+    }
+    document
+}
+
 impl Default for MetaContext {
     fn default() -> Self {
         let build_cursor: fn() -> Option<SendWrapper<Cursor>> = || {
-            let Some(head) = document().head() else {
+            let Some(head) = document_or_warn(NOT_HYDRATED)?.head() else {
                 MetaError::NoElement("head").warn(NOT_HYDRATED);
                 return None;
             };
@@ -376,8 +387,9 @@ where
 }
 
 /// The document's `<head>`, created (at the end of `<html>`) if the document has none.
-fn document_head() -> Result<HtmlHeadElement, MetaError> {
-    let document = document();
+fn document_head(
+    document: &web_sys::Document,
+) -> Result<HtmlHeadElement, MetaError> {
     if let Some(head) = document.head() {
         return Ok(head);
     }
@@ -547,9 +559,13 @@ where
         // but this shouldn't warn about the parent being a regular element or being unused
         // because it will call "mount" with the parent where it is located in the component tree,
         // but actually be mounted to the <head>
-        match document_head() {
+        const NOT_ADDED: &str = "The tag is not added to the page.";
+        let Some(document) = document_or_warn(NOT_ADDED) else {
+            return;
+        };
+        match document_head(&document) {
             Ok(head) => self.state.mount(&head, None),
-            Err(error) => error.warn("The tag is not added to the page."),
+            Err(error) => error.warn(NOT_ADDED),
         }
     }
 

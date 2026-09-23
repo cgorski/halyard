@@ -14,6 +14,7 @@ use crate::{
     prelude::AddAnyAttr,
     renderer::{types::Element, RemoveEventHandler},
     view::{Position, ToTemplate},
+    view_error::{report_once, ViewError},
 };
 use halyard_reactive_graph::{
     signal::{ReadSignal, RwSignal, WriteSignal},
@@ -21,6 +22,7 @@ use halyard_reactive_graph::{
     wrappers::read::Signal,
 };
 use send_wrapper::SendWrapper;
+use std::sync::atomic::AtomicBool;
 use wasm_bindgen::JsValue;
 #[cfg(feature = "reactive_stores")]
 use {
@@ -210,7 +212,8 @@ where
     const MIN_LENGTH: usize = 0;
 
     type State = (
-        <Signal<BoolOrT<T>> as IntoProperty>::State,
+        // the state of the property (`None` if it had no value, see `Property`)
+        Option<<Signal<BoolOrT<T>> as IntoProperty>::State>,
         (Element, Option<RemoveEventHandler<Element>>),
     );
     type AsyncOutput = Self;
@@ -459,20 +462,48 @@ where
 }
 
 /// Returns self from an event target.
-pub trait FromEventTarget {
-    /// Returns self from an event target.
-    fn from_event_target(evt: &web_sys::Event) -> Self;
+pub trait FromEventTarget: Sized {
+    /// Returns self from an event target; `None` if the event has no target (it was
+    /// created, but never dispatched).
+    fn from_event_target(evt: &web_sys::Event) -> Option<Self>;
 }
 
 impl FromEventTarget for bool {
-    fn from_event_target(evt: &web_sys::Event) -> Self {
+    fn from_event_target(evt: &web_sys::Event) -> Option<Self> {
         event_target_checked(evt)
     }
 }
 
 impl FromEventTarget for String {
-    fn from_event_target(evt: &web_sys::Event) -> Self {
+    fn from_event_target(evt: &web_sys::Event) -> Option<Self> {
         event_target_value(evt)
+    }
+}
+
+/// A listener runs only for a dispatched event, which always has a target; for one
+/// without, the bound signal keeps its value (logged once).
+fn no_event_target() {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    report_once(
+        &REPORTED,
+        &ViewError::NoEventTarget {
+            what: "a `bind:` listener",
+            instead: "the bound signal keeps its value",
+        },
+    );
+}
+
+/// Sets `write_signal` to the value of the event's target (see [`FromEventTarget`]).
+fn set_from_event_target<T, W>(write_signal: &W, evt: &web_sys::Event)
+where
+    T: FromEventTarget,
+    W: Set<Value = T>,
+{
+    match T::from_event_target(evt) {
+        Some(value) => {
+            write_signal.try_set(value);
+        }
+        None => no_event_target(),
     }
 }
 
@@ -503,18 +534,15 @@ impl ChangeEvent for web_sys::Element {
         W: Set<Value = T> + 'static,
     {
         if key == "group" {
-            let handler = move |evt| {
-                let checked = event_target_checked(&evt);
-                if checked {
-                    write_signal.try_set(T::from_event_target(&evt));
-                }
+            let handler = move |evt| match event_target_checked(&evt) {
+                Some(true) => set_from_event_target(&write_signal, &evt),
+                Some(false) => {}
+                None => no_event_target(),
             };
 
             on::<_, _>(change, handler).attach(self)
         } else {
-            let handler = move |evt| {
-                write_signal.try_set(T::from_event_target(&evt));
-            };
+            let handler = move |evt| set_from_event_target(&write_signal, &evt);
 
             if key == "checked" || self.tag_name() == "SELECT" {
                 on::<_, _>(change, handler).attach(self)

@@ -4,7 +4,7 @@ use crate::IntoView;
 use halyard_any_spawner::Executor;
 use halyard_reactive_graph::owner::Owner;
 use halyard_tachys::{
-    dom::body,
+    dom::document,
     view::{Mountable, Render},
 };
 #[cfg(feature = "hydrate")]
@@ -17,6 +17,37 @@ use std::cell::Cell;
 #[cfg(feature = "hydrate")]
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
+
+/// Why [`hydrate_body`], [`hydrate_lazy`] or [`mount_to_body`] did not start the app.
+#[derive(Debug, thiserror::Error)]
+enum MountError {
+    #[error(
+        "{during} found no document: there is one only on a browser's main thread, \
+         not in a web worker or a native build (such as the server); the app is not \
+         started"
+    )]
+    NoDocument { during: &'static str },
+    #[error(
+        "{during} found no <body> in the document (did the script run before the \
+         <body> was parsed? load it with `defer`, or at the end of the page); the app \
+         is not started"
+    )]
+    NoBody { during: &'static str },
+}
+
+/// The `<body>` to start the app in; `None`, logged, if there is no document or it has no
+/// `<body>`.
+fn body_or_report(during: &'static str) -> Option<HtmlElement> {
+    let error = match document() {
+        None => MountError::NoDocument { during },
+        Some(document) => match document.body() {
+            Some(body) => return Some(body),
+            None => MountError::NoBody { during },
+        },
+    };
+    crate::logging::error!("[halyard] {error}");
+    None
+}
 
 #[cfg(feature = "hydrate")]
 /// Hydrates the app described by the provided function, starting at `<body>`.
@@ -31,12 +62,18 @@ use web_sys::HtmlElement;
 /// build's [`RENDER_MODE`](crate::hydration::RENDER_MODE), hydration is not attempted at all:
 /// the server and client were compiled with different `--cfg erase_components` settings and
 /// would disagree about every hydration marker. One console error explains how to fix it.
+///
+/// Without a document or a `<body>` (see [`halyard_tachys::dom::body`]) this logs an error
+/// and does nothing.
 pub fn hydrate_body<F, N>(f: F)
 where
     F: Fn() -> N + 'static,
     N: IntoView,
 {
-    if let Some(owner) = hydrate_from(body(), f) {
+    let Some(body) = body_or_report("hydrate_body()") else {
+        return;
+    };
+    if let Some(owner) = hydrate_from(body, f) {
         owner.forget();
     }
 }
@@ -45,7 +82,8 @@ where
 /// Hydrates the app described by the provided function, starting at `<body>`, with support
 /// for lazy-loaded routes and components.
 ///
-/// See [`hydrate_body`] for how hydration mismatches and render-mode mismatches are handled.
+/// See [`hydrate_body`] for how hydration mismatches and render-mode mismatches are handled,
+/// and for what happens without a document or a `<body>`.
 pub fn hydrate_lazy<F, N>(f: F)
 where
     F: Fn() -> N + 'static,
@@ -57,7 +95,10 @@ where
     _ = Executor::init_wasm_bindgen();
 
     crate::task::spawn_local(async move {
-        if let Some(owner) = hydrate_from_async(body(), f).await {
+        let Some(body) = body_or_report("hydrate_lazy()") else {
+            return;
+        };
+        if let Some(owner) = hydrate_from_async(body, f).await {
             owner.forget();
         }
     })
@@ -68,16 +109,21 @@ where
 ///
 /// The two modes (`--cfg erase_components` or not) produce different hydration marker
 /// comments, so hydrating would fail at the first marker with a confusing message; this
-/// names the actual problem instead.
+/// names the actual problem instead. Without a document there is no tag to check, as on a
+/// page not rendered with `HydrationScripts`: this returns `true`.
 #[cfg(feature = "hydrate")]
 pub fn check_render_mode() -> bool {
     use crate::hydration::{RENDER_MODE, RENDER_MODE_META_NAME};
-    use halyard_tachys::dom::document;
 
     let server_mode = document()
-        .query_selector(&format!("meta[name=\"{RENDER_MODE_META_NAME}\"]"))
-        .ok()
-        .flatten()
+        .and_then(|document| {
+            document
+                .query_selector(&format!(
+                    "meta[name=\"{RENDER_MODE_META_NAME}\"]"
+                ))
+                .ok()
+                .flatten()
+        })
         .and_then(|meta| meta.get_attribute("content"));
     match server_mode {
         // no tag: the page was not rendered with `HydrationScripts`, so there is nothing
@@ -318,12 +364,18 @@ where
 }
 
 /// Runs the provided closure and mounts the result to the `<body>`.
+///
+/// Without a document or a `<body>` (see [`halyard_tachys::dom::body`]) this logs an error
+/// and does nothing: `f` is not run.
 pub fn mount_to_body<F, N>(f: F)
 where
     F: FnOnce() -> N + 'static,
     N: IntoView,
 {
-    let owner = mount_to(body(), f);
+    let Some(body) = body_or_report("mount_to_body()") else {
+        return;
+    };
+    let owner = mount_to(body, f);
     owner.forget();
 }
 
@@ -458,5 +510,41 @@ where
 {
     fn drop(&mut self) {
         self.mountable.unmount();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A native build (as these tests) has no document. `mount_to_body` panicked there;
+    /// it logs an error and does nothing, without running the app.
+    #[test]
+    fn mount_to_body_without_a_document_does_nothing() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        let ran = Arc::new(AtomicBool::new(false));
+        super::mount_to_body({
+            let ran = Arc::clone(&ran);
+            move || ran.store(true, Ordering::Relaxed)
+        });
+        assert!(!ran.load(Ordering::Relaxed));
+    }
+
+    /// The same for `hydrate_body`; and the render-mode check, which also read the
+    /// document, has no tag to check against.
+    #[cfg(feature = "hydrate")]
+    #[test]
+    fn hydrate_body_without_a_document_does_nothing() {
+        use std::{cell::Cell, rc::Rc};
+
+        let ran = Rc::new(Cell::new(false));
+        super::hydrate_body({
+            let ran = Rc::clone(&ran);
+            move || ran.set(true)
+        });
+        assert!(!ran.get());
+        assert!(super::check_render_mode());
     }
 }

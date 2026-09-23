@@ -40,6 +40,13 @@ pub(crate) enum MetaError {
     /// Browser: the document has no `<html>`, `<head>` or `<body>` element.
     #[error("the document has no <{0}> element")]
     NoElement(&'static str),
+    /// Client-side code ran where there is no document: not on a browser's main thread
+    /// (in a web worker, or in a native build).
+    #[error(
+        "there is no document (there is one only on a browser's main thread, not in a \
+         web worker or a native build)"
+    )]
+    NoDocument,
     /// Browser: the document's `<head>` has no `<!--HEAD-->` marker, where the server put
     /// the tags that are hydrated.
     #[error(

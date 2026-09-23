@@ -83,6 +83,36 @@ pub(crate) enum ViewError {
          marker?); it is streamed in a <template> instead of in place"
     )]
     UnclosedChunkMarker { id: String },
+    /// There is a document only on a browser's main thread (`crate::dom::document`). The
+    /// mount functions check for one first, so this is a view built by hand elsewhere.
+    #[error(
+        "the DOM renderer has no document to create nodes in: there is one only on a \
+         browser's main thread, not in a web worker or a native build such as the \
+         server; the nodes it creates are stand-ins that are not in any document, so \
+         nothing is shown"
+    )]
+    NoDocument,
+    /// `AnyView`, `AnyAttribute` and their states keep a type-erased value next to
+    /// functions for its type, both made by the one constructor, so the types match.
+    #[error(
+        "{what} holds a value of another type than the one its functions were made \
+         for; {instead}"
+    )]
+    ErasedTypeMismatch {
+        what: &'static str,
+        instead: &'static str,
+    },
+    /// Only an event that was created but never dispatched has no target, and listeners
+    /// run only for dispatched events.
+    #[cfg(feature = "reactive_graph")]
+    #[error(
+        "{what} received an event without a target (created, but never \
+         dispatched); {instead}"
+    )]
+    NoEventTarget {
+        what: &'static str,
+        instead: &'static str,
+    },
 }
 
 /// Logs an error that the view layer recovered from: with `tracing` when that feature is

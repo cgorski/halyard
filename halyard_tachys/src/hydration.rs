@@ -169,7 +169,8 @@ thread_local! {
     static HYDRATION_FAILED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A detached node returned by `Cursor::current` once hydration has failed. A
     /// `DocumentFragment` is used because it can never be cast to an `Element`, `Text`,
-    /// or `Comment`, so every view synthesizes its own node instead.
+    /// or `Comment`, so every view synthesizes its own node instead. (Without a document,
+    /// the renderer's stand-in, which cannot be cast to any of them either.)
     static DETACHED_SENTINEL: RefCell<Option<Node>> = const { RefCell::new(None) };
 }
 
@@ -177,7 +178,10 @@ fn detached_sentinel() -> Node {
     DETACHED_SENTINEL.with(|s| {
         s.borrow_mut()
             .get_or_insert_with(|| {
-                crate::dom::document().create_document_fragment().into()
+                crate::renderer::dom::render_document()
+                    .map_or_else(crate::renderer::dom::stand_in, |document| {
+                        document.create_document_fragment().into()
+                    })
             })
             .clone()
     })

@@ -1,4 +1,7 @@
-use crate::{error::MetaError, use_head, MetaContext, ServerMetaContext};
+use crate::{
+    document_or_warn, error::MetaError, use_head, MetaContext,
+    ServerMetaContext,
+};
 use halyard::{
     attr::{any_attribute::AnyAttribute, Attribute},
     component,
@@ -6,7 +9,6 @@ use halyard::{
     prelude::{ArcTrigger, Notify, Track},
     reactive::{effect::RenderEffect, owner::use_context},
     tachys::{
-        dom::document,
         hydration::Cursor,
         view::{
             add_attr::AddAnyAttr, Mountable, Position, PositionState, Render,
@@ -164,16 +166,20 @@ fn set_entry<T>(
     }
 }
 
-/// Sets `document.title`. If the browser throws, that is logged and the title is unchanged.
+/// Sets `document.title`. If the browser throws, or there is no document, that is logged
+/// and the title is unchanged.
 fn set_document_title(title: &str) {
+    const UNCHANGED: &str = "The document's title is unchanged.";
+    let Some(document) = document_or_warn(UNCHANGED) else {
+        return;
+    };
     // `Document::set_title` cannot report a throw; `Reflect.set` calls the same setter
     if let Err(thrown) = Reflect::set(
-        &document(),
+        &document,
         &JsValue::from_str("title"),
         &JsValue::from_str(title),
     ) {
-        MetaError::thrown("setting document.title", &thrown)
-            .warn("The document's title is unchanged.");
+        MetaError::thrown("setting document.title", &thrown).warn(UNCHANGED);
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{error::MetaError, ServerMetaContext};
+use crate::{document_or_warn, error::MetaError, ServerMetaContext};
 use halyard::{
     attr::{any_attribute::AnyAttribute, NextAttribute},
     component, html,
@@ -61,12 +61,15 @@ where
     attributes: Option<At::State>,
 }
 
-/// The document's `<body>` element; `None`, logged, if it has none.
+/// What happens when there is no `<body>` element to set the attributes on.
+const NOT_APPLIED: &str = "The attributes of <Body/> are not applied.";
+
+/// The document's `<body>` element; `None`, logged, if it has none (or there is no
+/// document, logged once).
 fn body_element() -> Option<web_sys::HtmlElement> {
-    let el = document().body();
+    let el = document_or_warn(NOT_APPLIED)?.body();
     if el.is_none() {
-        MetaError::NoElement("body")
-            .warn("The attributes of <Body/> are not applied.");
+        MetaError::NoElement("body").warn(NOT_APPLIED);
     }
     el
 }
@@ -185,6 +188,10 @@ where
     }
 
     fn elements(&self) -> Vec<halyard::tachys::renderer::types::Element> {
-        document().body().map(Into::into).into_iter().collect()
+        document()
+            .and_then(|document| document.body())
+            .map(Into::into)
+            .into_iter()
+            .collect()
     }
 }

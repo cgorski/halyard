@@ -75,6 +75,16 @@ pub(crate) enum RouterError {
         reason: String,
         instead: &'static str,
     },
+    /// `AnyChooseView`, `AnyNestedMatch` and `AnyNestedRoute` keep a type-erased value
+    /// next to functions for its type, both made by the one constructor, so the types match.
+    #[error(
+        "{what} holds a value of another type than the one its functions were made \
+         for; {instead}"
+    )]
+    ErasedTypeMismatch {
+        what: &'static str,
+        instead: &'static str,
+    },
 }
 
 /// Logs an error that the router recovered from: with `tracing` when that feature is on,
@@ -120,4 +130,14 @@ fn log_error(message: &str) {
 /// A thrown JavaScript value, for an error message.
 pub(crate) fn js_reason(value: &wasm_bindgen::JsValue) -> String {
     value.as_string().unwrap_or_else(|| format!("{value:?}"))
+}
+
+/// Why the browser location cannot be read or changed outside a browser's main thread
+/// (`halyard_tachys::dom::window` is `None`): the error of `BrowserUrl`'s methods, which
+/// their callers log.
+pub(crate) fn no_window() -> wasm_bindgen::JsValue {
+    wasm_bindgen::JsValue::from_str(
+        "there is no window: the browser location is available only on a browser's \
+         main thread",
+    )
 }

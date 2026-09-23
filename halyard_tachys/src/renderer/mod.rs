@@ -183,8 +183,9 @@ pub trait DomRenderer: Renderer {
         cb: Box<dyn FnMut(Self::Event)>,
     ) -> RemoveEventHandler<Self::Element>;
 
-    /// Return the `event.target`, cast to the given type.
-    fn event_target<T>(ev: &Self::Event) -> T
+    /// Return the `event.target`, cast to the given type; `None` if the event has no
+    /// target of that type.
+    fn event_target<T>(ev: &Self::Event) -> Option<T>
     where
         T: CastFrom<Self::Element>;
 

@@ -8,15 +8,19 @@ use crate::{
     dom_error::DomError,
     ok_or_debug, or_debug,
     view::{Mountable, ToTemplate},
+    view_error::{report_once, ViewError},
 };
 use rustc_hash::FxHashSet;
 use std::{
     any::TypeId,
     borrow::Cow,
     cell::{LazyCell, RefCell},
+    sync::atomic::AtomicBool,
 };
 use wasm_bindgen::{intern, prelude::Closure, JsCast, JsValue};
-use web_sys::{AddEventListenerOptions, Comment, HtmlTemplateElement};
+use web_sys::{
+    AddEventListenerOptions, Comment, Document, HtmlTemplateElement,
+};
 
 /// A [`Renderer`](crate::renderer::Renderer) that uses `web-sys` to manipulate DOM elements in the browser.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -43,6 +47,42 @@ const INVALID_ELEMENT_TAG: &str = "halyard-invalid-element";
 
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 
+/// The document the renderer creates nodes in: [`document`], or `None` (logged once)
+/// outside a browser's main thread, where the renderer creates [`stand_in`]s instead.
+///
+/// halyard's mount functions check for a document before they build anything (or are
+/// given an element, which is in one), so this is `None` only for a view built by hand
+/// outside a browser's main thread.
+pub(crate) fn render_document() -> Option<Document> {
+    let document = document();
+    if document.is_none() {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_once(&REPORTED, &ViewError::NoDocument);
+    }
+    document
+}
+
+/// Stands in for a node that cannot be created because there is no document (see
+/// [`render_document`]): a plain JavaScript object, which is in no document, so nothing is
+/// shown. Setting a property on it does nothing. Calling a DOM method on it fails: where
+/// the renderer catches the failure (setting an attribute, inserting a node, cloning) it is
+/// handled as for any failed DOM operation; where it does not (removing the node, reading
+/// its tag name), JavaScript throws a `TypeError`. (In a native build, which cannot call
+/// into JavaScript, it is `undefined`.)
+pub(crate) fn stand_in<T: JsCast>() -> T {
+    #[cfg(all(
+        target_arch = "wasm32",
+        not(any(target_os = "emscripten", target_os = "wasi"))
+    ))]
+    let value = JsValue::from(js_sys::Object::new());
+    #[cfg(not(all(
+        target_arch = "wasm32",
+        not(any(target_os = "emscripten", target_os = "wasi"))
+    )))]
+    let value = JsValue::UNDEFINED;
+    value.unchecked_into()
+}
+
 /// A microtask is a short function which will run after the current task has
 /// completed its work and when there is no other code waiting to be run before
 /// control of the execution context is returned to the browser's event loop.
@@ -63,11 +103,19 @@ pub fn queue_microtask(task: impl FnOnce() + 'static) {
 
 fn try_queue_microtask(task: impl FnOnce() + 'static) -> Result<(), DomError> {
     let task = Closure::once_into_js(task);
-    call_method(&window(), "queueMicrotask", "window.queueMicrotask", &task)
-        .or_else(|_| {
-            let resolved = js_sys::Promise::resolve(&JsValue::UNDEFINED);
-            call_method(&resolved, "then", "Promise.prototype.then", &task)
-        })
+    let queued = match window() {
+        Some(window) => call_method(
+            &window,
+            "queueMicrotask",
+            "window.queueMicrotask",
+            &task,
+        ),
+        None => Err(DomError::new("window.queueMicrotask", "no window")),
+    };
+    queued.or_else(|_| {
+        let resolved = js_sys::Promise::resolve(&JsValue::UNDEFINED);
+        call_method(&resolved, "then", "Promise.prototype.then", &task)
+    })
 }
 
 /// Calls `target[name](arg)`, checking that `target[name]` is a function.
@@ -122,24 +170,31 @@ impl Dom {
     ///
     /// If the browser refuses (an invalid tag name, or one the namespace does not allow),
     /// this logs a warning and returns a `<halyard-invalid-element>` placeholder instead.
+    /// Without a document it returns a stand-in (see [`render_document`]).
     pub fn create_element(tag: &str, namespace: Option<&str>) -> Element {
-        Self::try_create_element(tag, namespace).unwrap_or_else(|err| {
-            err.warn(
-                &format!(
-                    "rendering <{INVALID_ELEMENT_TAG}> in place of <{tag}>"
-                ),
-                None,
-            );
-            Self::invalid_element_placeholder(namespace)
-        })
+        let Some(document) = render_document() else {
+            return stand_in();
+        };
+        Self::try_create_element(&document, tag, namespace).unwrap_or_else(
+            |err| {
+                err.warn(
+                    &format!(
+                        "rendering <{INVALID_ELEMENT_TAG}> in place of <{tag}>"
+                    ),
+                    None,
+                );
+                Self::invalid_element_placeholder(&document, namespace)
+            },
+        )
     }
 
     fn try_create_element(
+        document: &Document,
         tag: &str,
         namespace: Option<&str>,
     ) -> Result<Element, DomError> {
         if let Some(namespace) = namespace {
-            document()
+            document
                 .create_element_ns(
                     Some(Self::intern(namespace)),
                     Self::intern(tag),
@@ -148,7 +203,7 @@ impl Dom {
                     DomError::thrown("document.createElementNS", &err)
                 })
         } else {
-            document()
+            document
                 .create_element(Self::intern(tag))
                 .map_err(|err| DomError::thrown("document.createElement", &err))
         }
@@ -156,8 +211,10 @@ impl Dom {
 
     /// Stands in for an element the browser refused to create: in the same namespace if
     /// the namespace allows the name, as an HTML element otherwise.
-    fn invalid_element_placeholder(namespace: Option<&str>) -> Element {
-        let document = document();
+    fn invalid_element_placeholder(
+        document: &Document,
+        namespace: Option<&str>,
+    ) -> Element {
         namespace
             .and_then(|namespace| {
                 document
@@ -179,23 +236,36 @@ impl Dom {
             })
     }
 
+    /// Creates a text node; without a document, a stand-in (see [`render_document`]).
     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace"))]
     pub fn create_text_node(text: &str) -> Text {
-        document().create_text_node(text)
+        match render_document() {
+            Some(document) => document.create_text_node(text),
+            None => stand_in(),
+        }
     }
 
+    /// Creates an empty comment; without a document, a stand-in (see
+    /// [`render_document`]).
     pub fn create_placeholder() -> Placeholder {
         thread_local! {
-            static COMMENT: LazyCell<Comment> = LazyCell::new(|| {
-                document().create_comment("")
+            static COMMENT: LazyCell<Option<Comment>> = LazyCell::new(|| {
+                render_document().map(|document| document.create_comment(""))
             });
         }
-        COMMENT.with(|n| match n.clone_node() {
-            Ok(comment) => comment.unchecked_into(),
-            Err(err) => {
-                DomError::thrown("Node.cloneNode", &err)
-                    .warn("creating a new comment instead", None);
-                document().create_comment("")
+        COMMENT.with(|comment| {
+            let Some(comment) = LazyCell::force(comment) else {
+                return stand_in();
+            };
+            match comment.clone_node() {
+                Ok(comment) => comment.unchecked_into(),
+                Err(err) => {
+                    DomError::thrown("Node.cloneNode", &err)
+                        .warn("creating a new comment instead", None);
+                    render_document().map_or_else(stand_in, |document| {
+                        document.create_comment("")
+                    })
+                }
             }
         })
     }
@@ -455,25 +525,15 @@ impl Dom {
     /// is a `T`, or else the nearest ancestor of the target that is a `T` (for delegated
     /// listeners, whose current target is the window).
     ///
-    /// ## Panics
-    /// If none of those is a `T`: the signature has no way to say so until the renderer
-    /// returns typed errors (`docs/no-panics.md`, change 3). For a listener that halyard
-    /// attached to an element of type `T`, one of them is that element, unless this is
-    /// called after the event, once the target has been moved out of that element.
-    pub fn event_target<T>(ev: &Event) -> T
+    /// `None` if none of those is a `T`. For a listener that halyard attached to an
+    /// element of type `T`, one of them is that element, unless this is called after the
+    /// event (once the target has been moved out of that element), or for an event that
+    /// was never dispatched (it has no target).
+    pub fn event_target<T>(ev: &Event) -> Option<T>
     where
         T: CastFrom<Element>,
     {
-        Self::find_event_target(ev.unchecked_ref()).expect(
-            "event_target: neither the event's target, its current target, nor \
-             any ancestor of the target has the requested element type",
-        )
-    }
-
-    fn find_event_target<T>(ev: &web_sys::Event) -> Option<T>
-    where
-        T: CastFrom<Element>,
-    {
+        let ev = ev.unchecked_ref::<web_sys::Event>();
         let cast = |target: &JsValue| {
             T::cast_from(target.clone().unchecked_into::<Element>())
         };
@@ -590,23 +650,32 @@ impl Dom {
                 let handler =
                     Box::new(handler) as Box<dyn FnMut(web_sys::Event)>;
                 let handler = Closure::wrap(handler).into_js_value();
-                match window().add_event_listener_with_callback(
-                    &name,
-                    handler.unchecked_ref(),
-                ) {
+                let added = match window() {
+                    Some(window) => window
+                        .add_event_listener_with_callback(
+                            &name,
+                            handler.unchecked_ref(),
+                        )
+                        .map_err(|err| {
+                            DomError::thrown("window.addEventListener", &err)
+                        }),
+                    None => Err(DomError::new(
+                        "window.addEventListener",
+                        "no window (not on a browser's main thread)",
+                    )),
+                };
+                match added {
                     // register that we've created handler
                     Ok(()) => {
                         events.insert(name);
                     }
-                    Err(err) => {
-                        DomError::thrown("window.addEventListener", &err).warn(
-                            &format!(
-                                "delegated `{name}` handlers will not run; \
-                                 adding the next `{name}` handler retries"
-                            ),
-                            None,
-                        )
-                    }
+                    Err(err) => err.warn(
+                        &format!(
+                            "delegated `{name}` handlers will not run; adding \
+                             the next `{name}` handler retries"
+                        ),
+                        None,
+                    ),
                 }
             }
         });
@@ -732,7 +801,9 @@ impl Dom {
             Err(err) => {
                 DomError::thrown("cloning <template> content", &err)
                     .warn("using an empty fragment instead", None);
-                document().create_document_fragment().unchecked_into()
+                render_document().map_or_else(stand_in, |document| {
+                    document.create_document_fragment().unchecked_into()
+                })
             }
         }
     }

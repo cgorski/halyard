@@ -321,7 +321,10 @@ where
     let router_base = router_base.unwrap_or_default();
 
     Box::new(move |ev: MouseEvent| {
-        let origin = window().location().origin()?;
+        let origin = window()
+            .ok_or_else(crate::error::no_window)?
+            .location()
+            .origin()?;
         if ev.default_prevented()
             || ev.button() != 0
             || ev.meta_key()

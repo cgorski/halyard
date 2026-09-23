@@ -68,7 +68,12 @@ impl<E, T> Targeted<E, T> {
     }
 
     /// Returns the event's target, as an HTML element of the correct type.
-    pub fn target(&self) -> T
+    ///
+    /// `None` if neither the target nor the listener's element (nor an ancestor of the
+    /// target) has that type: in the listener, the listener's element always has it; after
+    /// the event, the target may have been moved elsewhere (see
+    /// [`Dom::event_target`](crate::renderer::dom::Dom::event_target)).
+    pub fn target(&self) -> Option<T>
     where
         T: CastFrom<crate::renderer::types::Element>,
 

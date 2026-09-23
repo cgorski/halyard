@@ -53,6 +53,32 @@ pub struct AnyAttributeState {
     keys: Vec<NamedAttributeKey>,
 }
 
+/// An `AnyAttribute` (or its state) keeps its type-erased value next to functions made for
+/// the value's type, both by `into_any_attr`, so the value always has that type. If it had
+/// not, the functions do nothing (logged once) instead of reading it as the wrong type.
+fn type_mismatch(instead: &'static str) {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    report_once(
+        &REPORTED,
+        &ViewError::ErasedTypeMismatch {
+            what: "an AnyAttribute",
+            instead,
+        },
+    );
+}
+
+/// The state of an empty attribute (`()`) on `el`, for an `AnyAttribute` whose value has
+/// another type than its functions (see [`type_mismatch`]): a later update adds the new
+/// attribute.
+fn empty_state(el: crate::renderer::types::Element) -> AnyAttributeState {
+    AnyAttributeState {
+        type_id: TypeId::of::<()>(),
+        state: ErasedLocal::new(()),
+        el,
+        keys: Vec::new(),
+    }
+}
+
 /// Converts an [`Attribute`] into [`AnyAttribute`].
 pub trait IntoAnyAttribute {
     /// Wraps the given attribute.
@@ -69,7 +95,13 @@ where
         fn clone<T: Attribute + Clone + 'static>(
             value: &Erased,
         ) -> AnyAttribute {
-            value.get_ref::<T>().clone().into_any_attr()
+            match value.get_ref::<T>() {
+                Some(value) => value.clone().into_any_attr(),
+                None => {
+                    type_mismatch("its clone is an empty attribute");
+                    ().into_any_attr()
+                }
+            }
         }
 
         #[cfg(feature = "ssr")]
@@ -80,21 +112,37 @@ where
             style: &mut String,
             inner_html: &mut String,
         ) {
-            value
-                .into_inner::<T>()
-                .to_html(buf, class, style, inner_html);
+            match value.into_inner::<T>() {
+                Some(value) => value.to_html(buf, class, style, inner_html),
+                None => type_mismatch("it renders nothing"),
+            }
+        }
+
+        /// The state of the attribute on `el`, made by `add` (build or hydrate).
+        fn state_of<T: Attribute + 'static>(
+            value: Erased,
+            el: crate::renderer::types::Element,
+            add: impl FnOnce(T, &crate::renderer::types::Element) -> T::State,
+        ) -> AnyAttributeState {
+            match value.into_inner::<T>() {
+                Some(value) => AnyAttributeState {
+                    type_id: TypeId::of::<T>(),
+                    keys: value.keys(),
+                    state: ErasedLocal::new(add(value, &el)),
+                    el,
+                },
+                None => {
+                    type_mismatch("it is not added to the element");
+                    empty_state(el)
+                }
+            }
         }
 
         fn build<T: Attribute + 'static>(
             value: Erased,
             el: crate::renderer::types::Element,
         ) -> AnyAttributeState {
-            AnyAttributeState {
-                type_id: TypeId::of::<T>(),
-                keys: value.get_ref::<T>().keys(),
-                state: ErasedLocal::new(value.into_inner::<T>().build(&el)),
-                el,
-            }
+            state_of::<T>(value, el, |value, el| value.build(el))
         }
 
         #[cfg(feature = "hydrate")]
@@ -102,14 +150,7 @@ where
             value: Erased,
             el: crate::renderer::types::Element,
         ) -> AnyAttributeState {
-            AnyAttributeState {
-                type_id: TypeId::of::<T>(),
-                keys: value.get_ref::<T>().keys(),
-                state: ErasedLocal::new(
-                    value.into_inner::<T>().hydrate::<true>(&el),
-                ),
-                el,
-            }
+            state_of::<T>(value, el, |value, el| value.hydrate::<true>(el))
         }
 
         #[cfg(feature = "hydrate")]
@@ -117,28 +158,25 @@ where
             value: Erased,
             el: crate::renderer::types::Element,
         ) -> AnyAttributeState {
-            AnyAttributeState {
-                type_id: TypeId::of::<T>(),
-                keys: value.get_ref::<T>().keys(),
-                state: ErasedLocal::new(
-                    value.into_inner::<T>().hydrate::<false>(&el),
-                ),
-                el,
-            }
+            state_of::<T>(value, el, |value, el| value.hydrate::<false>(el))
         }
 
         fn rebuild<T: Attribute + 'static>(
             value: Erased,
             state: &mut AnyAttributeState,
         ) {
-            let value = value.into_inner::<T>();
-            let state = state.state.get_mut::<T::State>();
-            value.rebuild(state);
+            match (value.into_inner::<T>(), state.state.get_mut::<T::State>()) {
+                (Some(value), Some(state)) => value.rebuild(state),
+                _ => type_mismatch("it is not updated"),
+            }
         }
 
         #[cfg(feature = "ssr")]
         fn dry_resolve<T: Attribute + 'static>(value: &mut Erased) {
-            value.get_mut::<T>().dry_resolve();
+            match value.get_mut::<T>() {
+                Some(value) => value.dry_resolve(),
+                None => type_mismatch("it is not resolved"),
+            }
         }
 
         #[cfg(feature = "ssr")]
@@ -147,13 +185,28 @@ where
         ) -> Pin<Box<dyn Future<Output = AnyAttribute> + Send>> {
             use futures::FutureExt;
 
-            async move {value.into_inner::<T>().resolve().await.into_any_attr()}.boxed()
+            async move {
+                match value.into_inner::<T>() {
+                    Some(value) => value.resolve().await.into_any_attr(),
+                    None => {
+                        type_mismatch("it resolves to an empty attribute");
+                        ().into_any_attr()
+                    }
+                }
+            }
+            .boxed()
         }
 
         fn keys<T: Attribute + 'static>(
             value: &Erased,
         ) -> Vec<NamedAttributeKey> {
-            value.get_ref::<T>().keys()
+            match value.get_ref::<T>() {
+                Some(value) => value.keys(),
+                None => {
+                    type_mismatch("it has no keys");
+                    Vec::new()
+                }
+            }
         }
 
         let value = self.into_cloneable_owned();
@@ -474,5 +527,33 @@ mod tests {
             custom_attribute("data-x", "1").into_any_attr(),
         ];
         assert_eq!(list.html_len(), usize::MAX);
+    }
+
+    /// An `AnyAttribute` whose value has another type than its functions.
+    /// `into_any_attr` makes the two together, so only code in this module can get here.
+    /// Reading the value panicked ("Erased: type mismatch"), and with
+    /// `--cfg erase_components` read a `u8` as the attribute.
+    fn mismatched() -> AnyAttribute {
+        let mut attr = id("main").into_any_attr();
+        attr.value = crate::erased::Erased::new(5u8);
+        attr
+    }
+
+    /// It has no keys, and its clone is an empty attribute (logged once).
+    #[test]
+    fn an_any_attribute_holding_another_type_is_empty() {
+        assert_eq!(id("main").into_any_attr().keys().len(), 1);
+        assert!(mismatched().keys().is_empty());
+        assert!(mismatched().clone().keys().is_empty());
+    }
+
+    /// It renders and resolves to nothing (logged once).
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn an_any_attribute_holding_another_type_renders_nothing() {
+        assert_eq!(render(mismatched()), "");
+        let mut attr = mismatched();
+        attr.dry_resolve();
+        assert_eq!(render(block_on(attr.resolve())), "");
     }
 }

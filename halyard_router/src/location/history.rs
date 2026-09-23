@@ -1,6 +1,6 @@
 use super::{handle_anchor_click, LocationChange, LocationProvider, Url};
 use crate::{
-    error::{js_reason, report, RouterError},
+    error::{js_reason, no_window, report, RouterError},
     hooks::use_navigate,
     params::ParamsMap,
 };
@@ -37,15 +37,21 @@ impl fmt::Debug for BrowserUrl {
 }
 
 impl BrowserUrl {
+    /// Scrolls to the element named by the URL's hash, or else (if `loc_scroll`) to the
+    /// top. Without a window there is nothing to scroll.
     fn scroll_to_el(loc_scroll: bool) {
-        if let Ok(hash) = window().location().hash() {
+        let Some(window) = window() else {
+            return;
+        };
+        if let Ok(hash) = window.location().hash() {
             if !hash.is_empty() {
                 let hash =
                     js_sys::decode_uri(hash.strip_prefix('#').unwrap_or(&hash))
                         .ok()
                         .and_then(|decoded| decoded.as_string())
                         .unwrap_or(hash);
-                let el = document().get_element_by_id(&hash);
+                let el = document()
+                    .and_then(|document| document.get_element_by_id(&hash));
                 if let Some(el) = el {
                     el.scroll_into_view();
                     return;
@@ -55,7 +61,7 @@ impl BrowserUrl {
 
         // scroll to top
         if loc_scroll {
-            window().scroll_to_with_x_and_y(0.0, 0.0);
+            window.scroll_to_with_x_and_y(0.0, 0.0);
         }
     }
 }
@@ -81,7 +87,7 @@ impl LocationProvider for BrowserUrl {
     }
 
     fn current() -> Result<Url, Self::Error> {
-        let location = window().location();
+        let location = window().ok_or_else(no_window)?.location();
         Ok(Url {
             origin: location.origin()?,
             path: location.pathname()?,
@@ -98,7 +104,7 @@ impl LocationProvider for BrowserUrl {
     }
 
     fn parse(url: &str) -> Result<Url, Self::Error> {
-        let base = window().location().origin()?;
+        let base = window().ok_or_else(no_window)?.location().origin()?;
         Self::parse_with_base(url, &base)
     }
 
@@ -221,7 +227,15 @@ impl LocationProvider for BrowserUrl {
     }
 
     fn complete_navigation(&self, loc: &LocationChange) {
-        let window = window();
+        let Some(window) = window() else {
+            // `BrowserUrl::new` needs a window, so this is not reached without one
+            report(&RouterError::Browser {
+                action: "updating the browser history",
+                reason: "there is no window".to_string(),
+                instead: "the address bar keeps the previous URL",
+            });
+            return;
+        };
 
         let current_path = self
             .path_stack
@@ -335,7 +349,15 @@ fn search_params_from_web_url(
 
 /// Resolves a redirect location to an (absolute) URL.
 pub(crate) fn resolve_redirect_url(loc: &str) -> Option<web_sys::Url> {
-    let origin = match window().location().origin() {
+    let Some(window) = window() else {
+        report(&RouterError::Browser {
+            action: "resolving a redirect",
+            reason: "there is no window".to_string(),
+            instead: "not redirecting",
+        });
+        return None;
+    };
+    let origin = match window.location().origin() {
         Ok(origin) => origin,
         Err(e) => {
             halyard::logging::error!("Failed to get origin: {:#?}", e);

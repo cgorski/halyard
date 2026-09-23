@@ -159,6 +159,27 @@ where
     }
 }
 
+/// An `AnyView` (or its state) keeps its type-erased value next to functions made for the
+/// value's type, both by `into_any`, so the value always has that type. If it had not, the
+/// functions do nothing (logged once) instead of reading it as the wrong type.
+fn type_mismatch(instead: &'static str) {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    report_once(
+        &REPORTED,
+        &ViewError::ErasedTypeMismatch {
+            what: "an AnyView",
+            instead,
+        },
+    );
+}
+
+/// The state of an empty view, for an `AnyView` whose value has another type than its
+/// functions (see [`type_mismatch`]): it shows nothing, and a later update replaces it.
+fn mismatched_state() -> AnyViewState {
+    type_mismatch("it renders nothing");
+    ().into_any().build()
+}
+
 fn mount_any<T>(
     state: &mut ErasedLocal,
     parent: &crate::renderer::types::Element,
@@ -167,7 +188,10 @@ fn mount_any<T>(
     T: Render,
     T::State: 'static,
 {
-    state.get_mut::<T::State>().mount(parent, marker)
+    match state.get_mut::<T::State>() {
+        Some(state) => state.mount(parent, marker),
+        None => type_mismatch("it is not mounted"),
+    }
 }
 
 fn unmount_any<T>(state: &mut ErasedLocal)
@@ -175,7 +199,10 @@ where
     T: Render,
     T::State: 'static,
 {
-    state.get_mut::<T::State>().unmount();
+    match state.get_mut::<T::State>() {
+        Some(state) => state.unmount(),
+        None => type_mismatch("it is not unmounted"),
+    }
 }
 
 fn insert_before_this<T>(state: &ErasedLocal, child: &mut dyn Mountable) -> bool
@@ -183,7 +210,13 @@ where
     T: Render,
     T::State: 'static,
 {
-    state.get_ref::<T::State>().insert_before_this(child)
+    match state.get_ref::<T::State>() {
+        Some(state) => state.insert_before_this(child),
+        None => {
+            type_mismatch("nothing is inserted before it");
+            false
+        }
+    }
 }
 
 fn elements<T>(state: &ErasedLocal) -> Vec<crate::renderer::types::Element>
@@ -191,7 +224,13 @@ where
     T: Render,
     T::State: 'static,
 {
-    state.get_ref::<T::State>().elements()
+    match state.get_ref::<T::State>() {
+        Some(state) => state.elements(),
+        None => {
+            type_mismatch("it has no elements");
+            Vec::new()
+        }
+    }
 }
 
 impl<T> IntoAny for T
@@ -202,7 +241,10 @@ where
     fn into_any(self) -> AnyView {
         #[cfg(feature = "ssr")]
         fn dry_resolve<T: RenderHtml + 'static>(value: &mut Erased) {
-            value.get_mut::<T>().dry_resolve();
+            match value.get_mut::<T>() {
+                Some(value) => value.dry_resolve(),
+                None => type_mismatch("it is not resolved"),
+            }
         }
 
         #[cfg(feature = "ssr")]
@@ -211,8 +253,16 @@ where
         ) -> Pin<Box<dyn Future<Output = AnyView> + Send>> {
             use futures::FutureExt;
 
-            async move { value.into_inner::<T>().resolve().await.into_any() }
-                .boxed()
+            async move {
+                match value.into_inner::<T>() {
+                    Some(value) => value.resolve().await.into_any(),
+                    None => {
+                        type_mismatch("it resolves to an empty view");
+                        ().into_any()
+                    }
+                }
+            }
+            .boxed()
         }
 
         #[cfg(feature = "ssr")]
@@ -224,7 +274,10 @@ where
             mark_branches: bool,
             extra_attrs: Vec<AnyAttribute>,
         ) {
-            value.into_inner::<T>().to_html_with_buf(
+            let Some(value) = value.into_inner::<T>() else {
+                return type_mismatch("it renders nothing");
+            };
+            value.to_html_with_buf(
                 buf,
                 position,
                 escape,
@@ -245,7 +298,10 @@ where
             mark_branches: bool,
             extra_attrs: Vec<AnyAttribute>,
         ) {
-            value.into_inner::<T>().to_html_async_with_buf::<false>(
+            let Some(value) = value.into_inner::<T>() else {
+                return type_mismatch("it renders nothing");
+            };
+            value.to_html_async_with_buf::<false>(
                 buf,
                 position,
                 escape,
@@ -266,7 +322,10 @@ where
             mark_branches: bool,
             extra_attrs: Vec<AnyAttribute>,
         ) {
-            value.into_inner::<T>().to_html_async_with_buf::<true>(
+            let Some(value) = value.into_inner::<T>() else {
+                return type_mismatch("it renders nothing");
+            };
+            value.to_html_async_with_buf::<true>(
                 buf,
                 position,
                 escape,
@@ -279,7 +338,10 @@ where
         }
 
         fn build<T: RenderHtml + 'static>(value: Erased) -> AnyViewState {
-            let state = ErasedLocal::new(value.into_inner::<T>().build());
+            let Some(value) = value.into_inner::<T>() else {
+                return mismatched_state();
+            };
+            let state = ErasedLocal::new(value.build());
             let placeholder = (!T::EXISTS).then(Rndr::create_placeholder);
             AnyViewState {
                 type_id: TypeId::of::<T>(),
@@ -298,9 +360,11 @@ where
             cursor: &Cursor,
             position: &PositionState,
         ) -> AnyViewState {
-            let state = ErasedLocal::new(
-                value.into_inner::<T>().hydrate::<true>(cursor, position),
-            );
+            let Some(value) = value.into_inner::<T>() else {
+                return mismatched_state();
+            };
+            let state =
+                ErasedLocal::new(value.hydrate::<true>(cursor, position));
             let placeholder =
                 (!T::EXISTS).then(|| cursor.next_placeholder(position));
             AnyViewState {
@@ -323,11 +387,11 @@ where
             let cursor = cursor.clone();
             let position = position.clone();
             Box::pin(async move {
+                let Some(value) = value.into_inner::<T>() else {
+                    return mismatched_state();
+                };
                 let state = ErasedLocal::new(
-                    value
-                        .into_inner::<T>()
-                        .hydrate_async(&cursor, &position)
-                        .await,
+                    value.hydrate_async(&cursor, &position).await,
                 );
                 let placeholder =
                     (!T::EXISTS).then(|| cursor.next_placeholder(&position));
@@ -347,8 +411,13 @@ where
             value: Erased,
             state: &mut AnyViewState,
         ) {
-            let state = state.state.get_mut::<<T as Render>::State>();
-            value.into_inner::<T>().rebuild(state);
+            match (
+                value.into_inner::<T>(),
+                state.state.get_mut::<<T as Render>::State>(),
+            ) {
+                (Some(value), Some(state)) => value.rebuild(state),
+                _ => type_mismatch("it is not updated"),
+            }
         }
 
         let value = self.into_owned();
@@ -941,6 +1010,39 @@ mod tests {
             .add_any_attr(custom_attribute("data-x", "1"));
         assert_eq!(view.html_len(), usize::MAX);
         assert_eq!(view.to_html(), "huge");
+    }
+
+    /// An `AnyView` whose value has another type than its functions. `into_any` makes the
+    /// two together, so only code in this module can get here. Reading the value panicked
+    /// ("Erased: type mismatch"), and with `--cfg erase_components` read a `u8` as a
+    /// `String`.
+    fn mismatched() -> super::AnyView {
+        let mut view = "hello".into_any();
+        view.value = super::Erased::new(5u8);
+        view
+    }
+
+    /// It builds an empty view instead (logged once).
+    #[test]
+    fn an_any_view_holding_another_type_builds_an_empty_view() {
+        use crate::view::{Mountable, Render};
+
+        // natively there is no document: the empty view's placeholder is a stand-in
+        let state = mismatched().build();
+        assert!(state.elements().is_empty());
+    }
+
+    /// It renders and resolves to nothing instead (logged once).
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn an_any_view_holding_another_type_renders_nothing() {
+        assert_eq!(mismatched().to_html(), "");
+        let stream = mismatched().to_html_stream_in_order();
+        assert_eq!(block_on(stream.collect::<Vec<_>>()).concat(), "");
+
+        let mut view = mismatched();
+        view.dry_resolve();
+        assert_eq!(block_on(view.resolve()).to_html(), ().into_any().to_html());
     }
 }
 

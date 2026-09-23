@@ -51,6 +51,20 @@ where
     }
 }
 
+/// A property's value is not created when `ssr` is active (see
+/// [`FEATURE_CONFLICT_DIAGNOSTIC`](super::FEATURE_CONFLICT_DIAGNOSTIC)). Without one, the
+/// property is not set or updated (logged once), and its state is `None`.
+fn value_missing(instead: &'static str) {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    report_once(
+        &REPORTED,
+        &ViewError::ClientValueMissing {
+            what: "a property's value",
+            instead,
+        },
+    );
+}
+
 impl<K, P> Attribute for Property<K, P>
 where
     K: AsRef<str> + Send,
@@ -59,7 +73,9 @@ where
     const MIN_LENGTH: usize = 0;
 
     type AsyncOutput = Self;
-    type State = P::State;
+    /// `None` if the property had no value to set (it is not created with `ssr`, see
+    /// [`prop`]).
+    type State = Option<P::State>;
     type Cloneable = Property<Arc<str>, P::Cloneable>;
     type CloneableOwned = Property<Arc<str>, P::CloneableOwned>;
 
@@ -81,31 +97,29 @@ where
         self,
         el: &crate::renderer::types::Element,
     ) -> Self::State {
-        self.value
-            .expect(super::FEATURE_CONFLICT_DIAGNOSTIC)
-            .take()
-            .hydrate::<FROM_SERVER>(el, self.key.as_ref())
+        let Some(value) = self.value else {
+            value_missing("is not set");
+            return None;
+        };
+        Some(value.take().hydrate::<FROM_SERVER>(el, self.key.as_ref()))
     }
 
     fn build(self, el: &crate::renderer::types::Element) -> Self::State {
-        self.value
-            .expect(super::FEATURE_CONFLICT_DIAGNOSTIC)
-            .take()
-            .build(el, self.key.as_ref())
+        let Some(value) = self.value else {
+            value_missing("is not set");
+            return None;
+        };
+        Some(value.take().build(el, self.key.as_ref()))
     }
 
     fn rebuild(self, state: &mut Self::State) {
-        // the value is not created when `ssr` is active; the property keeps its value
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        match self.value {
-            Some(value) => value.take().rebuild(state, self.key.as_ref()),
-            None => report_once(
-                &REPORTED,
-                &ViewError::ClientValueMissing {
-                    what: "a property's value",
-                    instead: "is not updated",
-                },
-            ),
+        match (self.value, state) {
+            (Some(value), Some(state)) => {
+                value.take().rebuild(state, self.key.as_ref())
+            }
+            // without a value now, or when the element was built (then there is no
+            // state to update), the property keeps what it has
+            _ => value_missing("is not updated"),
         }
     }
 
@@ -504,3 +518,36 @@ prop_type_str!(String);
 prop_type_str!(&String);
 prop_type_str!(&str);
 prop_type_str!(Cow<'_, str>);
+
+#[cfg(test)]
+mod tests {
+    use super::Property;
+    use crate::{html::attribute::Attribute, renderer::types::Element};
+    use wasm_bindgen::{JsCast, JsValue};
+
+    /// A property whose value was not created (the `ssr` feature switched on in a browser
+    /// build by feature unification).
+    fn without_value() -> Property<&'static str, i32> {
+        Property {
+            key: "value",
+            value: None,
+        }
+    }
+
+    /// Building or hydrating an element with such a property panicked
+    /// (`FEATURE_CONFLICT_DIAGNOSTIC`). The property is not set (logged once), and
+    /// updating it later does nothing.
+    #[test]
+    fn a_property_without_its_value_is_not_set_or_updated() {
+        // never touched: a native test cannot call into JavaScript
+        let el: Element = JsValue::UNDEFINED.unchecked_into();
+
+        let mut built = without_value().build(&el);
+        assert!(built.is_none());
+        assert!(without_value().hydrate::<true>(&el).is_none());
+        assert!(without_value().hydrate::<false>(&el).is_none());
+
+        without_value().rebuild(&mut built);
+        assert!(built.is_none());
+    }
+}
