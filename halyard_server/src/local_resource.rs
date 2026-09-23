@@ -1,3 +1,7 @@
+use crate::{
+    error::{warn, warn_disposed, DisposedUse, ResourceError},
+    resource::never_loads,
+};
 use halyard_reactive_graph::{
     computed::{
         suspense::LocalResourceNotifier, ArcAsyncDerived, AsyncDerived,
@@ -101,7 +105,8 @@ impl<T> ArcLocalResource<T> {
 
     /// Re-runs the async function.
     pub fn refetch(&self) {
-        *self.refetch.write() += 1;
+        // wrapping, not saturating: every refetch must change the value it tracks
+        self.refetch.try_update(|n| *n = n.wrapping_add(1));
     }
 
     /// Synchronously, reactively reads the current value of the resource and applies the function
@@ -133,6 +138,28 @@ where
     }
 }
 
+/// Tells the enclosing `<Suspense/>` or `<Transition/>` that a local resource is being read,
+/// so that on the server it renders its fallback and leaves the rest to the browser. On the
+/// server, outside such a boundary, nothing can render in its place: that is logged, and
+/// the await stays pending, as a local resource always is on the server.
+///
+/// This used to panic, but the panic did not save the response: it ended the task that was
+/// awaiting (a resource's loader, a streamed `Suspend`), and the response waited for it all
+/// the same. Awaiting `T` cannot answer with an error, so the log is the report.
+fn notify_local_read(
+    awaited_at: &'static Location<'static>,
+    created_at: Option<&'static Location<'static>>,
+) {
+    if let Some(mut notifier) = use_context::<LocalResourceNotifier>() {
+        notifier.notify();
+    } else if cfg!(feature = "ssr") {
+        warn(&ResourceError::LocalResourceAwaitedOnServer {
+            awaited_at,
+            created_at,
+        });
+    }
+}
+
 impl<T> IntoFuture for ArcLocalResource<T>
 where
     T: Clone + 'static,
@@ -140,16 +167,10 @@ where
     type Output = T;
     type IntoFuture = AsyncDerivedFuture<T>;
 
+    /// On the server, this never finishes: local resources load only in the browser.
+    #[track_caller]
     fn into_future(self) -> Self::IntoFuture {
-        if let Some(mut notifier) = use_context::<LocalResourceNotifier>() {
-            notifier.notify();
-        } else if cfg!(feature = "ssr") {
-            panic!(
-                "Reading from a LocalResource outside Suspense in `ssr` mode \
-                 will cause the response to hang, because LocalResources are \
-                 always pending on the server."
-            );
-        }
+        notify_local_read(Location::caller(), self.defined_at());
         self.data.into_future()
     }
 }
@@ -342,7 +363,8 @@ impl<T> LocalResource<T> {
 
     /// Re-runs the async function.
     pub fn refetch(&self) {
-        self.refetch.try_update(|n| *n += 1);
+        // wrapping, not saturating: every refetch must change the value it tracks
+        self.refetch.try_update(|n| *n = n.wrapping_add(1));
     }
 
     /// Synchronously, reactively reads the current value of the resource and applies the function
@@ -381,15 +403,15 @@ where
     type Output = T;
     type IntoFuture = AsyncDerivedFuture<T>;
 
+    /// On the server, this never finishes: local resources load only in the browser. If the
+    /// resource's owner is gone, so is its value, and it never finishes either.
+    #[track_caller]
     fn into_future(self) -> Self::IntoFuture {
-        if let Some(mut notifier) = use_context::<LocalResourceNotifier>() {
-            notifier.notify();
-        } else if cfg!(feature = "ssr") {
-            panic!(
-                "Reading from a LocalResource outside Suspense in `ssr` mode \
-                 will cause the response to hang, because LocalResources are \
-                 always pending on the server."
-            );
+        let awaited_at = Location::caller();
+        notify_local_read(awaited_at, self.defined_at());
+        if self.data.is_disposed() {
+            warn_disposed(DisposedUse::Await, awaited_at, self.defined_at());
+            return never_loads().into_future();
         }
         self.data.into_future()
     }
@@ -536,12 +558,125 @@ impl<T: 'static> From<ArcLocalResource<T>> for LocalResource<T> {
 }
 
 impl<T: 'static> From<LocalResource<T>> for ArcLocalResource<T> {
+    #[track_caller]
     fn from(local: LocalResource<T>) -> Self {
+        if local.data.is_disposed() || local.refetch.is_disposed() {
+            warn_disposed(
+                DisposedUse::IntoArc,
+                Location::caller(),
+                local.defined_at(),
+            );
+            return Self {
+                data: never_loads(),
+                refetch: ArcRwSignal::new(0),
+                #[cfg(any(debug_assertions, halyard_debuginfo))]
+                defined_at: local.defined_at,
+            };
+        }
         Self {
             data: local.data.into(),
             refetch: local.refetch.into(),
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: local.defined_at,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::init_executor;
+    use futures::FutureExt;
+    use halyard_reactive_graph::{owner::Owner, traits::GetUntracked};
+
+    /// `refetch` counts up: at `usize::MAX` it used to overflow, a panic in debug builds.
+    #[test]
+    fn arc_local_resource_refetch_wraps_instead_of_overflowing() {
+        init_executor();
+        let resource = ArcLocalResource::new(|| async { 1_u32 });
+        resource.refetch.try_update(|n| *n = usize::MAX);
+
+        resource.refetch();
+
+        assert_eq!(resource.refetch.get_untracked(), 0);
+    }
+
+    #[test]
+    fn local_resource_refetch_wraps_instead_of_overflowing() {
+        init_executor();
+        let owner = Owner::new();
+        let resource = owner.with(|| LocalResource::new(|| async { 1_u32 }));
+        resource.refetch.try_update(|n| *n = usize::MAX);
+
+        resource.refetch();
+
+        assert_eq!(resource.refetch.get_untracked(), 0);
+    }
+
+    /// Awaiting a local resource whose owner is gone used to panic ("Tried to access a
+    /// reactive value that has already been disposed"). The await never finishes.
+    #[test]
+    fn awaiting_a_disposed_local_resource_stays_pending() {
+        init_executor();
+        let owner = Owner::new();
+        let resource = owner.with(|| LocalResource::new(|| async { 1_u32 }));
+        owner.cleanup();
+
+        assert!(resource.into_future().now_or_never().is_none());
+    }
+
+    #[test]
+    fn a_disposed_local_resource_converts_to_one_that_never_loads() {
+        init_executor();
+        let owner = Owner::new();
+        let resource = owner.with(|| LocalResource::new(|| async { 1_u32 }));
+        owner.cleanup();
+
+        let arc = ArcLocalResource::from(resource);
+
+        assert!(arc.into_future().now_or_never().is_none());
+    }
+
+    /// On the server, local resources never load.
+    #[cfg(feature = "ssr")]
+    mod server {
+        use super::*;
+        use futures::channel::oneshot;
+        use halyard_reactive_graph::owner::provide_context;
+
+        /// Under `<Suspense/>` or `<Transition/>`, which provide the notifier, awaiting a
+        /// local resource tells the boundary, which renders its fallback on the server
+        /// and leaves the rest to the browser. (Unchanged.)
+        #[test]
+        fn awaiting_a_local_resource_under_suspense_notifies_it() {
+            let (notifier, mut notified) = oneshot::channel();
+            let owner = Owner::new();
+            owner.with(|| {
+                provide_context(LocalResourceNotifier::from(notifier));
+                let resource = LocalResource::new(|| async { 1_u32 });
+                assert!(resource.into_future().now_or_never().is_none());
+            });
+
+            assert_eq!(notified.try_recv(), Ok(Some(())));
+        }
+
+        /// Outside a boundary there is nobody to tell, and this used to panic, failing the
+        /// request. A local resource never resolves on the server, so the await stays
+        /// pending (and says why in the log).
+        #[test]
+        fn awaiting_a_local_resource_outside_suspense_stays_pending() {
+            let owner = Owner::new();
+            let resource =
+                owner.with(|| LocalResource::new(|| async { 1_u32 }));
+
+            assert!(resource.into_future().now_or_never().is_none());
+        }
+
+        #[test]
+        fn awaiting_an_arc_local_resource_outside_suspense_stays_pending() {
+            let resource = ArcLocalResource::new(|| async { 1_u32 });
+
+            assert!(resource.into_future().now_or_never().is_none());
         }
     }
 }

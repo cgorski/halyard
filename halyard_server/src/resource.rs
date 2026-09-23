@@ -1,4 +1,7 @@
-use crate::{FromEncodedStr, IntoEncodedString};
+use crate::{
+    error::{warn_disposed, DisposedUse},
+    FromEncodedStr, IntoEncodedString,
+};
 #[cfg(feature = "rkyv")]
 use codee::binary::RkyvCodec;
 #[cfg(feature = "serde-wasm-bindgen")]
@@ -110,6 +113,20 @@ where
 {
     #[track_caller]
     fn from(resource: Resource<T, Ser>) -> Self {
+        if resource.data.is_disposed() || resource.refetch.is_disposed() {
+            warn_disposed(
+                DisposedUse::IntoArc,
+                Location::caller(),
+                resource.defined_at(),
+            );
+            return ArcResource {
+                ser: PhantomData,
+                data: never_loads(),
+                refetch: ArcRwSignal::new(0),
+                #[cfg(any(debug_assertions, halyard_debuginfo))]
+                defined_at: Location::caller(),
+            };
+        }
         ArcResource {
             ser: PhantomData,
             data: resource.data.into(),
@@ -294,13 +311,15 @@ where
         T: Send + Sync + 'static,
         Fut: Future<Output = T> + Send + 'static,
     {
+        let created_at = Location::caller();
         let shared_context = Owner::current_shared_context();
         let id = shared_context
             .as_ref()
             .map(|sc| sc.next_id())
             .unwrap_or_default();
 
-        let initial = initial_value::<T, Ser>(&id, shared_context.as_ref());
+        let initial =
+            initial_value::<T, Ser>(&id, shared_context.as_ref(), created_at);
         let is_ready = initial.is_some();
 
         let refetch = ArcRwSignal::new(0);
@@ -341,17 +360,27 @@ where
             }
 
             if shared_context.get_is_hydrating() {
+                use crate::hydration_data::{encode, for_the_page};
+
+                let for_id = id.clone();
                 shared_context.write_async(
                     id,
                     Box::pin(async move {
                         ready_fut.await;
-                        value.with_untracked(|data| match &data {
-                            // TODO handle serialization errors
-                            Some(val) => {
-                                Ser::encode(val).unwrap().into_encoded_string()
-                            }
-                            _ => unreachable!(),
-                        })
+                        // a value that cannot be sent (unserializable, or cleared after it
+                        // loaded) is left out and logged: the browser loads it itself
+                        let encoded = value
+                            .try_with_untracked(|value| {
+                                encode::<T, Ser>(
+                                    value.as_ref(),
+                                    &for_id,
+                                    created_at,
+                                )
+                            })
+                            .unwrap_or_else(|| {
+                                encode::<T, Ser>(None, &for_id, created_at)
+                            });
+                        for_the_page(encoded)
                     }),
                 );
             }
@@ -362,7 +391,7 @@ where
             data,
             refetch,
             #[cfg(any(debug_assertions, halyard_debuginfo))]
-            defined_at: Location::caller(),
+            defined_at: created_at,
         }
     }
 
@@ -378,15 +407,20 @@ where
 
     /// Re-runs the async function with the current source data.
     pub fn refetch(&self) {
-        *self.refetch.write() += 1;
+        // wrapping, not saturating: every refetch must change the value the source compares
+        self.refetch.try_update(|n| *n = n.wrapping_add(1));
     }
 }
 
+/// A resource's value from the server, read from the page while hydrating: `None` if the
+/// page has none that can be used for it (the reason is logged), and the resource then
+/// loads in the browser.
 #[inline(always)]
 #[allow(unused)]
 pub(crate) fn initial_value<T, Ser>(
     id: &SerializedDataId,
     shared_context: Option<&Arc<dyn SharedContext + Send + Sync>>,
+    created_at: &'static Location<'static>,
 ) -> Option<T>
 where
     Ser: Encoder<T> + Decoder<T>,
@@ -398,35 +432,20 @@ where
 {
     #[cfg(feature = "hydration")]
     {
-        use std::borrow::Borrow;
-
-        let shared_context = Owner::current_shared_context();
-        if let Some(shared_context) = shared_context {
-            let value = shared_context.read_data(id);
-            if let Some(value) = value {
-                let encoded =
-                    match <Ser as Decoder<T>>::Encoded::from_encoded_str(&value)
-                    {
-                        Ok(value) => value,
-                        Err(e) => {
-                            #[cfg(feature = "tracing")]
-                            tracing::error!("couldn't deserialize: {e:?}");
-                            return None;
-                        }
-                    };
-                let encoded = encoded.borrow();
-                match Ser::decode(encoded) {
-                    Ok(value) => return Some(value),
-                    #[allow(unused)]
-                    Err(e) => {
-                        #[cfg(feature = "tracing")]
-                        tracing::error!("couldn't deserialize: {e:?}");
-                    }
-                }
-            }
+        // no data at all is not an error: e.g. a resource created after hydration
+        let data = shared_context?.read_data(id)?;
+        match crate::hydration_data::decode::<T, Ser>(&data, id, created_at) {
+            Ok(value) => return Some(value),
+            Err(error) => crate::error::warn(&error),
         }
     }
     None
+}
+
+/// A resource that never loads: what awaiting or converting a resource whose reactive owner
+/// is gone gives (docs/no-panics.md: a value that is gone is "do nothing", not a panic).
+pub(crate) fn never_loads<T: 'static>() -> ArcAsyncDerived<T> {
+    ArcAsyncDerived::new_mock(pending::<T>)
 }
 
 impl<T, E, Ser> ArcResource<Result<T, E>, Ser>
@@ -1379,7 +1398,8 @@ where
 
     /// Re-runs the async function with the current source data.
     pub fn refetch(&self) {
-        self.refetch.try_update(|n| *n += 1);
+        // wrapping, not saturating: every refetch must change the value the source compares
+        self.refetch.try_update(|n| *n = n.wrapping_add(1));
     }
 }
 
@@ -1415,8 +1435,18 @@ where
     type Output = T;
     type IntoFuture = AsyncDerivedFuture<T>;
 
+    /// If the resource's owner is gone, so is its value: the future never finishes (and
+    /// whatever awaits it is dropped with its own owner).
     #[track_caller]
     fn into_future(self) -> Self::IntoFuture {
+        if self.data.is_disposed() {
+            warn_disposed(
+                DisposedUse::Await,
+                Location::caller(),
+                self.defined_at(),
+            );
+            return never_loads().into_future();
+        }
         self.data.into_future()
     }
 }
@@ -1427,7 +1457,155 @@ where
 {
     /// Returns a new [`Future`] that is ready when the resource has loaded, and accesses its inner
     /// value by reference.
+    ///
+    /// If the resource's owner is gone, so is its value, and the future never finishes.
+    #[track_caller]
     pub fn by_ref(&self) -> AsyncDerivedRefFuture<T> {
+        if self.data.is_disposed() {
+            warn_disposed(
+                DisposedUse::Await,
+                Location::caller(),
+                self.defined_at(),
+            );
+            return never_loads().by_ref();
+        }
         self.data.by_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::init_executor;
+    use futures::FutureExt;
+
+    /// `refetch` counts up: at `usize::MAX` it used to overflow, a panic in debug builds.
+    /// It wraps, which still changes the value the source compares, so it still refetches.
+    #[test]
+    fn arc_resource_refetch_wraps_instead_of_overflowing() {
+        init_executor();
+        let resource = ArcResource::new(|| (), |()| async { 1_u32 });
+        resource.refetch.set(usize::MAX);
+
+        resource.refetch();
+
+        assert_eq!(resource.refetch.get_untracked(), 0);
+    }
+
+    #[test]
+    fn resource_refetch_wraps_instead_of_overflowing() {
+        init_executor();
+        let owner = Owner::new();
+        let resource =
+            owner.with(|| Resource::new(|| (), |()| async { 1_u32 }));
+        resource.refetch.set(usize::MAX);
+
+        resource.refetch();
+
+        assert_eq!(resource.refetch.get_untracked(), 0);
+    }
+
+    /// A `Suspend` (or a task) can outlive the owner of the resource it awaits, e.g. on a
+    /// page being left. Awaiting the resource then used to panic ("Tried to access a
+    /// reactive value that has already been disposed"). Its value is gone, so the await
+    /// never finishes, and whatever was waiting is dropped with its own owner.
+    #[test]
+    fn awaiting_a_disposed_resource_stays_pending() {
+        init_executor();
+        let owner = Owner::new();
+        let resource =
+            owner.with(|| Resource::new(|| (), |()| async { 1_u32 }));
+        owner.cleanup();
+
+        assert!(resource.into_future().now_or_never().is_none());
+    }
+
+    #[test]
+    fn awaiting_a_disposed_resource_by_reference_stays_pending() {
+        init_executor();
+        let owner = Owner::new();
+        let resource =
+            owner.with(|| Resource::new(|| (), |()| async { 1_u32 }));
+        owner.cleanup();
+
+        assert!(resource.by_ref().now_or_never().is_none());
+    }
+
+    /// Converting a disposed resource into an `ArcResource` used to panic too. It becomes
+    /// a resource that never loads.
+    #[test]
+    fn a_disposed_resource_converts_to_an_arc_resource_that_never_loads() {
+        init_executor();
+        let owner = Owner::new();
+        let resource =
+            owner.with(|| Resource::new(|| (), |()| async { 1_u32 }));
+        owner.cleanup();
+
+        let arc = ArcResource::from(resource);
+
+        assert_eq!(arc.get_untracked(), None);
+        assert!(arc.into_future().now_or_never().is_none());
+    }
+
+    /// On the server, each resource's value is sent to the browser in the page.
+    #[cfg(feature = "ssr")]
+    mod server {
+        use super::*;
+        use crate::{
+            hydration_data::NOT_SENT,
+            test_support::{page_data, server_request},
+        };
+        use std::collections::HashMap;
+
+        /// What the page carries for resource 0.
+        fn sent_for_resource_0(value: &str) -> String {
+            format!("__RESOLVED_RESOURCES[0] = {value:?};")
+        }
+
+        #[test]
+        fn a_value_is_sent_in_the_page() {
+            init_executor();
+            let (owner, context) = server_request();
+            let _resource =
+                owner.with(|| ArcResource::new(|| (), |()| async { 1_u32 }));
+
+            let data = page_data(&context);
+
+            assert!(data.contains(&sent_for_resource_0("1")), "{data}");
+        }
+
+        /// JSON object keys must be strings, so this map cannot be serialized. That used
+        /// to panic while the page's data was streamed, failing the response. The page
+        /// says that no value was sent, and the browser loads the resource itself.
+        #[test]
+        fn a_value_that_cannot_be_serialized_is_left_out_of_the_page() {
+            init_executor();
+            let (owner, context) = server_request();
+            let _resource = owner.with(|| {
+                ArcResource::new(
+                    || (),
+                    |()| async { HashMap::from([((1_u8, 2_u8), 3_u8)]) },
+                )
+            });
+
+            let data = page_data(&context);
+
+            assert!(data.contains(&sent_for_resource_0(NOT_SENT)), "{data}");
+        }
+
+        /// A resource cleared after it loaded (`set(None)`) has no value to send: that
+        /// was an `unreachable!()`. It is left out of the page in the same way.
+        #[test]
+        fn a_resource_without_a_value_is_left_out_of_the_page() {
+            init_executor();
+            let (owner, context) = server_request();
+            let resource =
+                owner.with(|| ArcResource::new(|| (), |()| async { 1_u32 }));
+            resource.try_update(|value| *value = None);
+
+            let data = page_data(&context);
+
+            assert!(data.contains(&sent_for_resource_0(NOT_SENT)), "{data}");
+        }
     }
 }

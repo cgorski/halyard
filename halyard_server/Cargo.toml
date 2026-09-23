@@ -23,6 +23,7 @@ halyard_any_spawner = { workspace = true }
 halyard_or_poisoned = { workspace = true }
 halyard_tachys = { workspace = true, optional = true, features = ["reactive_graph"] }
 send_wrapper = { workspace = true, default-features = true }
+thiserror = { workspace = true }
 
 # serialization formats
 serde = { workspace = true, default-features = true }

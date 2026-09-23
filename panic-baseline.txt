@@ -19,7 +19,7 @@ halyard_reactive_stores_macro 3
 halyard_router 0
 halyard_router_macro 3
 halyard_rstml 17
-halyard_server 11
+halyard_server 0
 halyard_server_fn 0
 halyard_server_fn_macro 15
 halyard_tachys 130

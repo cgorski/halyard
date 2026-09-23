@@ -1,4 +1,5 @@
 use crate::{
+    error::{warn_disposed, DisposedUse},
     initial_value, FromEncodedStr, IntoEncodedString,
     IS_SUPPRESSING_RESOURCE_LOAD,
 };
@@ -29,7 +30,6 @@ use halyard_reactive_graph::{
         guards::{Plain, ReadGuard},
         ArcTrigger,
     },
-    unwrap_signal,
 };
 use std::{
     future::IntoFuture,
@@ -101,13 +101,15 @@ where
         #[allow(unused)] // this is used with `feature = "ssr"`
         blocking: bool,
     ) -> Self {
+        let created_at = Location::caller();
         let shared_context = Owner::current_shared_context();
         let id = shared_context
             .as_ref()
             .map(|sc| sc.next_id())
             .unwrap_or_default();
 
-        let initial = initial_value::<T, Ser>(&id, shared_context.as_ref());
+        let initial =
+            initial_value::<T, Ser>(&id, shared_context.as_ref(), created_at);
         let is_ready = initial.is_some();
         let value = Arc::new(RwLock::new(initial));
         let wakers = Arc::new(RwLock::new(Vec::<Waker>::new()));
@@ -141,7 +143,7 @@ where
             suspenses,
             ser: PhantomData,
             #[cfg(any(debug_assertions, halyard_debuginfo))]
-            defined_at: Location::caller(),
+            defined_at: created_at,
         };
 
         #[cfg(feature = "ssr")]
@@ -154,13 +156,21 @@ where
             }
 
             if shared_context.get_is_hydrating() {
+                use crate::hydration_data::{encode, for_the_page};
+
+                let for_id = id.clone();
                 shared_context.write_async(
                     id,
                     Box::pin(async move {
                         ready_fut.await;
+                        // a value that cannot be serialized is left out and logged: the
+                        // browser loads it itself
                         let value = value.read().or_poisoned();
-                        let value = value.as_ref().unwrap();
-                        Ser::encode(value).unwrap().into_encoded_string()
+                        for_the_page(encode::<T, Ser>(
+                            value.as_ref(),
+                            &for_id,
+                            created_at,
+                        ))
                     }),
                 );
             }
@@ -287,11 +297,15 @@ where
         OnceResourceFuture {
             source: self.to_any_source(),
             value: Arc::clone(&self.value),
-            loading: Arc::clone(&self.loading),
             wakers: Arc::clone(&self.wakers),
             suspenses: Arc::clone(&self.suspenses),
         }
     }
+}
+
+/// A reactive source that never changes: what a resource whose owner is gone subscribes to.
+fn never_changes() -> AnySource {
+    ArcTrigger::new().to_any_source()
 }
 
 /// A [`Future`] that is ready when an
@@ -300,9 +314,21 @@ where
 pub struct OnceResourceFuture<T> {
     source: AnySource,
     value: Arc<RwLock<Option<T>>>,
-    loading: Arc<AtomicBool>,
     wakers: Arc<RwLock<Vec<Waker>>>,
     suspenses: Arc<RwLock<Vec<SuspenseContext>>>,
+}
+
+impl<T> OnceResourceFuture<T> {
+    /// A future for a resource whose value is gone (its owner was disposed): it never
+    /// finishes.
+    fn never() -> Self {
+        Self {
+            source: never_changes(),
+            value: Arc::new(RwLock::new(None)),
+            wakers: Arc::default(),
+            suspenses: Arc::default(),
+        }
+    }
 }
 
 impl<T> Future for OnceResourceFuture<T>
@@ -322,14 +348,17 @@ where
             self.suspenses.write().or_poisoned().push(suspense_context);
         }
 
-        if self.loading.load(Ordering::Relaxed) {
-            self.wakers.write().or_poisoned().push(waker.clone());
-            Poll::Pending
-        } else {
-            Poll::Ready(
-                self.value.read().or_poisoned().as_ref().unwrap().clone(),
-            )
+        // Ready once there is a value (the loader stores it, then takes and wakes the
+        // wakers), rather than once `loading` is cleared and then expecting a value.
+        if let Some(value) = self.value.read().or_poisoned().clone() {
+            return Poll::Ready(value);
         }
+        self.wakers.write().or_poisoned().push(waker.clone());
+        // a value stored between the check and the push would not wake this: look again
+        if let Some(value) = self.value.read().or_poisoned().clone() {
+            return Poll::Ready(value);
+        }
+        Poll::Pending
     }
 }
 
@@ -618,10 +647,21 @@ where
     Ser: 'static,
 {
     /// Returns a `Future` that is ready when this resource has next finished loading.
+    ///
+    /// If the resource's owner is gone, so is its value, and it is never ready.
+    #[track_caller]
     pub fn ready(&self) -> AsyncDerivedReadyFuture {
+        let used_at = Location::caller();
         self.inner
             .try_with_value(|inner| inner.ready())
-            .unwrap_or_else(unwrap_signal!(self))
+            .unwrap_or_else(|| {
+                warn_disposed(DisposedUse::Ready, used_at, self.defined_at());
+                AsyncDerivedReadyFuture::new(
+                    never_changes(),
+                    &Arc::new(AtomicBool::new(true)),
+                    &Arc::default(),
+                )
+            })
     }
 }
 
@@ -650,10 +690,20 @@ where
     T: Send + Sync + 'static,
     Ser: 'static,
 {
+    /// If the resource's owner is gone, this is a source that never changes.
+    #[track_caller]
     fn to_any_source(&self) -> AnySource {
+        let used_at = Location::caller();
         self.inner
             .try_with_value(|inner| inner.to_any_source())
-            .unwrap_or_else(unwrap_signal!(self))
+            .unwrap_or_else(|| {
+                warn_disposed(
+                    DisposedUse::Subscribe,
+                    used_at,
+                    self.defined_at(),
+                );
+                never_changes()
+            })
     }
 }
 
@@ -691,11 +741,17 @@ where
     type Output = T;
     type IntoFuture = OnceResourceFuture<T>;
 
+    /// If the resource's owner is gone, so is its value, and the future never finishes.
+    #[track_caller]
     fn into_future(self) -> Self::IntoFuture {
-        self.inner
-            .try_get_value()
-            .unwrap_or_else(unwrap_signal!(self))
-            .into_future()
+        let used_at = Location::caller();
+        self.inner.try_get_value().map_or_else(
+            || {
+                warn_disposed(DisposedUse::Await, used_at, self.defined_at());
+                OnceResourceFuture::never()
+            },
+            IntoFuture::into_future,
+        )
     }
 }
 
@@ -887,5 +943,103 @@ where
         fut: impl Future<Output = T> + Send + 'static,
     ) -> Self {
         OnceResource::new_with_options(fut, true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::init_executor;
+    use futures::executor::block_on;
+
+    /// Awaiting the resource gives the value it loaded.
+    #[test]
+    fn awaiting_a_once_resource_gives_its_value() {
+        init_executor();
+        let resource = ArcOnceResource::new(async { 7_u32 });
+
+        assert_eq!(block_on(resource.clone().into_future()), 7);
+        assert_eq!(block_on(resource.into_future()), 7);
+    }
+
+    /// The resource's owner is gone: awaiting it, waiting for it to be ready and
+    /// subscribing to it used to panic ("Tried to access a reactive value that has already
+    /// been disposed"). Its value is gone, so the await never finishes.
+    #[test]
+    fn awaiting_a_disposed_once_resource_stays_pending() {
+        init_executor();
+        let owner = Owner::new();
+        let resource = owner.with(|| OnceResource::new(async { 7_u32 }));
+        owner.cleanup();
+
+        assert!(resource.into_future().now_or_never().is_none());
+    }
+
+    #[test]
+    fn a_disposed_once_resource_is_never_ready() {
+        init_executor();
+        let owner = Owner::new();
+        let resource = owner.with(|| OnceResource::new(async { 7_u32 }));
+        owner.cleanup();
+
+        assert!(resource.ready().now_or_never().is_none());
+    }
+
+    #[test]
+    fn a_disposed_once_resource_is_a_source_that_never_changes() {
+        init_executor();
+        let owner = Owner::new();
+        let resource = owner.with(|| OnceResource::new(async { 7_u32 }));
+        owner.cleanup();
+
+        let source = resource.to_any_source();
+
+        source.track();
+        assert_eq!(resource.try_get_untracked(), None);
+    }
+
+    /// On the server, the resource's value is sent to the browser in the page.
+    #[cfg(feature = "ssr")]
+    mod server {
+        use super::*;
+        use crate::{
+            hydration_data::NOT_SENT,
+            test_support::{page_data, server_request},
+        };
+        use std::collections::HashMap;
+
+        fn sent_for_resource_0(value: &str) -> String {
+            format!("__RESOLVED_RESOURCES[0] = {value:?};")
+        }
+
+        #[test]
+        fn a_value_is_sent_in_the_page() {
+            init_executor();
+            let (owner, context) = server_request();
+            let _resource =
+                owner.with(|| ArcOnceResource::new(async { 7_u32 }));
+
+            let data = page_data(&context);
+
+            assert!(data.contains(&sent_for_resource_0("7")), "{data}");
+        }
+
+        /// JSON object keys must be strings, so this map cannot be serialized: that used to
+        /// panic while the page's data was streamed, failing the response. The page says
+        /// that no value was sent, and the browser loads the resource itself.
+        #[test]
+        fn a_value_that_cannot_be_serialized_is_left_out_of_the_page() {
+            init_executor();
+            let (owner, context) = server_request();
+            let _resource = owner.with(|| {
+                ArcOnceResource::new(async {
+                    HashMap::from([((1_u8, 2_u8), 3_u8)])
+                })
+            });
+
+            let data = page_data(&context);
+
+            assert!(data.contains(&sent_for_resource_0(NOT_SENT)), "{data}");
+        }
     }
 }

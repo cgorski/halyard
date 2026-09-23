@@ -16,6 +16,12 @@ mod resource;
 pub use resource::*;
 mod shared;
 
+mod error;
+#[cfg(any(feature = "ssr", feature = "hydration", test))]
+mod hydration_data;
+#[cfg(test)]
+mod test_support;
+
 use base64::{engine::general_purpose::STANDARD_NO_PAD, DecodeError, Engine};
 /// Re-export of the `codee` crate.
 pub use codee;
@@ -142,7 +148,9 @@ mod view_implementations {
         const MIN_LENGTH: usize = 0;
 
         fn dry_resolve(&mut self) {
-            self.read();
+            // reading registers the resource with the enclosing <Suspense/>; a resource
+            // whose owner is gone has nothing to register
+            _ = self.try_read();
         }
 
         fn resolve(self) -> impl Future<Output = Self::AsyncOutput> + Send {

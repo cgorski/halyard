@@ -1942,6 +1942,7 @@ dependencies = [
  "send_wrapper",
  "serde",
  "serde_json",
+ "thiserror 2.0.17",
  "tracing",
  "wasm-bindgen",
 ]
