@@ -1,7 +1,7 @@
 use crate::{
     path::{StorePath, StorePathSegment},
     ArcStore, AtIndex, AtKeyed, DerefedField, KeyMap, KeyedAccess,
-    KeyedSubfield, Store, StoreField, StoreFieldTrigger, Subfield,
+    KeyedSubfield, Len, Store, StoreField, StoreFieldTrigger, Subfield,
 };
 use halyard_reactive_graph::{
     owner::Storage,
@@ -314,7 +314,7 @@ impl<Inner, Prev> From<AtIndex<Inner, Prev>> for ArcField<Prev::Output>
 where
     AtIndex<Inner, Prev>: Clone,
     Inner: StoreField<Value = Prev> + Send + Sync + 'static,
-    Prev: IndexMut<usize> + Send + Sync + 'static,
+    Prev: IndexMut<usize> + Len + Send + Sync + 'static,
     Prev::Output: Sized + Send + Sync,
 {
     #[track_caller]

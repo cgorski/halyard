@@ -1,4 +1,5 @@
 use crate::{
+    error::{ReportOnce, StoreError},
     path::{StorePath, StorePathSegment},
     ArcStore, KeyMap, Store, StoreFieldTrigger,
 };
@@ -78,7 +79,9 @@ pub trait StoreField: Sized {
 
         // build a list of triggers, starting with the full path to this node and ending with the root
         // this will mean that the root is the final item, and this path is first
-        let mut triggers = Vec::with_capacity(full_path.len() + 2);
+        // (the capacity is a hint: it saturates)
+        let mut triggers =
+            Vec::with_capacity(full_path.len().saturating_add(2));
         triggers.push(trigger.this.clone());
         triggers.push(trigger.children.clone());
         while !full_path.is_empty() {
@@ -107,7 +110,8 @@ pub trait StoreField: Sized {
         let trigger = self.get_trigger_unkeyed(path.clone());
         let mut full_path = path;
 
-        let mut triggers = Vec::with_capacity(full_path.len() + 2);
+        let mut triggers =
+            Vec::with_capacity(full_path.len().saturating_add(2));
         triggers.push(trigger.this.clone());
         triggers.push(trigger.children.clone());
         while !full_path.is_empty() {
@@ -136,32 +140,39 @@ where
         trigger
     }
 
+    /// The trigger for an unkeyed path (indices all the way down): each index into a keyed
+    /// field is turned into the key slot that the entry's triggers are found by.
+    ///
+    /// If a keyed field has no key recorded for an index (an entry the key map has not seen
+    /// yet), the keyed field's own trigger is returned: its entries all track it, so they are
+    /// all notified, and none is missed. That is logged once.
     #[track_caller]
     fn get_trigger_unkeyed(&self, path: StorePath) -> StoreFieldTrigger {
-        let caller = std::panic::Location::caller();
-        let orig_path = path.clone();
+        static NO_KEY: ReportOnce = ReportOnce::new();
 
-        let mut path = StorePath::with_capacity(orig_path.len());
-        for segment in &orig_path {
-            let parent_is_keyed = self.keys.contains_key(&path);
-
-            if parent_is_keyed {
-                let key = self
-                    .keys
-                    .get_key_for_index(&(path.clone(), segment.0))
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "could not find key for index {:?} at {}",
-                            (path.clone(), segment.0),
-                            caller
-                        )
-                    });
-                path.push(key);
+        let mut keyed_path = StorePath::with_capacity(path.len());
+        for segment in &path {
+            if self.keys.contains_key(&keyed_path) {
+                let index = (keyed_path, segment.0);
+                match self.keys.get_key_for_index(&index) {
+                    Some(key) => {
+                        keyed_path = index.0;
+                        keyed_path.push(key);
+                    }
+                    None => {
+                        let (path, index) = index;
+                        NO_KEY.report(|| StoreError::NoKeyForIndex {
+                            path: path.clone(),
+                            index,
+                        });
+                        return self.get_trigger(path);
+                    }
+                }
             } else {
-                path.push(*segment);
+                keyed_path.push(*segment);
             }
         }
-        self.get_trigger(path)
+        self.get_trigger(keyed_path)
     }
 
     #[track_caller]
@@ -246,5 +257,79 @@ where
     #[track_caller]
     fn keys(&self) -> Option<KeyMap> {
         self.inner.try_get_value().and_then(|inner| inner.keys())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StoreField;
+    use crate::{ArcStore, FieldKeys, StorePath, StorePathSegment};
+    use halyard_reactive_graph::{
+        effect::ImmediateEffect,
+        owner::Owner,
+        traits::{Notify, Track},
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    fn path(segments: &[usize]) -> StorePath {
+        segments.iter().map(|&s| StorePathSegment(s)).collect()
+    }
+
+    /// Before: a panic ("could not find key for index"). Now the keyed field's own trigger,
+    /// which all its entries track, stands in for the entry's.
+    #[test]
+    fn an_index_with_no_key_gives_the_keyed_fields_trigger() {
+        let owner = Owner::new();
+        owner.set();
+        let store = ArcStore::new(vec![vec![1, 2, 3]]);
+        // a keyed field at [0] whose key map has seen no keys
+        store.keys.with_field_keys(
+            path(&[0]),
+            |_: &mut FieldKeys<usize>| ((), vec![]),
+            Vec::new,
+        );
+        let runs = Arc::new(AtomicUsize::new(0));
+        let _effect = ImmediateEffect::new({
+            let store = store.clone();
+            let runs = Arc::clone(&runs);
+            move || {
+                store.get_trigger(path(&[0])).this.track();
+                runs.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        let trigger = store.get_trigger_unkeyed(path(&[0, 2, 1]));
+        trigger.this.notify();
+
+        assert_eq!(runs.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn an_index_with_a_key_gives_the_entrys_trigger() {
+        let owner = Owner::new();
+        owner.set();
+        let store = ArcStore::new(vec![vec![1, 2, 3]]);
+        store.keys.with_field_keys(
+            path(&[0]),
+            |_: &mut FieldKeys<usize>| ((), vec![]),
+            || vec![10, 11, 12],
+        );
+        let runs = Arc::new(AtomicUsize::new(0));
+        let _effect = ImmediateEffect::new({
+            let store = store.clone();
+            let runs = Arc::clone(&runs);
+            move || {
+                store.get_trigger(path(&[0, 2])).this.track();
+                runs.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        store.get_trigger_unkeyed(path(&[0, 1])).this.notify();
+        assert_eq!(runs.load(Ordering::Relaxed), 1, "another entry");
+        store.get_trigger_unkeyed(path(&[0, 2])).this.notify();
+        assert_eq!(runs.load(Ordering::Relaxed), 2, "this entry");
     }
 }

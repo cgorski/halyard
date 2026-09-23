@@ -1,4 +1,4 @@
-use crate::{StoreField, Subfield};
+use crate::{error::held, StoreField, Subfield};
 use halyard_reactive_graph::traits::{
     FlattenOptionRefOption, Read, ReadUntracked,
 };
@@ -13,6 +13,9 @@ where
     type Output;
 
     /// Provides access to the inner value, as a subfield, unwrapping the outer value.
+    ///
+    /// While the outer value is `None`, the subfield has no value: its `try_*` accessors
+    /// (`try_get`, `try_read`, `try_update`, ...) return `None`, and a write does nothing.
     fn unwrap(self) -> Subfield<Self, Option<Self::Output>, Self::Output>;
 
     /// Inverts a subfield of an `Option` to an `Option` of a subfield.
@@ -53,11 +56,12 @@ where
     type Output = T;
 
     fn unwrap(self) -> Subfield<Self, Option<Self::Output>, Self::Output> {
-        Subfield::new(
+        Subfield::new_checked(
             self,
             0.into(),
-            |t| t.as_ref().unwrap(),
-            |t| t.as_mut().unwrap(),
+            Option::is_some,
+            |t| held(t.as_ref()),
+            |t| held(t.as_mut()),
         )
     }
 

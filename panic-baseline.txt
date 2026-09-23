@@ -14,7 +14,7 @@ halyard_macro 37
 halyard_macro_diagnostics 4
 halyard_meta 0
 halyard_reactive_graph 3
-halyard_reactive_stores 22
+halyard_reactive_stores 1
 halyard_reactive_stores_macro 3
 halyard_router 0
 halyard_router_macro 3

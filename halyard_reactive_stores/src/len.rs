@@ -60,6 +60,20 @@ macro_rules! delegate_impl_len {
 
 delegate_impl_len!(<T,> [T]);
 delegate_impl_len!(<T,> Vec<T>);
+
+// arrays: so that an `AtIndex` over an array field, which checks its index against the
+// length, is still a store field
+impl<T, const N: usize> Len for [T; N] {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        N
+    }
+
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        N == 0
+    }
+}
 delegate_impl_len!(str);
 delegate_impl_len!(String);
 

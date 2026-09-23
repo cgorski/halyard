@@ -3,48 +3,68 @@ use crate::KeyedAccess;
 
 impl<K: slotmap::Key, V> KeyedAccess<K> for slotmap::SlotMap<K, V> {
     type Value = V;
-    fn keyed(&self, _index: usize, key: &K) -> &Self::Value {
-        self.get(*key).expect("key does not exist.")
+    fn keyed(&self, _index: usize, key: &K) -> Option<&Self::Value> {
+        self.get(*key)
     }
-    fn keyed_mut(&mut self, _index: usize, key: &K) -> &mut Self::Value {
-        self.get_mut(*key).expect("key does not exist")
+    fn keyed_mut(
+        &mut self,
+        _index: usize,
+        key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(*key)
     }
 }
 impl<K: slotmap::Key, V> KeyedAccess<K> for slotmap::DenseSlotMap<K, V> {
     type Value = V;
-    fn keyed(&self, _index: usize, key: &K) -> &Self::Value {
-        self.get(*key).expect("key does not exist.")
+    fn keyed(&self, _index: usize, key: &K) -> Option<&Self::Value> {
+        self.get(*key)
     }
-    fn keyed_mut(&mut self, _index: usize, key: &K) -> &mut Self::Value {
-        self.get_mut(*key).expect("key does not exist")
+    fn keyed_mut(
+        &mut self,
+        _index: usize,
+        key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(*key)
     }
 }
 #[allow(deprecated)]
 impl<K: slotmap::Key, V> KeyedAccess<K> for slotmap::HopSlotMap<K, V> {
     type Value = V;
-    fn keyed(&self, _index: usize, key: &K) -> &Self::Value {
-        self.get(*key).expect("key does not exist.")
+    fn keyed(&self, _index: usize, key: &K) -> Option<&Self::Value> {
+        self.get(*key)
     }
-    fn keyed_mut(&mut self, _index: usize, key: &K) -> &mut Self::Value {
-        self.get_mut(*key).expect("key does not exist")
+    fn keyed_mut(
+        &mut self,
+        _index: usize,
+        key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(*key)
     }
 }
 impl<K: slotmap::Key, V> KeyedAccess<K> for slotmap::SecondaryMap<K, V> {
     type Value = V;
-    fn keyed(&self, _index: usize, key: &K) -> &Self::Value {
-        self.get(*key).expect("key does not exist.")
+    fn keyed(&self, _index: usize, key: &K) -> Option<&Self::Value> {
+        self.get(*key)
     }
-    fn keyed_mut(&mut self, _index: usize, key: &K) -> &mut Self::Value {
-        self.get_mut(*key).expect("key does not exist")
+    fn keyed_mut(
+        &mut self,
+        _index: usize,
+        key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(*key)
     }
 }
 impl<K: slotmap::Key, V> KeyedAccess<K> for slotmap::SparseSecondaryMap<K, V> {
     type Value = V;
-    fn keyed(&self, _index: usize, key: &K) -> &Self::Value {
-        self.get(*key).expect("key does not exist.")
+    fn keyed(&self, _index: usize, key: &K) -> Option<&Self::Value> {
+        self.get(*key)
     }
-    fn keyed_mut(&mut self, _index: usize, key: &K) -> &mut Self::Value {
-        self.get_mut(*key).expect("key does not exist")
+    fn keyed_mut(
+        &mut self,
+        _index: usize,
+        key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(*key)
     }
 }
 

@@ -1,6 +1,10 @@
-use crate::{path::StorePath, KeyMap, KeyedAccess, KeyedSubfield, StoreField};
+use crate::{
+    error::{ReportOnce, StoreError},
+    path::StorePath,
+    KeyMap, KeyedAccess, KeyedSubfield, StoreField,
+};
 use halyard_reactive_graph::traits::{Notify, UntrackableGuard};
-use indexmap::IndexMap;
+use indexmap::{map::Entry, IndexMap};
 use itertools::{EitherOrBoth, Itertools};
 use std::{
     borrow::Cow,
@@ -37,13 +41,17 @@ where
         let path = self.path_unkeyed().into_iter().collect::<StorePath>();
         let keys = self.keys();
 
+        let mut changed = Vec::new();
         if let Some(mut writer) = self.writer() {
             // don't track the writer for the whole store
             writer.untrack();
-            let mut notify = |path: &StorePath| {
-                self.triggers_for_path_unkeyed(path.to_owned()).notify();
-            };
+            let mut notify = |path: &StorePath| changed.push(path.to_owned());
             writer.patch_field(new, &path, &mut notify, keys.as_ref());
+        }
+        // subscribers are notified once the value is unlocked: one that runs at once (an
+        // `ImmediateEffect`) could not read it before
+        for path in changed {
+            self.triggers_for_path_unkeyed(path).notify();
         }
     }
 }
@@ -64,25 +72,34 @@ where
     /// It is used in the same way as the [`Patch`] trait, but uses a keyed data diff for
     /// data structures that implement [`PatchFieldKeyed`].
     pub fn patch(&self, new: T) {
+        // The keys are read from the value before it is locked for writing: the patch finds
+        // each entry's path in them, and reading the value while this thread holds its write
+        // lock is refused.
+        self.update_keys();
+        let keyed_path = self.path().into_iter().collect::<StorePath>();
         let path = self.path_unkeyed().into_iter().collect::<StorePath>();
         let keys = self.keys();
 
+        let mut changed = Vec::new();
         let structure_changed = if let Some(mut writer) = self.writer() {
             // don't track the writer for the whole store
             writer.untrack();
-            let mut notify = |path: &StorePath| {
-                self.triggers_for_path_unkeyed(path.to_owned()).notify();
-            };
+            let mut notify = |path: &StorePath| changed.push(path.to_owned());
             writer.patch_field_keyed(
                 new,
                 &mut notify,
                 keys.as_ref(),
                 self.key_fn,
-                |key| self.path_at_key(&path, key),
+                |key| self.path_at_key(&keyed_path, &path, key),
             )
         } else {
             false
         };
+        // subscribers are notified once the value is unlocked, and before the keys are
+        // updated, so the entries' indices still name the slots their triggers are under
+        for path in changed {
+            self.triggers_for_path_unkeyed(path).notify();
+        }
 
         if structure_changed {
             // Only notify `children` (not `this`) at the collection path, so that
@@ -274,13 +291,15 @@ where
             self.extend(new);
             notify(path);
         } else {
+            let old_len = self.len();
+            let new_len = new.len();
             let mut adds = vec![];
-            let mut removes_at_end = 0;
             let mut new_path = path.to_owned();
             new_path.push(0);
             for (idx, item) in
                 new.into_iter().zip_longest(self.iter_mut()).enumerate()
             {
+                new_path.replace_last(idx);
                 match item {
                     EitherOrBoth::Both(new, old) => {
                         old.patch_field(new, &new_path, notify, keys);
@@ -288,18 +307,15 @@ where
                     EitherOrBoth::Left(new) => {
                         adds.push(new);
                     }
-                    EitherOrBoth::Right(_) => {
-                        removes_at_end += 1;
-                    }
+                    // removed by the truncation below
+                    EitherOrBoth::Right(_) => {}
                 }
-                new_path.replace_last(idx + 1);
             }
 
-            let length_changed = removes_at_end > 0 || !adds.is_empty();
-            self.truncate(self.len() - removes_at_end);
+            self.truncate(new_len);
             self.append(&mut adds);
 
-            if length_changed {
+            if old_len != new_len {
                 notify(path);
             }
         }
@@ -321,10 +337,14 @@ where
     where
         K: Clone + Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
     {
+        static REPEATED_KEYS: ReportOnce = ReportOnce::new();
+
         let mut has_changed = false;
 
         let mut old_keyed = HashMap::new();
         let mut new_keyed = IndexMap::new();
+        // new entries whose key an earlier new entry already has, with their index
+        let mut repeated = Vec::new();
 
         // first, calculate keys and indices for all the old values
         for (idx, item) in self.drain(0..).enumerate() {
@@ -333,10 +353,27 @@ where
         }
 
         // then, calculate keys and indices for all the new values
+        let entries = new.len();
         for (idx, item) in new.drain(0..).enumerate() {
-            let key = key_fn(&item);
-            new_keyed.insert(key, (idx, item));
+            match new_keyed.entry(key_fn(&item)) {
+                Entry::Vacant(entry) => {
+                    entry.insert((idx, item));
+                }
+                Entry::Occupied(_) => repeated.push((idx, item)),
+            }
         }
+
+        // Keys should be unique. An entry whose key repeats is kept in its place, as an entry
+        // added by this patch (the diff matches old and new entries by key, so it can only
+        // match the first), and the list has changed.
+        if !repeated.is_empty() {
+            REPEATED_KEYS.report(|| StoreError::RepeatedKeys {
+                entries,
+                keys: new_keyed.len(),
+            });
+            has_changed = true;
+        }
+        let mut repeated = repeated.into_iter().peekable();
 
         // if there are any old keys not included in the new keys, the list has changed
         for old_key in old_keyed.keys() {
@@ -348,12 +385,18 @@ where
         // iterate over the new entries, rebuilding the `new` Vec (which we emptied with `drain` above)
         //
         // because we're using an IndexMap, this will iterate over the values in the same order
-        // as the new Vec had them
+        // as the new Vec had them (the repeated entries are put back between them)
         //
         // for each entry, either
         // 1) push it directly into the `new` Vec again, or
         // 2) take the old
         for (key, (new_idx, new_value)) in new_keyed {
+            while let Some((_, item)) =
+                repeated.next_if(|(idx, _)| *idx < new_idx)
+            {
+                new.push(item);
+            }
+
             let old_at_key = old_keyed.remove(&key);
 
             match old_at_key {
@@ -365,32 +408,30 @@ where
                     has_changed = true;
                 }
                 // found in old map
-                Some((old_idx, old_value)) => {
+                Some((old_idx, mut old_value)) => {
                     // if indices are different, list has changed
                     if old_idx != new_idx {
                         has_changed = true;
                     }
 
-                    // if we had an old value for this key, we're actually going to push the *old*
-                    // value into the vec, and then patch it with the new value; because we're iterating
-                    // in the new order, it will be at the `new_idx`
-                    new.push(old_value);
-                    let field_to_patch = &mut new[new_idx];
-
-                    // now we need to actually patch the old item with this key with the new item
-                    // we do this by calling patch_field(); to get the correct path, we need to get the
-                    // path to the field at this key
-
-                    // we do th
+                    // if we had an old value for this key, we patch the *old* value with the
+                    // new value, and push it into the vec; because we're iterating in the new
+                    // order, it lands at `new_idx`
+                    //
+                    // to get the correct path for patch_field(), we need to get the path to
+                    // the field at this key; without one, the new value takes the old one's
+                    // place, and the list is notified as changed
                     if let Some(path) = path_at_key(&key) {
-                        field_to_patch
-                            .patch_field(new_value, &path, notify, keys);
+                        old_value.patch_field(new_value, &path, notify, keys);
+                        new.push(old_value);
                     } else {
+                        new.push(new_value);
                         has_changed = true;
                     }
                 }
             }
         }
+        new.extend(repeated.map(|(_, item)| item));
 
         // update the value
         *self = new;
@@ -459,7 +500,8 @@ where
                 Some(mut old_value) => {
                     // now we need to actually patch the old item with this key with the new item
                     // we do this by calling patch_field(); to get the correct path, we need to get the
-                    // path to the field at this key
+                    // path to the field at this key; without one, the new value takes the old
+                    // one's place, and the map is notified as changed
                     if let Some(path) = path_at_key(&key) {
                         old_value.1.patch_field(
                             new_value.1,
@@ -467,12 +509,11 @@ where
                             notify,
                             keys,
                         );
+                        new.insert(new_value.0, old_value.1);
                     } else {
+                        new.insert(new_value.0, new_value.1);
                         has_changed = true;
                     }
-
-                    // and we'll insert it into the new map
-                    new.insert(new_value.0, old_value.1);
                 }
             }
         }
@@ -549,7 +590,8 @@ where
                 Some(mut old_value) => {
                     // now we need to actually patch the old item with this key with the new item
                     // we do this by calling patch_field(); to get the correct path, we need to get the
-                    // path to the field at this key
+                    // path to the field at this key; without one, the new value takes the old
+                    // one's place, and the map is notified as changed
                     if let Some(path) = path_at_key(&key) {
                         old_value.1.patch_field(
                             new_value.1,
@@ -557,12 +599,11 @@ where
                             notify,
                             keys,
                         );
+                        new.insert(new_value.0, old_value.1);
                     } else {
+                        new.insert(new_value.0, new_value.1);
                         has_changed = true;
                     }
-
-                    // and we'll insert it into the new map
-                    new.insert(new_value.0, old_value.1);
                 }
             }
         }
@@ -587,7 +628,8 @@ macro_rules! patch_tuple {
                 notify: &mut dyn FnMut(&StorePath),
                 keys: Option<&KeyMap>
             ) {
-                let mut idx = 0;
+                // the index of each element, in order
+                let mut indices = 0..usize::MAX;
                 let mut new_path = path.to_owned();
                 new_path.push(0);
 
@@ -596,9 +638,10 @@ macro_rules! patch_tuple {
                     let ($($ty,)*) = self;
                     let ($([<new_ $ty:lower>],)*) = new;
                     $(
+                        if let Some(idx) = indices.next() {
+                            new_path.replace_last(idx);
+                        }
                         $ty.patch_field([<new_ $ty:lower>], &new_path, notify, keys);
-                        idx += 1;
-                        new_path.replace_last(idx);
                     )*
                 }
             }

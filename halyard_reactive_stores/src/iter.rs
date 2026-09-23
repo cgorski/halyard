@@ -17,11 +17,14 @@ use halyard_reactive_graph::{
 use std::{
     iter,
     marker::PhantomData,
-    ops::{DerefMut, IndexMut},
+    ops::{Deref, DerefMut, IndexMut, Range},
     panic::Location,
 };
 
 /// Provides access to the data at some index in another collection.
+///
+/// While the index is past the end of the collection, the field has no value: its `try_*`
+/// accessors return `None` (and `reader`/`writer` give no guard).
 #[derive(Debug)]
 pub struct AtIndex<Inner, Prev> {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
@@ -65,7 +68,7 @@ impl<Inner, Prev> AtIndex<Inner, Prev> {
 impl<Inner, Prev> StoreField for AtIndex<Inner, Prev>
 where
     Inner: StoreField<Value = Prev>,
-    Prev: IndexMut<usize> + 'static,
+    Prev: IndexMut<usize> + Len + 'static,
     Prev::Output: Sized,
 {
     type Value = Prev::Output;
@@ -95,20 +98,28 @@ where
         self.inner.get_trigger_unkeyed(path)
     }
 
+    // A guard is only made while the index is within the collection, and the lock it holds
+    // keeps the length as it is while it lives, so its indexing stays in bounds. (`Index`
+    // has no checked form to use instead.)
     fn reader(&self) -> Option<Self::Reader> {
         let inner = self.inner.reader()?;
         let index = self.index;
-        Some(MappedMutArc::new(
-            inner,
-            move |n| &n[index],
-            move |n| &mut n[index],
-        ))
+        (index < inner.deref().len()).then(|| {
+            MappedMutArc::new(inner, move |n| &n[index], move |n| &mut n[index])
+        })
     }
 
     fn writer(&self) -> Option<Self::Writer> {
-        let trigger = self.get_trigger(self.path().into_iter().collect());
-        let inner = WriteGuard::new(trigger.children, self.inner.writer()?);
+        let parent = self.inner.writer()?;
         let index = self.index;
+        if index >= parent.deref().len() {
+            // dropped without being written through: an untracked guard notifies nothing
+            let mut parent = parent;
+            parent.untrack();
+            return None;
+        }
+        let trigger = self.get_trigger(self.path().into_iter().collect());
+        let inner = WriteGuard::new(trigger.children, parent);
         Some(MappedMutArc::new(
             inner,
             move |n| &n[index],
@@ -167,7 +178,7 @@ where
 impl<Inner, Prev> Notify for AtIndex<Inner, Prev>
 where
     Inner: StoreField<Value = Prev>,
-    Prev: IndexMut<usize> + 'static,
+    Prev: IndexMut<usize> + Len + 'static,
     Prev::Output: Sized,
 {
     fn notify(&self) {
@@ -179,7 +190,7 @@ where
 impl<Inner, Prev> Track for AtIndex<Inner, Prev>
 where
     Inner: StoreField<Value = Prev> + Send + Sync + Clone + 'static,
-    Prev: IndexMut<usize> + 'static,
+    Prev: IndexMut<usize> + Len + 'static,
     Prev::Output: Sized + 'static,
 {
     fn track(&self) {
@@ -190,7 +201,7 @@ where
 impl<Inner, Prev> ReadUntracked for AtIndex<Inner, Prev>
 where
     Inner: StoreField<Value = Prev>,
-    Prev: IndexMut<usize> + 'static,
+    Prev: IndexMut<usize> + Len + 'static,
     Prev::Output: Sized,
 {
     type Value = <Self as StoreField>::Reader;
@@ -203,7 +214,7 @@ where
 impl<Inner, Prev> Write for AtIndex<Inner, Prev>
 where
     Inner: StoreField<Value = Prev>,
-    Prev: IndexMut<usize> + 'static,
+    Prev: IndexMut<usize> + Len + 'static,
     Prev::Output: Sized + 'static,
 {
     type Value = Prev::Output;
@@ -258,8 +269,7 @@ where
         // return the iterator
         StoreFieldIter {
             inner: self,
-            idx: 0,
-            len,
+            indices: 0..len,
             prev: PhantomData,
         }
     }
@@ -268,8 +278,8 @@ where
 /// An iterator over the values in a collection, as reactive fields.
 pub struct StoreFieldIter<Inner, Prev> {
     inner: Inner,
-    idx: usize,
-    len: usize,
+    /// The indices not yet handed out, from either end.
+    indices: Range<usize>,
     prev: PhantomData<Prev>,
 }
 
@@ -282,13 +292,9 @@ where
     type Item = AtIndex<Inner, Prev>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx < self.len {
-            let field = AtIndex::new(self.inner.clone(), self.idx);
-            self.idx += 1;
-            Some(field)
-        } else {
-            None
-        }
+        self.indices
+            .next()
+            .map(|index| AtIndex::new(self.inner.clone(), index))
     }
 }
 
@@ -299,12 +305,8 @@ where
     Prev::Output: Sized + 'static,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.len > self.idx {
-            self.len -= 1;
-            let field = AtIndex::new(self.inner.clone(), self.len);
-            Some(field)
-        } else {
-            None
-        }
+        self.indices
+            .next_back()
+            .map(|index| AtIndex::new(self.inner.clone(), index))
     }
 }

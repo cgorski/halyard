@@ -239,6 +239,7 @@
 //! field in the signal inner `Arc<RwLock<_>>`, and tracks the trigger that corresponds with its
 //! path; calling `.write()` returns a writeable guard, and notifies that same trigger.
 
+use error::{ReportOnce, StoreError};
 use halyard_or_poisoned::OrPoisoned;
 use halyard_reactive_graph::{
     owner::{ArenaItem, LocalStorage, Storage, SyncStorage},
@@ -264,6 +265,7 @@ use std::{
 
 mod arc_field;
 mod deref;
+mod error;
 mod field;
 mod iter;
 mod keyed;
@@ -337,10 +339,9 @@ where
 {
     /// Creates a new set of keys.
     pub fn new(from_keys: Vec<K>) -> Self {
-        let mut keys = FxHashMap::with_capacity_and_hasher(
-            from_keys.len(),
-            Default::default(),
-        );
+        let count = from_keys.len();
+        let mut keys =
+            FxHashMap::with_capacity_and_hasher(count, Default::default());
         for (idx, key) in from_keys.into_iter().enumerate() {
             let segment = idx.into();
             keys.insert(key, (segment, idx));
@@ -348,7 +349,9 @@ where
 
         Self {
             spare_keys: Vec::new(),
-            current_key: keys.len().saturating_sub(1),
+            // the last slot handed out: slots are the indices, so a repeated key leaves a
+            // gap rather than making the next new key reuse a slot still in use
+            current_key: count.saturating_sub(1),
             keys,
         }
     }
@@ -370,11 +373,27 @@ where
         self.keys.get(key).copied()
     }
 
+    /// A key slot for a new key: a recycled one, or the next never handed out. Once all
+    /// `usize::MAX` slots have been handed out, new keys share the last one (their
+    /// subscribers are notified together, never missed), which is logged once.
     fn next_key(&mut self) -> StorePathSegment {
-        self.spare_keys.pop().unwrap_or_else(|| {
-            self.current_key += 1;
-            self.current_key.into()
-        })
+        static EXHAUSTED: ReportOnce = ReportOnce::new();
+        if let Some(spare) = self.spare_keys.pop() {
+            return spare;
+        }
+        match self.current_key.checked_add(1) {
+            Some(next) => self.current_key = next,
+            None => EXHAUSTED.report(|| StoreError::KeySlotsExhausted),
+        }
+        self.current_key.into()
+    }
+
+    /// Each key's index and slot.
+    fn index_segments(&self) -> Vec<(usize, StorePathSegment)> {
+        self.keys
+            .values()
+            .map(|&(segment, idx)| (idx, segment))
+            .collect()
     }
 
     fn update(
@@ -504,18 +523,21 @@ impl KeyMap {
         let mut initial = needs_init.then(initialize);
 
         let mut guard = self.0.write().or_poisoned();
+        // the slots of the keys an entry starts with are recorded by index too, as updates
+        // record theirs: a patch finds an entry's triggers by its index
+        let mut initialized = Vec::new();
         let entry = guard.entry(path.clone()).or_insert_with(|| {
-            Box::new(FieldKeys::new(initial.take().unwrap_or_default()))
+            let keys = FieldKeys::new(initial.take().unwrap_or_default());
+            initialized = keys.index_segments();
+            Box::new(keys)
         });
 
         let entry = entry.downcast_mut::<FieldKeys<K>>()?;
         let (result, new_keys) = fun(entry);
-        if !new_keys.is_empty() {
-            for (idx, segment) in new_keys {
-                self.1
-                    .write()
-                    .or_poisoned()
-                    .insert((path.clone(), idx), segment);
+        if !initialized.is_empty() || !new_keys.is_empty() {
+            let mut by_index = self.1.write().or_poisoned();
+            for (idx, segment) in initialized.into_iter().chain(new_keys) {
+                by_index.insert((path.clone(), idx), segment);
             }
         }
         Some(result)
@@ -1428,5 +1450,56 @@ mod tests {
         tracked_field.write_untracked().push('!');
         tick().await;
         assert_eq!(name_count.load(Ordering::Relaxed), 2);
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use crate::{FieldKeys, KeyMap, StorePath, StorePathSegment};
+
+    /// Before: the slot counter overflowed (a panic in debug builds, a wrap to slot 0, which
+    /// the first key holds, in release builds).
+    #[test]
+    fn a_new_key_after_the_last_slot_shares_it() {
+        let mut keys = FieldKeys::new(vec!["a"]);
+        keys.current_key = usize::MAX - 1;
+
+        let slots = keys.update(["a", "b", "c", "d"]);
+
+        let mut slots = slots.into_iter().map(|(_, s)| s.0).collect::<Vec<_>>();
+        slots.sort_unstable();
+        assert_eq!(slots, vec![0, usize::MAX, usize::MAX, usize::MAX]);
+    }
+
+    #[test]
+    fn a_removed_keys_slot_is_reused() {
+        let mut keys = FieldKeys::new(vec!["a", "b"]);
+        keys.update(["a"]);
+        let slots = keys.update(["a", "c"]);
+        assert!(slots.contains(&(1, StorePathSegment(1))), "{slots:?}");
+    }
+
+    /// Before: keys set up by a read recorded no slot by index, and a patch that then
+    /// notified an entry by its index panicked (see `get_trigger_unkeyed`).
+    #[test]
+    fn keys_set_up_by_a_read_are_recorded_by_index() {
+        let map = KeyMap::default();
+        let path: StorePath = vec![StorePathSegment(0)].into();
+
+        let found = map.with_field_keys(
+            path.clone(),
+            |keys: &mut FieldKeys<&str>| (keys.get(&"b"), vec![]),
+            || vec!["a", "b"],
+        );
+
+        assert_eq!(found, Some(Some((StorePathSegment(1), 1))));
+        assert_eq!(
+            map.get_key_for_index(&(path.clone(), 0)),
+            Some(StorePathSegment(0))
+        );
+        assert_eq!(
+            map.get_key_for_index(&(path, 1)),
+            Some(StorePathSegment(1))
+        );
     }
 }

@@ -2,7 +2,7 @@ use crate::{
     arc_field::{StoreFieldReader, StoreFieldWriter},
     path::{StorePath, StorePathSegment},
     ArcField, ArcStore, AtIndex, AtKeyed, DerefedField, KeyMap, KeyedAccess,
-    KeyedSubfield, Store, StoreField, StoreFieldTrigger, Subfield,
+    KeyedSubfield, Len, Store, StoreField, StoreFieldTrigger, Subfield,
 };
 use halyard_reactive_graph::{
     owner::{ArenaItem, Storage, SyncStorage},
@@ -177,7 +177,7 @@ where
     AtIndex<Inner, Prev>: Clone,
     S: Storage<ArcField<Prev::Output>>,
     Inner: StoreField<Value = Prev> + Send + Sync + 'static,
-    Prev: IndexMut<usize> + Send + Sync + 'static,
+    Prev: IndexMut<usize> + Len + Send + Sync + 'static,
     Prev::Output: Sized + Send + Sync,
 {
     #[track_caller]

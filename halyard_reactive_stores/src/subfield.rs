@@ -25,6 +25,9 @@ pub struct Subfield<Inner, Prev, T> {
     inner: Inner,
     read: fn(&Prev) -> &T,
     write: fn(&mut Prev) -> &mut T,
+    /// Whether the field is there in its parent's value (an `Option`'s value is not there
+    /// while it is `None`); `None` for a field that is always there, like a struct's.
+    present: Option<fn(&Prev) -> bool>,
     ty: PhantomData<T>,
 }
 
@@ -40,6 +43,7 @@ where
             inner: self.inner.clone(),
             read: self.read,
             write: self.write,
+            present: self.present,
             ty: self.ty,
         }
     }
@@ -63,8 +67,39 @@ impl<Inner, Prev, T> Subfield<Inner, Prev, T> {
             path_segment,
             read,
             write,
+            present: None,
             ty: PhantomData,
         }
+    }
+
+    /// Creates an accessor for a field that is not always there in its parent's value (the
+    /// value of an `Option`). While `present` says it is not, the field has no value: its
+    /// `try_*` accessors return `None`, and `reader`/`writer` give no guard.
+    ///
+    /// `read` and `write` are only called on a value for which `present` returned `true`,
+    /// through a guard that keeps the value as it was.
+    #[track_caller]
+    pub(crate) fn new_checked(
+        inner: Inner,
+        path_segment: StorePathSegment,
+        present: fn(&Prev) -> bool,
+        read: fn(&Prev) -> &T,
+        write: fn(&mut Prev) -> &mut T,
+    ) -> Self {
+        Self {
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at: Location::caller(),
+            inner,
+            path_segment,
+            read,
+            write,
+            present: Some(present),
+            ty: PhantomData,
+        }
+    }
+
+    fn is_present(&self, parent: &Prev) -> bool {
+        self.present.is_none_or(|present| present(parent))
     }
 }
 
@@ -101,7 +136,8 @@ where
 
     fn reader(&self) -> Option<Self::Reader> {
         let inner = self.inner.reader()?;
-        Some(Mapped::new_with_guard(inner, self.read))
+        self.is_present(&inner)
+            .then(|| Mapped::new_with_guard(inner, self.read))
     }
 
     fn writer(&self) -> Option<Self::Writer> {
@@ -112,6 +148,10 @@ where
         // so that it doesn't notify on the parent's `this` trigger, which would notify our
         // siblings too
         parent.untrack();
+        if !self.is_present(&parent) {
+            // dropped untracked: nothing was written, nothing is notified
+            return None;
+        }
         let triggers = self.triggers_for_current_path();
         let guard = WriteGuard::new(triggers, parent);
         Some(MappedMut::new(guard, self.read, self.write))

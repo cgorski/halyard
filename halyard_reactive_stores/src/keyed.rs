@@ -1,4 +1,5 @@
 use crate::{
+    error::held,
     path::{StorePath, StorePathSegment},
     store_field::StoreField,
     KeyMap, StoreFieldTrigger,
@@ -18,7 +19,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
     iter,
-    ops::{Deref, DerefMut, Index, IndexMut},
+    ops::{Deref, DerefMut},
     panic::Location,
 };
 
@@ -26,59 +27,95 @@ use std::{
 ///
 /// `K` is the identity key type used to uniquely identify entries. Collections
 /// that are indexed by position (like `Vec`) can implement this for any `K`,
-/// ignoring the key and using the `index` parameter instead. Collections that
-/// are indexed by key (like `HashMap`) use the `key` parameter.
+/// ignoring the key and using the `index` parameter instead, and set
+/// [`BY_POSITION`](KeyedAccess::BY_POSITION). Collections that are indexed by key
+/// (like `HashMap`) use the `key` parameter.
+///
+/// The index comes from the keys the store last saw in the collection, so it can be past the
+/// end, or point at another entry, after the collection changed: the accessors return `None`
+/// when there is no value there, and [`AtKeyed`] checks that a value found by position has
+/// the key it asked for.
 pub trait KeyedAccess<K> {
     /// Collection values.
     type Value;
-    /// Acquire read-only access to a value.
-    fn keyed(&self, index: usize, key: &K) -> &Self::Value;
-    /// Acquire mutable access to a value.
-    fn keyed_mut(&mut self, index: usize, key: &K) -> &mut Self::Value;
+
+    /// Whether values are found by their position (`index`), as in a `Vec`, rather than by
+    /// `key`. The entry found at a position is then checked to have the key (a position can
+    /// point at another entry after the collection changed), and if it does not, the keys are
+    /// read again from the collection.
+    const BY_POSITION: bool = false;
+
+    /// Read-only access to the value at `index` or `key`, if there is one.
+    fn keyed(&self, index: usize, key: &K) -> Option<&Self::Value>;
+    /// Mutable access to the value at `index` or `key`, if there is one.
+    fn keyed_mut(&mut self, index: usize, key: &K) -> Option<&mut Self::Value>;
 }
 impl<K, T> KeyedAccess<K> for VecDeque<T> {
     type Value = T;
-    fn keyed(&self, index: usize, _key: &K) -> &Self::Value {
-        self.index(index)
+    const BY_POSITION: bool = true;
+    fn keyed(&self, index: usize, _key: &K) -> Option<&Self::Value> {
+        self.get(index)
     }
-    fn keyed_mut(&mut self, index: usize, _key: &K) -> &mut Self::Value {
-        self.index_mut(index)
+    fn keyed_mut(
+        &mut self,
+        index: usize,
+        _key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(index)
     }
 }
 impl<K, T> KeyedAccess<K> for Vec<T> {
     type Value = T;
-    fn keyed(&self, index: usize, _key: &K) -> &Self::Value {
-        self.index(index)
+    const BY_POSITION: bool = true;
+    fn keyed(&self, index: usize, _key: &K) -> Option<&Self::Value> {
+        self.get(index)
     }
-    fn keyed_mut(&mut self, index: usize, _key: &K) -> &mut Self::Value {
-        self.index_mut(index)
+    fn keyed_mut(
+        &mut self,
+        index: usize,
+        _key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(index)
     }
 }
 impl<K, T> KeyedAccess<K> for [T] {
     type Value = T;
-    fn keyed(&self, index: usize, _key: &K) -> &Self::Value {
-        self.index(index)
+    const BY_POSITION: bool = true;
+    fn keyed(&self, index: usize, _key: &K) -> Option<&Self::Value> {
+        self.get(index)
     }
-    fn keyed_mut(&mut self, index: usize, _key: &K) -> &mut Self::Value {
-        self.index_mut(index)
+    fn keyed_mut(
+        &mut self,
+        index: usize,
+        _key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(index)
     }
 }
 impl<K: Ord, V> KeyedAccess<K> for std::collections::BTreeMap<K, V> {
     type Value = V;
-    fn keyed(&self, _index: usize, key: &K) -> &Self::Value {
-        self.get(key).expect("key does not exist")
+    fn keyed(&self, _index: usize, key: &K) -> Option<&Self::Value> {
+        self.get(key)
     }
-    fn keyed_mut(&mut self, _index: usize, key: &K) -> &mut Self::Value {
-        self.get_mut(key).expect("key does not exist")
+    fn keyed_mut(
+        &mut self,
+        _index: usize,
+        key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(key)
     }
 }
 impl<K: Hash + Eq, V> KeyedAccess<K> for std::collections::HashMap<K, V> {
     type Value = V;
-    fn keyed(&self, _index: usize, key: &K) -> &Self::Value {
-        self.get(key).expect("key does not exist")
+    fn keyed(&self, _index: usize, key: &K) -> Option<&Self::Value> {
+        self.get(key)
     }
-    fn keyed_mut(&mut self, _index: usize, key: &K) -> &mut Self::Value {
-        self.get_mut(key).expect("key does not exist")
+    fn keyed_mut(
+        &mut self,
+        _index: usize,
+        key: &K,
+    ) -> Option<&mut Self::Value> {
+        self.get_mut(key)
     }
 }
 
@@ -225,29 +262,42 @@ where
     Prev: 'static,
     K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
 {
+    /// The keys of the collection as it is now: none if it cannot be read (it is disposed,
+    /// or this thread is writing it).
     fn latest_keys(&self) -> Vec<K> {
-        self.reader()
-            .map(|r| r.deref().into_iter().map(|n| (self.key_fn)(n)).collect())
-            .unwrap_or_default()
+        self.read_keys().unwrap_or_default()
     }
 
+    /// The keys of the collection as it is now, or `None` if it cannot be read.
+    fn read_keys(&self) -> Option<Vec<K>> {
+        self.reader()
+            .map(|r| r.deref().into_iter().map(|n| (self.key_fn)(n)).collect())
+    }
+
+    /// The unkeyed path of the entry with `key`: `unkeyed_path` (this field's) followed by the
+    /// entry's index, as the keys last read from the collection say.
+    ///
+    /// The keys are found under this field's keyed path, where they are kept. This is called
+    /// while a patch holds the write lock, so it never reads the collection: keys that were
+    /// never read give `None` (the patch then treats the entry as changed).
     pub(crate) fn path_at_key(
         &self,
-        base_path: &StorePath,
+        keyed_path: &StorePath,
+        unkeyed_path: &StorePath,
         key: &K,
     ) -> Option<StorePath> {
         let keys = self.keys();
         let keys = keys.as_ref()?;
-        let segment = keys
+        let index = keys
             .with_field_keys(
-                base_path.clone(),
+                keyed_path.clone(),
                 |keys| (keys.get(key), vec![]),
-                || self.latest_keys(),
+                Vec::new,
             )
             .flatten()
             .map(|(_, idx)| idx)?;
-        let mut path = base_path.clone();
-        path.push(segment);
+        let mut path = unkeyed_path.clone();
+        path.push(index);
         Some(path)
     }
 }
@@ -265,6 +315,11 @@ where
 }
 
 /// Gives keyed write access to a value in some collection.
+///
+/// When it is dropped, the lock on the store's value is released, then the field's keys are
+/// read again from the new value, and only then are its subscribers notified: so a subscriber
+/// that runs at once (an `ImmediateEffect`) finds entries by their new keys, and runs with the
+/// value unlocked.
 pub struct KeyedSubfieldWriteGuard<Inner, Prev, K, T, Guard>
 where
     KeyedSubfield<Inner, Prev, K, T>: Clone,
@@ -273,9 +328,42 @@ where
     Prev: 'static,
     K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
 {
-    inner: KeyedSubfield<Inner, Prev, K, T>,
-    guard: Option<Guard>,
+    // Fields are dropped in the order they are declared: the guard (untracked, so it notifies
+    // nothing) releases the lock first, then `refresh` updates the keys and notifies.
+    guard: Guard,
+    refresh: RefreshKeysOnDrop<Inner, Prev, K, T>,
+}
+
+/// Updates a keyed field's keys from its value, then notifies its subscribers (unless the
+/// write was untracked), when dropped.
+struct RefreshKeysOnDrop<Inner, Prev, K, T>
+where
+    KeyedSubfield<Inner, Prev, K, T>: Clone,
+    for<'a> &'a T: IntoIterator,
+    Inner: StoreField<Value = Prev>,
+    Prev: 'static,
+    K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
+{
+    field: KeyedSubfield<Inner, Prev, K, T>,
     untracked: bool,
+}
+
+impl<Inner, Prev, K, T> Drop for RefreshKeysOnDrop<Inner, Prev, K, T>
+where
+    KeyedSubfield<Inner, Prev, K, T>: Clone,
+    for<'a> &'a T: IntoIterator,
+    Inner: StoreField<Value = Prev>,
+    Prev: 'static,
+    K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
+{
+    fn drop(&mut self) {
+        self.field.update_keys();
+        if !self.untracked {
+            // from the root down to this field, as a write guard notifies (see
+            // `StoreField::triggers_for_path`)
+            self.field.triggers_for_current_path().notify();
+        }
+    }
 }
 
 impl<Inner, Prev, K, T, Guard> Deref
@@ -291,10 +379,7 @@ where
     type Target = Guard::Target;
 
     fn deref(&self) -> &Self::Target {
-        self.guard
-            .as_ref()
-            .expect("should be Some(_) until dropped")
-            .deref()
+        self.guard.deref()
     }
 }
 
@@ -309,10 +394,7 @@ where
     K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.guard
-            .as_mut()
-            .expect("should be Some(_) until dropped")
-            .deref_mut()
+        self.guard.deref_mut()
     }
 }
 
@@ -327,37 +409,8 @@ where
     K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
 {
     fn untrack(&mut self) {
-        self.untracked = true;
-        if let Some(inner) = self.guard.as_mut() {
-            inner.untrack();
-        }
-    }
-}
-
-impl<Inner, Prev, K, T, Guard> Drop
-    for KeyedSubfieldWriteGuard<Inner, Prev, K, T, Guard>
-where
-    KeyedSubfield<Inner, Prev, K, T>: Clone,
-    for<'a> &'a T: IntoIterator,
-    Inner: StoreField<Value = Prev>,
-    Prev: 'static,
-    K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
-{
-    fn drop(&mut self) {
-        // dropping the inner guard will
-        // 1) synchronously release its write lock on the store's value
-        // 2) trigger an (asynchronous) reactive update
-        drop(self.guard.take());
-
-        // now that the write lock is release, we can get a read lock to refresh this keyed field
-        // based on the new value
-        self.inner.update_keys();
-
-        if !self.untracked {
-            self.inner.notify();
-        }
-
-        // reactive updates happen on the next tick
+        self.refresh.untracked = true;
+        self.guard.untrack();
     }
 }
 
@@ -444,23 +497,46 @@ where
     type Value = T;
 
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        let guard = self.writer()?;
-        Some(KeyedSubfieldWriteGuard {
-            inner: self.clone(),
-            guard: Some(guard),
-            untracked: false,
-        })
+        self.keyed_write_guard(false)
     }
 
     fn try_write_untracked(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
+        self.keyed_write_guard(true)
+    }
+}
+
+impl<Inner, Prev, K, T> KeyedSubfield<Inner, Prev, K, T>
+where
+    Self: Clone,
+    for<'a> &'a T: IntoIterator,
+    T: 'static,
+    Inner: StoreField<Value = Prev>,
+    Prev: 'static,
+    K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
+{
+    fn keyed_write_guard(
+        &self,
+        untracked: bool,
+    ) -> Option<
+        KeyedSubfieldWriteGuard<
+            Inner,
+            Prev,
+            K,
+            T,
+            <Self as StoreField>::Writer,
+        >,
+    > {
         let mut guard = self.writer()?;
+        // it notifies nothing itself: `RefreshKeysOnDrop` notifies, after the keys are updated
         guard.untrack();
         Some(KeyedSubfieldWriteGuard {
-            inner: self.clone(),
-            guard: Some(guard),
-            untracked: true,
+            guard,
+            refresh: RefreshKeysOnDrop {
+                field: self.clone(),
+                untracked,
+            },
         })
     }
 }
@@ -550,6 +626,46 @@ where
         .flatten()
         .map(|(_, idx)| idx)
     }
+
+    /// Whether the collection has this key's entry at `index`: for a collection that finds
+    /// entries by position, that the entry there has this key.
+    fn finds(&self, collection: &T, index: usize) -> bool {
+        collection.keyed(index, &self.key).is_some()
+            && (!T::BY_POSITION
+                || collection
+                    .into_iter()
+                    .nth(index)
+                    .map(self.inner.key_fn)
+                    .is_some_and(|key| key == self.key))
+    }
+
+    /// Takes a guard with `take` and finds this key's index in the collection it gives.
+    ///
+    /// The index comes from the keys last read from the collection, which the collection may
+    /// have changed since (written through the store, or a parent field, rather than through
+    /// this keyed field). If the entry is not where they say, the guard is dropped (the lock
+    /// has to be free to read the keys), the keys are read again, and the lookup is tried
+    /// once more; `None` if the key is not in the collection. The index is resolved before
+    /// each guard is taken: resolving may read the collection, which a write guard held by
+    /// this thread would refuse.
+    fn guard_at_key<G>(
+        &self,
+        take: impl Fn() -> Option<G>,
+    ) -> Option<(G, usize)>
+    where
+        G: Deref<Target = T>,
+    {
+        if let Some(index) = self.resolve_index() {
+            let guard = take()?;
+            if self.finds(&guard, index) {
+                return Some((guard, index));
+            }
+        }
+        self.inner.update_keys();
+        let index = self.resolve_index()?;
+        let guard = take()?;
+        self.finds(&guard, index).then_some((guard, index))
+    }
 }
 
 impl<Inner, Prev, K, T> StoreField for AtKeyed<Inner, Prev, K, T>
@@ -575,38 +691,34 @@ where
         >,
     >;
 
+    // A store that has no key map (it was disposed) has no entry for the key: the path ends at
+    // the collection, as it does for a key that is not in the collection.
     fn path(&self) -> impl IntoIterator<Item = StorePathSegment> {
         let inner = self.inner.path().into_iter().collect::<StorePath>();
-        let keys = self
-            .inner
-            .keys()
-            .expect("using keys on a store with no keys");
-        let this = keys
-            .with_field_keys(
+        let this = self.inner.keys().and_then(|keys| {
+            keys.with_field_keys(
                 inner.clone(),
                 |keys| (keys.get(&self.key), vec![]),
                 || self.inner.latest_keys(),
             )
             .flatten()
-            .map(|(path, _)| path);
+            .map(|(path, _)| path)
+        });
         inner.into_iter().chain(this)
     }
 
     fn path_unkeyed(&self) -> impl IntoIterator<Item = StorePathSegment> {
         let inner =
             self.inner.path_unkeyed().into_iter().collect::<StorePath>();
-        let keys = self
-            .inner
-            .keys()
-            .expect("using keys on a store with no keys");
-        let this = keys
-            .with_field_keys(
+        let this = self.inner.keys().and_then(|keys| {
+            keys.with_field_keys(
                 inner.clone(),
                 |keys| (keys.get(&self.key), vec![]),
                 || self.inner.latest_keys(),
             )
             .flatten()
-            .map(|(_, idx)| StorePathSegment(idx));
+            .map(|(_, idx)| StorePathSegment(idx))
+        });
         inner.into_iter().chain(this)
     }
 
@@ -618,26 +730,31 @@ where
         self.inner.get_trigger_unkeyed(path)
     }
 
+    // A guard is only made once its entry was found in the collection it holds (see
+    // `guard_at_key`), and its lock keeps the collection as it is while it lives, so the
+    // lookups below find the entry again.
     fn reader(&self) -> Option<Self::Reader> {
-        let inner = self.inner.reader()?;
-        let index = self.resolve_index()?;
+        let (inner, index) = self.guard_at_key(|| self.inner.reader())?;
         Some(MappedMutArc::new(
             inner,
             {
                 let key = self.key.clone();
-                move |n| n.keyed(index, &key)
+                move |n| held(n.keyed(index, &key))
             },
             {
                 let key = self.key.clone();
-                move |n| n.keyed_mut(index, &key)
+                move |n| held(n.keyed_mut(index, &key))
             },
         ))
     }
 
     fn writer(&self) -> Option<Self::Writer> {
-        let mut inner = self.inner.writer()?;
-        inner.untrack();
-        let index = self.resolve_index()?;
+        // untracked: a guard dropped without being used notifies nothing
+        let (inner, index) = self.guard_at_key(|| {
+            let mut inner = self.inner.writer()?;
+            inner.untrack();
+            Some(inner)
+        })?;
         let triggers = self.triggers_for_current_path();
         Some(WriteGuard::new(
             triggers,
@@ -645,11 +762,11 @@ where
                 inner,
                 {
                     let key = self.key.clone();
-                    move |n| n.keyed(index, &key)
+                    move |n| held(n.keyed(index, &key))
                 },
                 {
                     let key = self.key.clone();
-                    move |n| n.keyed_mut(index, &key)
+                    move |n| held(n.keyed_mut(index, &key))
                 },
             ),
         ))
@@ -788,18 +905,24 @@ where
     K: Debug + Send + Sync + PartialEq + Eq + Hash + 'static,
 {
     /// Generates a new set of keys and registers those keys with the parent store.
+    ///
+    /// A store that has no key map (it was disposed) has no keys to update.
     pub fn update_keys(&self) {
         let inner_path = self.path().into_iter().collect();
-        let keys = self
-            .inner
-            .keys()
-            .expect("updating keys on a store with no keys");
+        let Some(keys) = self.inner.keys() else {
+            return;
+        };
 
         // generating the latest keys out here means that if we have
         // nested keyed fields, the second field will not try to take a
         // read-lock on the key map to get the field while the first field
         // is still holding the write-lock in the closure below
-        let latest = self.latest_keys();
+        //
+        // a collection that cannot be read now keeps the keys it had: updating them to none
+        // would drop every entry's key slot, and with it their subscriptions
+        let Some(latest) = self.read_keys() else {
+            return;
+        };
         keys.with_field_keys(
             inner_path,
             |keys| ((), keys.update(latest)),
