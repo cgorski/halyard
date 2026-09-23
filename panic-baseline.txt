@@ -9,7 +9,7 @@ halyard_const_str_slice_concat 31
 halyard_dom 3
 halyard_hot_reload 52
 halyard_hydration_context 0
-halyard_integration_utils 3
+halyard_integration_utils 0
 halyard_macro 37
 halyard_macro_diagnostics 4
 halyard_meta 20

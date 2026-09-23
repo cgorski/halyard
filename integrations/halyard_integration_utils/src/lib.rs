@@ -45,7 +45,7 @@ pub trait ExtendResponse: Sized {
         async move {
             let prefetches = PrefetchLazyFn::default();
 
-            let (owner, stream) = build_response(
+            let (owner, sc, stream) = build_response_with_shared_context(
                 app_fn,
                 additional_context,
                 stream_builder,
@@ -53,8 +53,6 @@ pub trait ExtendResponse: Sized {
             );
 
             owner.with(|| provide_context(prefetches.clone()));
-
-            let sc = owner.shared_context().unwrap();
 
             let stream = stream.await.ready_chunks(32).map(|n| n.join(""));
 
@@ -152,11 +150,43 @@ pub fn build_response<IV>(
 where
     IV: IntoView + 'static,
 {
+    let (owner, _, stream) = build_response_with_shared_context(
+        app_fn,
+        additional_context,
+        stream_builder,
+        is_islands_router_navigation,
+    );
+    (owner, stream)
+}
+
+/// [`build_response`], also returning the request's shared context.
+///
+/// The root owner is created with this shared context and every owner beneath it shares
+/// it, so the page's resources, errors and deferred futures are registered with it. Holding
+/// it, rather than asking an owner for it, means it cannot be missing.
+fn build_response_with_shared_context<IV>(
+    app_fn: impl FnOnce() -> IV + Send + 'static,
+    additional_context: impl FnOnce() + Send + 'static,
+    stream_builder: fn(
+        IV,
+        BoxedFnOnce<PinnedStream<String>>,
+        bool,
+    ) -> PinnedFuture<PinnedStream<String>>,
+    is_islands_router_navigation: bool,
+) -> (
+    Owner,
+    Arc<dyn SharedContext + Send + Sync>,
+    PinnedFuture<PinnedStream<String>>,
+)
+where
+    IV: IntoView + 'static,
+{
     let shared_context = Arc::new(SsrSharedContext::new())
         as Arc<dyn SharedContext + Send + Sync>;
     let owner = Owner::new_root(Some(Arc::clone(&shared_context)));
     let stream = Box::pin(Sandboxed::new({
         let owner = owner.clone();
+        let shared_context = Arc::clone(&shared_context);
         async move {
             let stream = owner.with(|| {
                 additional_context();
@@ -169,19 +199,13 @@ where
                     .map(|nonce| format!(" nonce=\"{nonce}\""))
                     .unwrap_or_default();
 
-                let shared_context = Owner::current_shared_context().unwrap();
-
-                let chunks = Box::new({
-                    let shared_context = shared_context.clone();
-                    move || {
-                        Box::pin(shared_context.pending_data().unwrap().map(
-                            move |chunk| {
-                                format!("<script{nonce}>{chunk}</script>")
-                            },
-                        ))
-                            as Pin<Box<dyn Stream<Item = String> + Send>>
-                    }
-                });
+                // the request's own shared context, not the current owner's: the app can
+                // leave another owner current (one without a shared context, or one it has
+                // dropped), but the page's data was registered with this one
+                let chunks: BoxedFnOnce<PinnedStream<String>> =
+                    Box::new(move || {
+                        data_scripts(shared_context.pending_data(), nonce)
+                    });
 
                 // convert app to appropriate response type
                 // and chain the app stream, followed by chunks
@@ -197,7 +221,32 @@ where
             stream.await
         }
     }));
-    (owner, stream)
+    (owner, shared_context, stream)
+}
+
+/// The page's server data (resolved resources, errors, pending resources and incomplete
+/// chunks) as `<script>` tags, streamed after the app's HTML.
+///
+/// Without pending data there is nothing to serialise: the page streams without these
+/// scripts, and the client, finding no server data, loads the page's resources itself, as
+/// in client-side rendering. The server's shared context always has pending data; only
+/// another implementation of [`SharedContext`] can have none.
+fn data_scripts(
+    pending_data: Option<halyard_hydration_context::PinnedStream<String>>,
+    nonce: String,
+) -> PinnedStream<String> {
+    let Some(pending_data) = pending_data else {
+        halyard::logging::warn!(
+            "[halyard] The shared context has no data to send with this page: it is \
+             streamed without its data scripts, and the browser loads its resources \
+             itself."
+        );
+        return Box::pin(futures::stream::empty());
+    };
+    Box::pin(
+        pending_data
+            .map(move |chunk| format!("<script{nonce}>{chunk}</script>")),
+    )
 }
 
 pub fn static_file_path(options: &HalyardOptions, path: &str) -> String {
@@ -208,4 +257,43 @@ pub fn static_file_path(options: &HalyardOptions, path: &str) -> String {
         trimmed_path
     };
     format!("{}/{}.html", options.site_root, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::executor::block_on;
+
+    /// A [`SharedContext`] can answer `pending_data()` with `None`. That was
+    /// `pending_data().unwrap()`: a panic that failed the request. Now there is nothing to
+    /// serialise, and the page streams without data scripts.
+    #[test]
+    fn no_pending_data_streams_no_data_scripts() {
+        let scripts =
+            block_on(data_scripts(None, String::new()).collect::<Vec<_>>());
+
+        assert!(scripts.is_empty(), "expected no scripts, got: {scripts:?}");
+    }
+
+    /// Each chunk of pending data becomes one `<script>` tag with the request's nonce.
+    #[test]
+    fn each_chunk_of_pending_data_becomes_a_script_with_the_nonce() {
+        let pending_data = SsrSharedContext::new().pending_data();
+        assert!(pending_data.is_some());
+
+        let scripts = block_on(
+            data_scripts(pending_data, " nonce=\"abc\"".to_owned())
+                .collect::<Vec<_>>(),
+        );
+
+        assert_eq!(
+            scripts,
+            [
+                "<script nonce=\"abc\">__RESOLVED_RESOURCES=[];\
+                 __SERIALIZED_ERRORS=[];__PENDING_RESOURCES=[];\
+                 __RESOURCE_RESOLVERS=[];</script>",
+                "<script nonce=\"abc\">__INCOMPLETE_CHUNKS=[];</script>",
+            ]
+        );
+    }
 }
