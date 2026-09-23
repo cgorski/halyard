@@ -12,12 +12,15 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-#[cfg(feature = "browser")]
+// compiled for the native tests too; exported only with `browser`
+#[cfg(any(feature = "browser", test))]
 #[cfg_attr(docsrs, doc(cfg(feature = "browser")))]
 mod csr;
 #[cfg(feature = "browser")]
 #[cfg_attr(docsrs, doc(cfg(feature = "browser")))]
 mod hydrate;
+#[cfg(any(feature = "browser", test))]
+mod page_data;
 mod ssr;
 #[cfg(feature = "browser")]
 pub use csr::*;
@@ -89,11 +92,13 @@ pub trait SharedContext: Debug {
     /// always return [`None`].
     fn read_data(&self, id: &SerializedDataId) -> Option<String>;
 
-    /// Returns a [`Future`] that resolves with a `String` that should
-    /// be deserialized once the given piece of server data has resolved.
+    /// Returns the data for `id` once the server has sent it, as a `String` that should
+    /// be deserialized, or [`None`] if it has not sent any.
     ///
-    /// On the server and in client-side rendered implementations, this should
-    /// return a [`Future`] that is immediately ready with [`None`].
+    /// In the browser, hydration starts once the whole page (with every data script the
+    /// server streamed) has been parsed, so this is what [`read_data`](Self::read_data)
+    /// returns. On the server and in client-side rendered implementations, this should
+    /// always return [`None`].
     fn await_data(&self, id: &SerializedDataId) -> Option<String>;
 
     /// Returns some [`Stream`] of HTML that contains JavaScript `<script>` tags defining

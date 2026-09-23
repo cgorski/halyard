@@ -1,79 +1,108 @@
-// #[wasm_bindgen(thread_local)] is deprecated in wasm-bindgen 0.2.96
-// but the replacement is also only shipped in that version
-// as a result, we'll just allow deprecated for now
-#![allow(deprecated)]
-
 use super::{SerializedDataId, SharedContext};
-use crate::{PinnedFuture, PinnedStream};
+use crate::{
+    page_data::{self, JsValueLike, PageDataError, Parsed},
+    PinnedFuture, PinnedStream,
+};
 use core::fmt::Debug;
 use halyard_throw_error::{Error, ErrorId};
-use js_sys::Array;
-use std::{
-    fmt::Display,
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        LazyLock,
-    },
+use js_sys::{Array, Reflect};
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    LazyLock,
 };
-use wasm_bindgen::{prelude::wasm_bindgen, JsCast};
+use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsValue};
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(thread_local)]
-    static __RESOLVED_RESOURCES: Array;
-
-    #[wasm_bindgen(thread_local)]
-    static __SERIALIZED_ERRORS: Array;
-
-    #[wasm_bindgen(thread_local)]
-    static __INCOMPLETE_CHUNKS: Array;
+    #[wasm_bindgen(catch, js_namespace = console, js_name = warn)]
+    fn console_warn(message: &str) -> Result<(), JsValue>;
 }
 
-fn serialized_errors() -> Vec<(SerializedDataId, ErrorId, Error)> {
-    __SERIALIZED_ERRORS.with(|s| {
-        s.iter()
-            .flat_map(|value| {
-                value.dyn_ref::<Array>().map(|value| {
-                    let error_boundary_id =
-                        value.get(0).as_f64().unwrap() as usize;
-                    let error_id = value.get(1).as_f64().unwrap() as usize;
-                    let value = value
-                        .get(2)
-                        .as_string()
-                        .expect("Expected a [number, string] tuple");
-                    (
-                        SerializedDataId(error_boundary_id),
-                        ErrorId::from(error_id),
-                        Error::from(SerializedError(value)),
-                    )
-                })
-            })
-            .collect()
-    })
+/// Logs why some of the hydration data in the page is being left out.
+fn warn(error: &PageDataError) {
+    // if even `console.warn` throws, there is nowhere left to report it
+    _ = console_warn(&format!(
+        "[halyard] Ignoring hydration data from the server: {error}. The \
+         affected data is loaded on the client instead."
+    ));
 }
 
-fn incomplete_chunks() -> Vec<SerializedDataId> {
-    __INCOMPLETE_CHUNKS.with(|i| {
-        i.iter()
-            .map(|value| {
-                let id = value.as_f64().unwrap() as usize;
-                SerializedDataId(id)
-            })
-            .collect()
-    })
-}
+impl JsValueLike for JsValue {
+    fn is_missing(&self) -> bool {
+        self.is_undefined()
+    }
 
-/// An error that has been serialized across the network boundary.
-#[derive(Debug, Clone)]
-struct SerializedError(String);
+    fn number(&self) -> Option<f64> {
+        self.as_f64()
+    }
 
-impl Display for SerializedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.0, f)
+    fn string(&self) -> Option<String> {
+        self.as_string()
+    }
+
+    fn items(&self) -> Option<Vec<Self>> {
+        self.dyn_ref::<Array>().map(|array| array.iter().collect())
+    }
+
+    fn type_of(&self) -> String {
+        if self.is_null() {
+            "null".to_owned()
+        } else {
+            self.js_typeof().as_string().unwrap_or_default()
+        }
     }
 }
 
-impl std::error::Error for SerializedError {}
+// Each global is read once per page load (and any problem with it logged once), as the
+// `#[wasm_bindgen(thread_local)]` statics that these replace were. Unlike those, a
+// missing global is not a `ReferenceError` thrown through the application.
+thread_local! {
+    static RESOLVED_RESOURCES: Option<Array> =
+        global_array(page_data::RESOLVED_RESOURCES).inspect_err(warn).ok();
+    static SERIALIZED_ERRORS: Vec<(SerializedDataId, ErrorId, Error)> =
+        parse_global(page_data::SERIALIZED_ERRORS, page_data::serialized_errors);
+    static INCOMPLETE_CHUNKS: Vec<SerializedDataId> =
+        parse_global(page_data::INCOMPLETE_CHUNKS, page_data::incomplete_chunks);
+}
+
+/// Reads the global array `name` that the server's data script defines.
+fn global_array(name: &'static str) -> Result<Array, PageDataError> {
+    let value = Reflect::get(&js_sys::global(), &JsValue::from_str(name))
+        .map_err(|error| PageDataError::Unreadable {
+            global: name,
+            reason: format!("{error:?}"),
+        })?;
+    value
+        .dyn_into::<Array>()
+        .map_err(|value| page_data::not_an_array(name, &value))
+}
+
+/// Reads and parses the global array `name`, and logs whatever had to be left out.
+fn parse_global<T>(
+    name: &'static str,
+    parse: fn(&[JsValue]) -> Parsed<T>,
+) -> Vec<T> {
+    let entries: Vec<JsValue> = match global_array(name) {
+        Ok(array) => array.iter().collect(),
+        Err(error) => {
+            warn(&error);
+            return Vec::new();
+        }
+    };
+    let (values, malformed) = parse(&entries);
+    if let Some(error) = malformed {
+        warn(&error);
+    }
+    values
+}
+
+fn serialized_errors() -> Vec<(SerializedDataId, ErrorId, Error)> {
+    SERIALIZED_ERRORS.try_with(Clone::clone).unwrap_or_default()
+}
+
+fn incomplete_chunks() -> Vec<SerializedDataId> {
+    INCOMPLETE_CHUNKS.try_with(Clone::clone).unwrap_or_default()
+}
 
 #[derive(Default)]
 /// The shared context that should be used in the browser while hydrating.
@@ -131,11 +160,24 @@ impl SharedContext for HydrateSharedContext {
     fn write_async(&self, _id: SerializedDataId, _fut: PinnedFuture<String>) {}
 
     fn read_data(&self, id: &SerializedDataId) -> Option<String> {
-        __RESOLVED_RESOURCES.with(|r| r.get(id.0 as u32).as_string())
+        RESOLVED_RESOURCES
+            .try_with(|resources| {
+                let resources = resources.as_ref()?;
+                let index =
+                    page_data::resource_index(id).inspect_err(warn).ok()?;
+                page_data::resolved_resource(id, &resources.get(index))
+                    .inspect_err(warn)
+                    .ok()
+                    .flatten()
+            })
+            .ok()
+            .flatten()
     }
 
-    fn await_data(&self, _id: &SerializedDataId) -> Option<String> {
-        todo!()
+    fn await_data(&self, id: &SerializedDataId) -> Option<String> {
+        // halyard's bootstrap script hydrates once the document has been parsed, so every
+        // data script that the server streamed has run: what is not here now never will be
+        self.read_data(id)
     }
 
     fn pending_data(&self) -> Option<PinnedStream<String>> {

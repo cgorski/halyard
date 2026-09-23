@@ -18,6 +18,7 @@ serde = { features = ["derive"] , workspace = true, default-features = true }
 wasm-bindgen = { workspace = true, optional = true , default-features = true }
 js-sys = { optional = true , workspace = true, default-features = true }
 pin-project-lite = { workspace = true, default-features = true }
+thiserror = { workspace = true }
 
 [features]
 browser = ["dep:wasm-bindgen", "dep:js-sys"]

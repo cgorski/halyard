@@ -24,9 +24,10 @@ impl SharedContext for CsrSharedContext {
         None
     }
 
+    /// Client-side rendering has no server data to wait for.
     #[inline(always)]
     fn await_data(&self, _id: &SerializedDataId) -> Option<String> {
-        todo!()
+        None
     }
 
     #[inline(always)]
@@ -95,5 +96,22 @@ impl SharedContext for CsrSharedContext {
     #[inline(always)]
     fn get_incomplete_chunk(&self, _id: &SerializedDataId) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `await_data` used to be `todo!()`: a panic, which aborts the application in the
+    /// browser. With no server data it answers `None`, as `read_data` does, and the
+    /// caller loads the data on the client.
+    #[test]
+    fn await_data_is_none_without_server_data() {
+        let context = CsrSharedContext;
+        let id = context.next_id();
+
+        assert_eq!(context.await_data(&id), None);
+        assert_eq!(context.read_data(&id), None);
     }
 }

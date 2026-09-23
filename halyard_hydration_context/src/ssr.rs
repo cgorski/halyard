@@ -175,8 +175,12 @@ impl SharedContext for SsrSharedContext {
         // resolved synchronous resources and errors
         initial_chunk.push_str("__RESOLVED_RESOURCES=[");
         for resolved in sync_data {
-            resolved.write_to_buf(&mut initial_chunk);
-            initial_chunk.push(',');
+            // written whole or not at all: a value left out is loaded by the client
+            let mut entry = String::new();
+            if resolved.write_to_buf(&mut entry).is_ok() {
+                initial_chunk.push_str(&entry);
+                initial_chunk.push(',');
+            }
         }
         initial_chunk.push_str("];");
 
@@ -326,11 +330,13 @@ impl Stream for AsyncDataStream {
 struct ResolvedData(SerializedDataId, String);
 
 impl ResolvedData {
-    pub fn write_to_buf(&self, buf: &mut String) {
+    /// Fails only if a formatting implementation does; those used here (`usize`, `str`)
+    /// never do, and writing to a `String` cannot fail by itself.
+    pub fn write_to_buf(&self, buf: &mut String) -> std::fmt::Result {
         let ResolvedData(id, ser) = self;
         // escapes < to prevent it being interpreted as another opening HTML tag
         let ser = ser.replace('<', "\\u003c");
-        write!(buf, "{}: {:?}", id.0, ser).unwrap();
+        write!(buf, "{}: {:?}", id.0, ser)
     }
 }
 

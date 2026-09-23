@@ -1726,6 +1726,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "serde",
+ "thiserror 2.0.17",
  "wasm-bindgen",
 ]
 
