@@ -12,11 +12,17 @@ This is a least common denominator implementation in many ways. Limitations incl
 - no "join handle" or other result is returned from the spawn
 - the `Future` must output `()`
 
-```rust
-use any_spawner::Executor;
+Spawning never panics: a task that cannot be spawned (for example, before any executor is
+set) is dropped without running, and the first one dropped for each reason is logged.
 
-Executor::init_futures_executor()
-    .expect("executor should only be initialized once");
+```rust
+use halyard_any_spawner::{Executor, ExecutorError};
+
+match Executor::init_futures_executor() {
+    // `AlreadySet`: an executor was set before, and it stays
+    Ok(()) | Err(ExecutorError::AlreadySet) => {}
+    Err(error) => eprintln!("no executor: {error}"),
+}
 
 // spawn a thread-safe Future
 Executor::spawn(async { /* ... */ });

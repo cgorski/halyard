@@ -68,7 +68,9 @@ pub struct HalyardOptions {
     /// Can be used to load dev constants and keys v prod,
     /// or change things based on the deployment environment.
     ///
-    /// I recommend passing in the result of `env::var("HALYARD_ENV")`.
+    /// I recommend passing in `Env::try_from(&env::var("HALYARD_ENV"))?`, which is
+    /// [`Env::DEV`] when the variable is not set, and an error when it is set to
+    /// something else than `dev`/`development`/`prod`/`production`.
     #[builder(setter(into), default=default_env())]
     #[serde(default = "default_env")]
     pub env: Env,
@@ -246,7 +248,11 @@ impl HalyardOptions {
     fn try_from_env() -> Result<Self, HalyardConfigError> {
         let output_name = halyard_env_w_default("OUTPUT_NAME", "")?;
         if output_name.is_empty() {
-            eprintln!(
+            use std::io::Write;
+            // `eprintln!` panics if standard error is closed; with nowhere left to
+            // report the warning, it is dropped
+            _ = writeln!(
+                std::io::stderr(),
                 "Neither HALYARD_OUTPUT_NAME nor LEPTOS_OUTPUT_NAME is set, so \
                  `output_name` is empty and the client JS/WASM URLs will be \
                  wrong. Either\n 1. pass Some(\"Cargo.toml\") to \
@@ -391,11 +397,9 @@ fn env_from_str(input: &str) -> Result<Env, HalyardConfigError> {
     match sanitized.as_ref() {
         ENV_DEV_KEY_SHORT | ENV_DEV_KEY_LONG => Ok(Env::DEV),
         ENV_PROD_KEY_SHORT | ENV_PROD_KEY_LONG => Ok(Env::PROD),
-        _ => Err(HalyardConfigError::EnvVarError(format!(
-            "{input} is not a supported environment. Use either \
-             `{ENV_DEV_KEY_SHORT}`, `{ENV_DEV_KEY_LONG}`, \
-             `{ENV_PROD_KEY_SHORT}`, or `{ENV_PROD_KEY_LONG}`.",
-        ))),
+        _ => Err(HalyardConfigError::InvalidEnv {
+            value: input.to_string(),
+        }),
     }
 }
 
@@ -406,19 +410,24 @@ impl FromStr for Env {
     }
 }
 
-impl From<&str> for Env {
-    fn from(str: &str) -> Self {
-        env_from_str(str).unwrap_or_else(|err| panic!("{}", err))
+/// Parses `dev`, `development`, `prod` or `production`, in any case.
+impl TryFrom<&str> for Env {
+    type Error = HalyardConfigError;
+
+    fn try_from(str: &str) -> Result<Self, Self::Error> {
+        env_from_str(str)
     }
 }
 
-impl From<&Result<String, VarError>> for Env {
-    fn from(input: &Result<String, VarError>) -> Self {
+/// Parses the result of `std::env::var("HALYARD_ENV")`: an unset (or unreadable)
+/// variable is the default, [`Env::DEV`].
+impl TryFrom<&Result<String, VarError>> for Env {
+    type Error = HalyardConfigError;
+
+    fn try_from(input: &Result<String, VarError>) -> Result<Self, Self::Error> {
         match input {
-            Ok(str) => {
-                env_from_str(str).unwrap_or_else(|err| panic!("{}", err))
-            }
-            Err(_) => Self::default(),
+            Ok(str) => env_from_str(str),
+            Err(_) => Ok(Self::default()),
         }
     }
 }
@@ -480,12 +489,11 @@ pub enum ReloadWSProtocol {
 fn ws_from_str(input: &str) -> Result<ReloadWSProtocol, HalyardConfigError> {
     let sanitized = input.to_lowercase();
     match sanitized.as_ref() {
-        "ws" | "WS" => Ok(ReloadWSProtocol::WS),
-        "wss" | "WSS" => Ok(ReloadWSProtocol::WSS),
-        _ => Err(HalyardConfigError::EnvVarError(format!(
-            "{input} is not a supported websocket protocol. Use only `ws` or \
-             `wss`.",
-        ))),
+        "ws" => Ok(ReloadWSProtocol::WS),
+        "wss" => Ok(ReloadWSProtocol::WSS),
+        _ => Err(HalyardConfigError::InvalidReloadWsProtocol {
+            value: input.to_string(),
+        }),
     }
 }
 
@@ -496,17 +504,24 @@ impl FromStr for ReloadWSProtocol {
     }
 }
 
-impl From<&str> for ReloadWSProtocol {
-    fn from(str: &str) -> Self {
-        ws_from_str(str).unwrap_or_else(|err| panic!("{}", err))
+/// Parses `ws` or `wss`, in any case.
+impl TryFrom<&str> for ReloadWSProtocol {
+    type Error = HalyardConfigError;
+
+    fn try_from(str: &str) -> Result<Self, Self::Error> {
+        ws_from_str(str)
     }
 }
 
-impl From<&Result<String, VarError>> for ReloadWSProtocol {
-    fn from(input: &Result<String, VarError>) -> Self {
+/// Parses the result of `std::env::var("HALYARD_RELOAD_WS_PROTOCOL")`: an unset (or
+/// unreadable) variable is the default, [`ReloadWSProtocol::WS`].
+impl TryFrom<&Result<String, VarError>> for ReloadWSProtocol {
+    type Error = HalyardConfigError;
+
+    fn try_from(input: &Result<String, VarError>) -> Result<Self, Self::Error> {
         match input {
-            Ok(str) => ws_from_str(str).unwrap_or_else(|err| panic!("{}", err)),
-            Err(_) => Self::default(),
+            Ok(str) => ws_from_str(str),
+            Err(_) => Ok(Self::default()),
         }
     }
 }
@@ -519,11 +534,22 @@ impl TryFrom<String> for ReloadWSProtocol {
     }
 }
 
-/// Returns the byte index of the line starting with `prefix`.
-fn find_line_starting_with(text: &str, prefix: &str) -> Option<usize> {
-    text.split_inclusive('\n')
-        .find(|line| line.starts_with(prefix))
-        .map(|line| line.as_ptr() as usize - text.as_ptr() as usize)
+/// Finds the first line of `text` that starts with `prefix`, and returns how many lines
+/// come before it, and the text from its start to the end.
+fn find_line_starting_with<'a>(
+    text: &'a str,
+    prefix: &str,
+) -> Option<(usize, &'a str)> {
+    let mut rest = text;
+    let mut lines_before = 0_usize;
+    loop {
+        if rest.starts_with(prefix) {
+            return Some((lines_before, rest));
+        }
+        (_, rest) = rest.split_once('\n')?;
+        // one line per newline, so it cannot pass `text.len()`
+        lines_before = lines_before.checked_add(1)?;
+    }
 }
 
 /// Loads [`HalyardOptions`] from a Cargo.toml text content with layered overrides.
@@ -543,7 +569,7 @@ fn find_line_starting_with(text: &str, prefix: &str) -> Option<usize> {
 pub fn get_config_from_str(
     text: &str,
 ) -> Result<HalyardOptions, HalyardConfigError> {
-    let (metadata_name, start) = [
+    let (metadata_name, (newlines, section_text)) = [
         "[package.metadata.halyard]",
         "[[workspace.metadata.halyard]]",
         // legacy section names
@@ -552,13 +578,12 @@ pub fn get_config_from_str(
     ]
     .iter()
     .find_map(|section| {
-        find_line_starting_with(text, section).map(|start| (section, start))
+        find_line_starting_with(text, section).map(|found| (section, found))
     })
     .ok_or(HalyardConfigError::ConfigSectionNotFound)?;
 
     // so that serde error messages have right line number
-    let newlines = text[..start].matches('\n').count();
-    let input = "\n".repeat(newlines) + &text[start..];
+    let input = "\n".repeat(newlines) + section_text;
     // so the settings will be interpreted as root level settings
     let toml = input.replace(metadata_name, "");
     let settings = Config::builder()

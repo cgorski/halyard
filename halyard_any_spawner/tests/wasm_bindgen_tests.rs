@@ -75,14 +75,16 @@ async fn test_multiple_wasm_bindgen_tasks() {
     assert_eq!(result2.unwrap(), "task2");
 }
 
-// This test verifies that spawn (not local) fails on wasm as expected
+// wasm-bindgen-futures runs every task on the current thread, so `spawn` runs a
+// thread-safe task there too (it used to panic, which aborts a release build)
 #[wasm_bindgen_test]
-#[should_panic]
-fn test_wasm_bindgen_spawn_errors() {
+async fn test_wasm_bindgen_spawn_runs_send_futures() {
     let _ = Executor::init_wasm_bindgen();
 
-    // Using should_panic to test that Executor::spawn panics in wasm
-    Executor::spawn(async {
-        // This should panic since wasm-bindgen doesn't support Send futures
+    let (tx, rx) = oneshot::channel();
+    Executor::spawn(async move {
+        tx.send(7).expect("Failed to send result");
     });
+
+    assert_eq!(rx.await.expect("the spawned task did not run"), 7);
 }

@@ -13,6 +13,18 @@ pub enum HalyardConfigError {
     ConfigError(String),
     #[error("Config Error: {0}")]
     EnvVarError(String),
+    /// The environment (`env`, `HALYARD_ENV`/`LEPTOS_ENV`) is not one halyard knows.
+    #[error(
+        "`{value}` is not a supported environment; use `dev`, `development`, `prod` or \
+         `production` (in any case)"
+    )]
+    InvalidEnv { value: String },
+    /// The hot-reload websocket protocol (`reload-ws-protocol`,
+    /// `HALYARD_RELOAD_WS_PROTOCOL`/`LEPTOS_RELOAD_WS_PROTOCOL`) is not `ws` or `wss`.
+    #[error(
+        "`{value}` is not a supported websocket protocol; use `ws` or `wss` (in any case)"
+    )]
+    InvalidReloadWsProtocol { value: String },
 }
 impl From<config::ConfigError> for HalyardConfigError {
     fn from(e: config::ConfigError) -> Self {

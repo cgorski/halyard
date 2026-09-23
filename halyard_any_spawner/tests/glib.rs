@@ -136,6 +136,45 @@ fn test_glib_tick() {
     });
 }
 
+/// Sets its flag when dropped: moved into a task, it tells a dropped task from a kept one.
+struct SetOnDrop(Arc<AtomicBool>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+// spawn_local from a thread that does not own the default main context drops the task
+// (glib panics there)
+#[test]
+#[serial]
+fn test_glib_spawn_local_off_the_owning_thread_drops_the_task() {
+    let _ = Executor::init_glib();
+    let context = MainContext::default();
+    let _owned = context
+        .acquire()
+        .expect("this thread can own the default main context");
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let ran = Arc::new(AtomicBool::new(false));
+    let spawned = std::thread::spawn({
+        let (dropped, ran) = (dropped.clone(), ran.clone());
+        move || {
+            let guard = SetOnDrop(dropped);
+            Executor::spawn_local(async move {
+                let _guard = guard;
+                ran.store(true, Ordering::SeqCst);
+            });
+        }
+    })
+    .join();
+
+    assert!(spawned.is_ok(), "spawn_local panicked");
+    assert!(dropped.load(Ordering::SeqCst), "the task was kept");
+    assert!(!ran.load(Ordering::SeqCst), "the task ran");
+}
+
 // Test Executor::poll_local with glib backend (should be a no-op)
 #[test]
 #[serial]

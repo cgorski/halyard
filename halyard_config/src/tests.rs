@@ -1,9 +1,10 @@
 use crate::{
-    env_from_str, env_w_default, env_wo_default, get_config_from_str,
-    halyard_env, halyard_env_is_set, halyard_env_w_default, ws_from_str, Env,
+    env_from_str, env_w_default, env_wo_default, errors::HalyardConfigError,
+    find_line_starting_with, get_config_from_str, halyard_env,
+    halyard_env_is_set, halyard_env_w_default, ws_from_str, Env,
     HalyardOptions, ReloadWSProtocol,
 };
-use std::{net::SocketAddr, path::Ancestors, str::FromStr};
+use std::{env::VarError, net::SocketAddr, path::Ancestors, str::FromStr};
 
 #[test]
 fn env_from_str_test() {
@@ -27,6 +28,180 @@ fn ws_from_str_test() {
     assert!(matches!(ws_from_str("WSS").unwrap(), ReloadWSProtocol::WSS));
     assert!(ws_from_str("TEST").is_err());
     assert!(ws_from_str("?").is_err());
+}
+
+/// `Env::from("staging")` used to panic; the conversion is now fallible and says what
+/// it was given.
+#[test]
+fn env_try_from_str_is_an_error_for_an_unknown_environment() {
+    assert_eq!(Env::try_from("Production").unwrap(), Env::PROD);
+    assert_eq!(Env::try_from("dev").unwrap(), Env::DEV);
+    match Env::try_from("staging") {
+        Err(HalyardConfigError::InvalidEnv { value }) => {
+            assert_eq!(value, "staging")
+        }
+        other => panic!("expected InvalidEnv, got {other:?}"),
+    }
+}
+
+/// `Env::from(&env::var(..))` used to panic on a value it did not know.
+#[test]
+fn env_try_from_a_variable_is_the_default_when_unset_and_an_error_when_unknown()
+{
+    assert_eq!(Env::try_from(&Ok("PROD".to_string())).unwrap(), Env::PROD);
+    assert_eq!(Env::try_from(&Err(VarError::NotPresent)).unwrap(), Env::DEV);
+    assert!(matches!(
+        Env::try_from(&Ok("staging".to_string())),
+        Err(HalyardConfigError::InvalidEnv { value }) if value == "staging"
+    ));
+}
+
+/// `ReloadWSProtocol::from("http")` used to panic.
+#[test]
+fn reload_ws_protocol_try_from_str_is_an_error_for_an_unknown_protocol() {
+    assert_eq!(
+        ReloadWSProtocol::try_from("Wss").unwrap(),
+        ReloadWSProtocol::WSS
+    );
+    assert_eq!(
+        ReloadWSProtocol::try_from("ws").unwrap(),
+        ReloadWSProtocol::WS
+    );
+    match ReloadWSProtocol::try_from("http") {
+        Err(HalyardConfigError::InvalidReloadWsProtocol { value }) => {
+            assert_eq!(value, "http")
+        }
+        other => panic!("expected InvalidReloadWsProtocol, got {other:?}"),
+    }
+}
+
+/// `ReloadWSProtocol::from(&env::var(..))` used to panic on a value it did not know.
+#[test]
+fn reload_ws_protocol_try_from_a_variable_is_the_default_when_unset_and_an_error_when_unknown(
+) {
+    assert_eq!(
+        ReloadWSProtocol::try_from(&Ok("WSS".to_string())).unwrap(),
+        ReloadWSProtocol::WSS
+    );
+    assert_eq!(
+        ReloadWSProtocol::try_from(&Err(VarError::NotPresent)).unwrap(),
+        ReloadWSProtocol::WS
+    );
+    assert!(matches!(
+        ReloadWSProtocol::try_from(&Ok("http".to_string())),
+        Err(HalyardConfigError::InvalidReloadWsProtocol { value }) if value == "http"
+    ));
+}
+
+#[test]
+fn invalid_values_say_what_to_use_instead() {
+    let env = HalyardConfigError::InvalidEnv {
+        value: "staging".into(),
+    }
+    .to_string();
+    assert_eq!(
+        env,
+        "`staging` is not a supported environment; use `dev`, `development`, \
+         `prod` or `production` (in any case)"
+    );
+    let ws = HalyardConfigError::InvalidReloadWsProtocol {
+        value: "http".into(),
+    }
+    .to_string();
+    assert_eq!(
+        ws,
+        "`http` is not a supported websocket protocol; use `ws` or `wss` (in any \
+         case)"
+    );
+}
+
+/// Loading the options from the environment returns the typed error for an unknown
+/// environment or protocol.
+#[test]
+fn try_from_env_returns_typed_errors_for_unknown_values() {
+    let env = temp_env::with_vars(
+        [
+            ("HALYARD_OUTPUT_NAME", Some("app")),
+            ("HALYARD_ENV", Some("staging")),
+            ("HALYARD_RELOAD_WS_PROTOCOL", None),
+            ("LEPTOS_RELOAD_WS_PROTOCOL", None),
+        ],
+        HalyardOptions::try_from_env,
+    );
+    assert!(
+        matches!(&env, Err(HalyardConfigError::InvalidEnv { value }) if value == "staging"),
+        "{env:?}"
+    );
+
+    let ws = temp_env::with_vars(
+        [
+            ("HALYARD_OUTPUT_NAME", Some("app")),
+            ("HALYARD_ENV", None),
+            ("LEPTOS_ENV", None),
+            ("HALYARD_RELOAD_WS_PROTOCOL", Some("http")),
+        ],
+        HalyardOptions::try_from_env,
+    );
+    assert!(
+        matches!(
+            &ws,
+            Err(HalyardConfigError::InvalidReloadWsProtocol { value }) if value == "http"
+        ),
+        "{ws:?}"
+    );
+}
+
+/// The section search replaced pointer arithmetic with a walk over the lines; it finds
+/// the same line, and counts the lines before it.
+#[test]
+fn find_line_starting_with_counts_the_lines_before_the_match() {
+    let prefix = "[package.metadata.halyard]";
+
+    let first = "[package.metadata.halyard]\noutput-name = \"a\"\n";
+    assert_eq!(find_line_starting_with(first, prefix), Some((0, first)));
+
+    let later =
+        "[package]\nname = \"a\"\n\n[package.metadata.halyard]\nx = 1\n";
+    assert_eq!(
+        find_line_starting_with(later, prefix),
+        Some((3, "[package.metadata.halyard]\nx = 1\n"))
+    );
+
+    let crlf = "[package]\r\n[package.metadata.halyard]\r\n";
+    assert_eq!(
+        find_line_starting_with(crlf, prefix),
+        Some((1, "[package.metadata.halyard]\r\n"))
+    );
+
+    // only at the start of a line
+    let inside = "# see [package.metadata.halyard]\n";
+    assert_eq!(find_line_starting_with(inside, prefix), None);
+    assert_eq!(find_line_starting_with("", prefix), None);
+    assert_eq!(find_line_starting_with("[package]\n", prefix), None);
+}
+
+/// A bad value in the file is an error (not a panic) that names the value.
+#[test]
+fn get_config_from_str_is_an_error_for_an_unknown_environment() {
+    let toml = r#"
+[package]
+name = "app"
+
+[package.metadata.halyard]
+output-name = "app"
+env = "staging"
+"#;
+    let config = temp_env::with_vars(
+        [("HALYARD_ENV", None::<&str>), ("LEPTOS_ENV", None)],
+        || get_config_from_str(toml),
+    );
+    match config {
+        Err(HalyardConfigError::ConfigError(message)) => assert!(
+            message.contains("`staging` is not a supported environment"),
+            "{message}"
+        ),
+        other => panic!("expected a ConfigError, got {other:?}"),
+    }
 }
 
 #[test]

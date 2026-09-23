@@ -20,6 +20,10 @@ tokio = { optional = true, default-features = false, features = [
 tracing = { optional = true , workspace = true, default-features = true }
 wasm-bindgen-futures = { optional = true , workspace = true, default-features = true }
 
+# to log a dropped task in the browser's console when `tracing` is off
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+web-sys = { workspace = true, features = ["console"] }
+
 [dev-dependencies]
 futures-lite = { default-features = false , workspace = true }
 tokio = { default-features = false, features = [
