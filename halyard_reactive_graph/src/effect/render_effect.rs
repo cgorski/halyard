@@ -1,11 +1,13 @@
 use crate::{
     channel::channel,
     effect::inner::EffectInner,
+    error::{Access, GraphError, ReportOnce},
     graph::{
         AnySubscriber, ReactiveNode, SourceSet, Subscriber, ToAnySubscriber,
         WithObserver,
     },
     owner::Owner,
+    reentry::{held_by_this_thread, lock_id, Held},
 };
 use futures::StreamExt;
 use halyard_or_poisoned::OrPoisoned;
@@ -314,15 +316,37 @@ where
     }
 
     /// Mutably accesses the current value.
+    ///
+    /// `fun` runs on the borrowed value. From inside it, this same effect's value cannot be
+    /// reached again: a nested `with_value_mut` returns `None` (and the first time, that is
+    /// logged) instead of waiting forever.
     pub fn with_value_mut<U>(
         &self,
         fun: impl FnOnce(&mut T) -> U,
     ) -> Option<U> {
-        self.value.write().or_poisoned().as_mut().map(fun)
+        static REENTERED: ReportOnce = ReportOnce::new();
+
+        let lock = lock_id(&*self.value);
+        if held_by_this_thread(lock) {
+            REENTERED.report(|| GraphError::Reentered {
+                access: Access::Write,
+                defined_at: None,
+            });
+            return None;
+        }
+        let mut value = self.value.write().or_poisoned();
+        let _held = Held::new(lock);
+        value.as_mut().map(fun)
     }
 
     /// Takes the current value, replacing it with `None`.
+    ///
+    /// From inside [`with_value_mut`](RenderEffect::with_value_mut) on the same effect, the
+    /// value is borrowed: this returns `None` instead of waiting forever.
     pub fn take_value(&self) -> Option<T> {
+        if held_by_this_thread(lock_id(&*self.value)) {
+            return None;
+        }
         self.value.write().or_poisoned().take()
     }
 }

@@ -161,6 +161,17 @@ pub trait Subscriber: ReactiveNode {
 #[derive(Clone)]
 pub struct AnySubscriber(pub usize, pub Weak<dyn Subscriber + Send + Sync>);
 
+impl AnySubscriber {
+    /// A subscriber that tracks nothing and never runs: what an effect that is not running
+    /// stands for in the graph.
+    pub(crate) fn inert() -> Self {
+        AnySubscriber(
+            0,
+            Weak::<super::Inert>::new() as Weak<dyn Subscriber + Send + Sync>,
+        )
+    }
+}
+
 impl ToAnySubscriber for AnySubscriber {
     fn to_any_subscriber(&self) -> AnySubscriber {
         self.clone()

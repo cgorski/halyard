@@ -4,6 +4,7 @@ use super::{
     ArcReadSignal, ArcRwSignal, ArcWriteSignal, ReadSignal, WriteSignal,
 };
 use crate::{
+    error::{GraphError, ReportOnce},
     graph::{ReactiveNode, SubscriberSet},
     owner::{ArenaItem, FromLocal, LocalStorage, Storage, SyncStorage},
     signal::guards::{UntrackedWriteGuard, WriteGuard},
@@ -14,7 +15,6 @@ use crate::{
     unwrap_signal,
 };
 use core::fmt::Debug;
-use guardian::ArcRwLockWriteGuardian;
 use std::{
     hash::Hash,
     panic::Location,
@@ -162,24 +162,56 @@ where
     }
 }
 
+/// A handle derived from a disposed signal (logged once).
+static DERIVED_FROM_DISPOSED: ReportOnce = ReportOnce::new();
+
+pub(crate) fn report_derived_from_disposed(
+    what: &'static str,
+    defined_at: Option<&'static Location<'static>>,
+) {
+    DERIVED_FROM_DISPOSED.report(|| GraphError::Disposed {
+        what,
+        instead: "the new handle is disposed too",
+        defined_at,
+    });
+}
+
+impl<T, S> RwSignal<T, S>
+where
+    T: 'static,
+    S: Storage<ArcRwSignal<T>>,
+{
+    /// The reference-counted form, unless the owner is gone.
+    pub(crate) fn try_to_arc(&self) -> Option<ArcRwSignal<T>> {
+        self.inner.try_get_value()
+    }
+}
+
 impl<T, S> RwSignal<T, S>
 where
     T: 'static,
     S: Storage<ArcRwSignal<T>> + Storage<ArcReadSignal<T>>,
 {
     /// Returns a read-only handle to the signal.
+    ///
+    /// If the signal has been disposed, so is the handle (and that is logged once).
     #[inline(always)]
     #[track_caller]
     pub fn read_only(&self) -> ReadSignal<T, S> {
+        let inner = match self.inner.try_get_value() {
+            Some(inner) => ArenaItem::new_with_storage(inner.read_only()),
+            None => {
+                report_derived_from_disposed(
+                    "a read-only handle was made",
+                    self.defined_at(),
+                );
+                ArenaItem::disposed()
+            }
+        };
         ReadSignal {
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: Location::caller(),
-            inner: ArenaItem::new_with_storage(
-                self.inner
-                    .try_get_value()
-                    .map(|inner| inner.read_only())
-                    .unwrap_or_else(unwrap_signal!(self)),
-            ),
+            inner,
         }
     }
 }
@@ -190,18 +222,25 @@ where
     S: Storage<ArcRwSignal<T>> + Storage<ArcWriteSignal<T>>,
 {
     /// Returns a write-only handle to the signal.
+    ///
+    /// If the signal has been disposed, so is the handle (and that is logged once).
     #[inline(always)]
     #[track_caller]
     pub fn write_only(&self) -> WriteSignal<T, S> {
+        let inner = match self.inner.try_get_value() {
+            Some(inner) => ArenaItem::new_with_storage(inner.write_only()),
+            None => {
+                report_derived_from_disposed(
+                    "a write-only handle was made",
+                    self.defined_at(),
+                );
+                ArenaItem::disposed()
+            }
+        };
         WriteSignal {
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: Location::caller(),
-            inner: ArenaItem::new_with_storage(
-                self.inner
-                    .try_get_value()
-                    .map(|inner| inner.write_only())
-                    .unwrap_or_else(unwrap_signal!(self)),
-            ),
+            inner,
         }
     }
 }
@@ -346,9 +385,7 @@ where
     type Value = ReadGuard<T, Plain<T>>;
 
     fn try_read_untracked(&self) -> Option<Self::Value> {
-        self.inner
-            .try_get_value()
-            .map(|inner| inner.read_untracked())
+        self.inner.try_get_value()?.try_read_untracked()
     }
 }
 
@@ -368,10 +405,12 @@ where
 {
     type Value = T;
 
+    /// Waits while another thread uses the value; `None` if this thread is using it (the
+    /// write is inside this signal's own `with` or `update`, or a guard of its is alive),
+    /// which would never end. That is logged once.
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        let guard = self.inner.try_with_value(|n| {
-            ArcRwLockWriteGuardian::take(Arc::clone(&n.value)).ok()
-        })??;
+        let inner = self.inner.try_get_value()?;
+        let guard = UntrackedWriteGuard::take(inner.value, self.defined_at())?;
         Some(WriteGuard::new(*self, guard))
     }
 

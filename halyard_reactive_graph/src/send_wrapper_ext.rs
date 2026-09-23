@@ -12,7 +12,7 @@ use std::{
 /// This struct can be dereferenced to `Option<T>`.
 ///
 /// If it has been given a local (`!Send`) value, that value is wrapped in a [`SendWrapper`], which
-/// allows sending it between threads but will panic if it is accessed or updated from a  
+/// allows sending it between threads but will panic if it is accessed or updated from a
 /// thread other than the one on which it was created.
 ///
 /// If it is created with `None` for a local (`!Send`) type, no `SendWrapper` is created until a
@@ -166,13 +166,9 @@ impl<T> DerefMut for SendOption<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match &mut self.inner {
             Inner::Threadsafe(value) => value,
-            Inner::Local(value) => match value {
-                Some(value) => value.deref_mut(),
-                None => {
-                    *value = Some(SendWrapper::new(None));
-                    value.as_mut().unwrap().deref_mut()
-                }
-            },
+            Inner::Local(value) => value
+                .get_or_insert_with(|| SendWrapper::new(None))
+                .deref_mut(),
         }
     }
 }

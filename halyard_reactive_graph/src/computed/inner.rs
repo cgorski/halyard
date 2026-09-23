@@ -1,15 +1,21 @@
 use crate::{
+    error::{GraphError, ReportOnce},
     graph::{
         AnySource, AnySubscriber, Observer, ReactiveNode, ReactiveNodeState,
         Source, SourceSet, Subscriber, SubscriberSet, WithObserver,
     },
     owner::{Owner, Storage, StorageAccess},
+    reentry::{held_by_this_thread, lock_id},
 };
 use halyard_or_poisoned::OrPoisoned;
 use std::{
     fmt::Debug,
+    panic::Location,
     sync::{Arc, RwLock, RwLockWriteGuard},
 };
+
+/// A memo read under a guard on its own value after its sources changed (logged once).
+static MEMO_BORROWED: ReportOnce = ReportOnce::new();
 
 pub struct MemoInner<T, S>
 where
@@ -21,6 +27,7 @@ where
     pub(crate) fun: Arc<dyn Fn(Option<T>) -> (T, bool) + Send + Sync>,
     pub(crate) owner: Owner,
     pub(crate) reactivity: RwLock<MemoInnerReactivity>,
+    pub(crate) defined_at: Option<&'static Location<'static>>,
 }
 
 pub(crate) struct MemoInnerReactivity {
@@ -47,6 +54,7 @@ where
     pub fn new(
         fun: Arc<dyn Fn(Option<T>) -> (T, bool) + Send + Sync>,
         any_subscriber: AnySubscriber,
+        defined_at: Option<&'static Location<'static>>,
     ) -> Self {
         Self {
             value: Arc::new(RwLock::new(None)),
@@ -58,6 +66,7 @@ where
                 subscribers: SubscriberSet::new(),
                 any_subscriber,
             }),
+            defined_at,
         }
     }
 }
@@ -124,6 +133,17 @@ where
         }
 
         if needs_update(&self.reactivity) {
+            // A guard on the value alive on this thread (the memo is read inside its own
+            // `with`, or while its `read` guard lives) would make the writes below wait
+            // forever. The memo keeps its previous value, and stays dirty so that it
+            // recomputes on the next read.
+            if held_by_this_thread(lock_id(&*self.value)) {
+                MEMO_BORROWED.report(|| GraphError::MemoBorrowed {
+                    defined_at: self.defined_at,
+                });
+                return false;
+            }
+
             // No deadlock risk, because we only hold the value lock.
             let value = self.value.write().or_poisoned().take();
 

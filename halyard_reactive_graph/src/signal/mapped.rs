@@ -4,13 +4,12 @@ use super::{
 };
 use crate::{
     owner::{StoredValue, SyncStorage},
-    signal::guards::WriteGuard,
+    signal::guards::{UntrackedWriteGuard, WriteGuard},
     traits::{
         DefinedAt, GetValue, IsDisposed, Notify, ReadUntracked, Track,
         UntrackableGuard, Write,
     },
 };
-use guardian::ArcRwLockWriteGuardian;
 use std::{
     fmt::Debug,
     ops::{Deref, DerefMut},
@@ -81,10 +80,12 @@ impl<T> ArcMappedSignal<T> {
             try_write: {
                 let this = inner.clone();
                 Arc::new(move || {
-                    let guard = ArcRwLockWriteGuardian::try_take(Arc::clone(
-                        &this.value,
-                    ))?
-                    .ok()?;
+                    // waits for another thread, refuses (and logs) re-entry, like the
+                    // signal's own write
+                    let guard = UntrackedWriteGuard::take(
+                        Arc::clone(&this.value),
+                        this.defined_at(),
+                    )?;
                     let mapped = WriteGuard::new(
                         this.clone(),
                         MappedMutArc::new(guard, map, map_mut),
@@ -342,6 +343,16 @@ where
         let inner = (inner.try_write)()?;
         let inner = DoubleDeref { inner };
         Some(inner)
+    }
+}
+
+impl<T> MappedSignal<T>
+where
+    T: 'static,
+{
+    /// The reference-counted form, unless the owner is gone.
+    pub(crate) fn try_to_arc(&self) -> Option<ArcMappedSignal<T>> {
+        self.inner.try_get_value()
     }
 }
 

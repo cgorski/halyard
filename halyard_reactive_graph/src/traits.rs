@@ -37,6 +37,21 @@
 //! | [`Update`]          | `fn(&mut T)`  | [`UpdateUntracked`] + [`Notify`] | Applies closure to the current value to update it, and notifies subscribers.
 //! | [`Set`]             | `T`           | [`Update`]                        | Sets the value to a new value, and notifies subscribers.
 //!
+//! ## Re-entry
+//!
+//! The closure-taking accessors ([`With`], [`WithUntracked`], [`Update`],
+//! [`UpdateUntracked`], [`WithValue`], [`UpdateValue`]) run their closure on the borrowed
+//! value: the value's lock is held while the closure runs, as it is while a guard from
+//! [`Read`], [`Write`], [`ReadValue`] or [`WriteValue`] is alive. Reaching the same value
+//! again from there cannot wait for that lock (it would wait forever: a deadlock natively, an
+//! abort in the browser). Instead:
+//! - writing it (inside its own `with` or `update`) is refused: `try_update`/`try_write`
+//!   return `None`, `try_set` returns the value back, and `set`/`update` do nothing;
+//! - reading it inside its own `update` gives `None` from the `try_*` forms;
+//!
+//! and the first such access is logged. Read what you need, let the closure return (or drop
+//! the guard), then write.
+//!
 //! ## Using the Traits
 //!
 //! These traits are designed so that you can implement as few as possible, and the rest will be
@@ -576,8 +591,8 @@ pub trait ToStream<T> {
     /// Generates a [`Stream`] that emits the new value of the signal
     /// whenever it changes.
     ///
-    /// # Panics
-    /// Panics if you try to access a signal that is owned by a reactive node that has been disposed.
+    /// Once the signal's value is gone (its owner was disposed), the stream emits nothing
+    /// more.
     #[track_caller]
     fn to_stream(&self) -> impl Stream<Item = T> + Send;
 }
@@ -597,7 +612,10 @@ where
         Effect::new_isomorphic({
             let this = self.clone();
             move |_| {
-                let _ = tx.unbounded_send(this.get());
+                // a signal whose value is gone has nothing more to send
+                if let Some(value) = this.try_get() {
+                    let _ = tx.unbounded_send(value);
+                }
             }
         });
 
@@ -657,8 +675,8 @@ pub trait IntoInner {
 
     /// Returns the inner value if this is the only reference to the signal.
     /// Otherwise, returns `None` and drops this reference.
-    /// # Panics
-    /// Panics if the inner lock is poisoned.
+    ///
+    /// A lock poisoned by a panic still gives its value.
     fn into_inner(self) -> Option<Self::Value>;
 }
 

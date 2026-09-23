@@ -79,8 +79,10 @@ pub(crate) mod channel;
 pub mod computed;
 pub mod diagnostics;
 pub mod effect;
+mod error;
 pub mod graph;
 pub mod owner;
+mod reentry;
 pub mod send_wrapper_ext;
 #[cfg(feature = "serde")]
 mod serde;
@@ -121,7 +123,10 @@ pub fn log_warning(text: Arguments) {
         not(all(target_arch = "wasm32", target_os = "unknown"))
     ))]
     {
-        eprintln!("{text}");
+        use std::io::Write;
+        // `eprintln!` panics if standard error is closed; with nowhere left to report the
+        // warning, it is dropped
+        _ = writeln!(std::io::stderr(), "{text}");
     }
 }
 

@@ -127,10 +127,12 @@ pub mod suspense {
     pub struct LocalResourceNotifier(Arc<Mutex<Option<Sender<()>>>>);
 
     impl LocalResourceNotifier {
-        /// Send the notification. If the inner channel has already been used, this does nothing.
+        /// Send the notification. If the inner channel has already been used, or nobody is
+        /// listening any more, this does nothing.
         pub fn notify(&mut self) {
             if let Some(tx) = self.0.lock().or_poisoned().take() {
-                tx.send(()).unwrap();
+                // an error means the receiver was dropped: there is nobody left to tell
+                _ = tx.send(());
             }
         }
     }
@@ -171,6 +173,23 @@ pub mod suspense {
             self.tasks.update(|tasks| {
                 tasks.remove(self.key);
             });
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use futures::channel::oneshot;
+
+        /// Nobody is listening any more (the receiver was dropped): this used to panic.
+        #[test]
+        fn notifying_when_nobody_listens_does_nothing() {
+            let (tx, rx) = oneshot::channel();
+            drop(rx);
+            let mut notifier = LocalResourceNotifier::from(tx);
+
+            notifier.notify();
+            notifier.notify();
         }
     }
 }

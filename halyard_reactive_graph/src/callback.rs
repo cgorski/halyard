@@ -13,12 +13,15 @@
 
 use crate::{
     owner::{LocalStorage, StoredValue},
-    traits::{Dispose, WithValue},
+    traits::{Dispose, GetValue, WithValue},
     IntoReactiveValue,
 };
 use std::{fmt, rc::Rc, sync::Arc};
 
 /// A wrapper trait for calling callbacks.
+///
+/// The callback's function runs with nothing of the reactive system borrowed or locked, so
+/// it may run this same callback again, or dispose of it.
 pub trait Callable<In: 'static, Out: 'static = ()> {
     /// calls the callback with the specified argument.
     ///
@@ -75,23 +78,32 @@ impl<In, Out> UnsyncCallback<In, Out> {
     }
 
     /// Returns `true` if both callbacks wrap the same underlying function pointer.
+    ///
+    /// A disposed callback matches nothing.
     #[inline]
     pub fn matches(&self, other: &Self) -> bool {
-        self.0.with_value(|self_value| {
-            other
-                .0
-                .with_value(|other_value| Rc::ptr_eq(self_value, other_value))
-        })
+        self.0
+            .try_with_value(|self_value| {
+                other.0.try_with_value(|other_value| {
+                    Rc::ptr_eq(self_value, other_value)
+                })
+            })
+            .flatten()
+            .unwrap_or(false)
     }
 }
 
 impl<In: 'static, Out: 'static> Callable<In, Out> for UnsyncCallback<In, Out> {
     fn try_run(&self, input: In) -> Option<Out> {
-        self.0.try_with_value(|fun| fun(input))
+        // a clone of the function, so that nothing is borrowed while it runs
+        let fun = self.0.try_get_value()?;
+        Some(fun(input))
     }
 
+    #[track_caller]
     fn run(&self, input: In) -> Out {
-        self.0.with_value(|fun| fun(input))
+        let fun = self.0.get_value();
+        fun(input)
     }
 }
 
@@ -153,11 +165,15 @@ impl<In, Out> fmt::Debug for Callback<In, Out> {
 
 impl<In, Out> Callable<In, Out> for Callback<In, Out> {
     fn try_run(&self, input: In) -> Option<Out> {
-        self.0.try_with_value(|fun| fun(input))
+        // a clone of the function, so that nothing is borrowed while it runs
+        let fun = self.0.try_get_value()?;
+        Some(fun(input))
     }
 
+    #[track_caller]
     fn run(&self, input: In) -> Out {
-        self.0.with_value(|f| f(input))
+        let fun = self.0.get_value();
+        fun(input)
     }
 }
 

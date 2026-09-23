@@ -22,6 +22,19 @@ use std::{
 /// and [`RwSignal`](crate::signal::RwSignal)), it is `Copy` and `'static`. Unlike the signal
 /// types, it is not reactive; accessing it does not cause effects to subscribe, and
 /// updating it does not notify anything else.
+///
+/// ## Re-entry
+///
+/// [`with_value`](crate::traits::WithValue::with_value) and
+/// [`update_value`](crate::traits::UpdateValue::update_value) run their closure on the
+/// borrowed value. From inside that closure, this same stored value cannot be replaced or
+/// updated (the change is refused: `try_set_value` hands the value back, `try_update_value`
+/// returns `None`), nor read inside `update_value` (`try_get_value` returns `None`); the
+/// first such access is logged. To run a stored closure that may change the value it is
+/// stored in, take a clone and call that:
+/// `if let Some(f) = stored.try_get_value() { f() }` (this is what
+/// [`Callback::run`](crate::callback::Callable::run) does).
+/// See also [the traits](crate::traits#re-entry).
 pub struct StoredValue<T, S = SyncStorage> {
     value: ArenaItem<ArcStoredValue<T>, S>,
     #[cfg(any(debug_assertions, halyard_debuginfo))]

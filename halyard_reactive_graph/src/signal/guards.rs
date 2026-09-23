@@ -2,6 +2,8 @@
 
 use crate::{
     computed::BlockingLock,
+    error::{Access, GraphError, ReportOnce},
+    reentry::{held_by_this_thread, lock_id, Held, SINGLE_THREADED},
     traits::{Notify, UntrackableGuard},
 };
 use core::fmt::Debug;
@@ -11,8 +13,24 @@ use std::{
     fmt::Display,
     marker::PhantomData,
     ops::{Deref, DerefMut},
-    sync::{Arc, RwLock},
+    panic::Location,
+    sync::{Arc, PoisonError, RwLock},
 };
+
+/// Re-entrant reads and writes are each logged once.
+static REENTERED_READ: ReportOnce = ReportOnce::new();
+static REENTERED_WRITE: ReportOnce = ReportOnce::new();
+
+fn report_reentered(
+    access: Access,
+    defined_at: Option<&'static Location<'static>>,
+) {
+    let once = match access {
+        Access::Read => &REENTERED_READ,
+        Access::Write => &REENTERED_WRITE,
+    };
+    once.report(|| GraphError::Reentered { access, defined_at });
+}
 
 /// A wrapper type for any kind of guard returned by [`Read`](crate::traits::Read).
 ///
@@ -93,6 +111,8 @@ where
 /// A guard that provides access to a signal's inner value.
 pub struct Plain<T: 'static> {
     guard: ArcRwLockReadGuardian<T>,
+    // after `guard`: the lock is released before it stops being recorded as held
+    _held: Held,
 }
 
 impl<T: 'static> Debug for Plain<T> {
@@ -102,11 +122,33 @@ impl<T: 'static> Debug for Plain<T> {
 }
 
 impl<T: 'static> Plain<T> {
-    /// Takes a reference-counted read guard on the given lock.
+    /// Takes a reference-counted read guard on the given lock, or `None` if it is being
+    /// written (it does not wait). A lock poisoned by a panic still gives its value.
+    ///
+    /// If this thread is the one writing it (the read is inside the value's own `update`),
+    /// that is logged, once.
     pub fn try_new(inner: Arc<RwLock<T>>) -> Option<Self> {
-        ArcRwLockReadGuardian::try_take(inner)?
-            .ok()
-            .map(|guard| Plain { guard })
+        Self::try_new_at(inner, None)
+    }
+
+    /// [`Plain::try_new`], naming where the value was created if the read is re-entrant.
+    pub(crate) fn try_new_at(
+        inner: Arc<RwLock<T>>,
+        defined_at: Option<&'static Location<'static>>,
+    ) -> Option<Self> {
+        let lock = lock_id(&*inner);
+        match ArcRwLockReadGuardian::try_take(inner) {
+            Some(taken) => Some(Plain {
+                guard: taken.unwrap_or_else(PoisonError::into_inner),
+                _held: Held::new(lock),
+            }),
+            None => {
+                if SINGLE_THREADED || held_by_this_thread(lock) {
+                    report_reentered(Access::Read, defined_at);
+                }
+                None
+            }
+        }
     }
 }
 
@@ -149,10 +191,16 @@ impl<T: 'static> Debug for AsyncPlain<T> {
 
 impl<T: 'static> AsyncPlain<T> {
     /// Takes a reference-counted async read guard on the given lock.
+    ///
+    /// Natively this waits for a writer to finish. In the browser, where a busy lock can only
+    /// be held by the code that is running now (a read inside the value's own `update`),
+    /// this returns `None`, and that is logged once.
     pub fn try_new(inner: &Arc<async_lock::RwLock<T>>) -> Option<Self> {
-        Some(Self {
-            guard: inner.blocking_read_arc(),
-        })
+        let guard = inner.blocking_read_arc();
+        if guard.is_none() {
+            report_reentered(Access::Read, None);
+        }
+        guard.map(|guard| Self { guard })
     }
 }
 
@@ -261,8 +309,22 @@ pub struct WriteGuard<S, G>
 where
     S: Notify,
 {
-    pub(crate) triggerable: Option<S>,
-    pub(crate) guard: Option<G>,
+    // Fields are dropped in the order they are declared: the inner guard first (releasing
+    // the lock), then the notifier, so that subscribers run with the value unlocked.
+    pub(crate) guard: G,
+    pub(crate) triggerable: NotifyOnDrop<S>,
+}
+
+/// Notifies its signal's subscribers when dropped, unless it was untracked.
+#[derive(Debug)]
+pub(crate) struct NotifyOnDrop<S: Notify>(Option<S>);
+
+impl<S: Notify> Drop for NotifyOnDrop<S> {
+    fn drop(&mut self) {
+        if let Some(triggerable) = self.0.as_ref() {
+            triggerable.notify();
+        }
+    }
 }
 
 impl<S, G> WriteGuard<S, G>
@@ -273,8 +335,8 @@ where
     /// triggered on drop.
     pub fn new(triggerable: S, guard: G) -> Self {
         Self {
-            triggerable: Some(triggerable),
-            guard: Some(guard),
+            guard,
+            triggerable: NotifyOnDrop(Some(triggerable)),
         }
     }
 }
@@ -286,7 +348,7 @@ where
 {
     /// Removes the triggerable type, so that it is no longer notifies when dropped.
     fn untrack(&mut self) {
-        self.triggerable.take();
+        self.triggerable.0.take();
     }
 }
 
@@ -298,13 +360,7 @@ where
     type Target = G::Target;
 
     fn deref(&self) -> &Self::Target {
-        self.guard
-            .as_ref()
-            .expect(
-                "the guard should always be in place until the Drop \
-                 implementation",
-            )
-            .deref()
+        self.guard.deref()
     }
 }
 
@@ -314,26 +370,69 @@ where
     G: DerefMut,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.guard
-            .as_mut()
-            .expect(
-                "the guard should always be in place until the Drop \
-                 implementation",
-            )
-            .deref_mut()
+        self.guard.deref_mut()
     }
 }
 
 /// A guard that provides mutable access to a signal's inner value, but does not notify of any
 /// changes.
-pub struct UntrackedWriteGuard<T: 'static>(ArcRwLockWriteGuardian<T>);
+pub struct UntrackedWriteGuard<T: 'static> {
+    guard: ArcRwLockWriteGuardian<T>,
+    // after `guard`: the lock is released before it stops being recorded as held
+    _held: Held,
+}
 
 impl<T: 'static> UntrackedWriteGuard<T> {
-    /// Creates a write guard from the given lock.
+    /// Creates a write guard from the given lock, or `None` if it is in use (it does not
+    /// wait). A lock poisoned by a panic still gives its value.
+    ///
+    /// If this thread is the one using it (the write is inside the value's own `with` or
+    /// `update`), that is logged, once.
     pub fn try_new(inner: Arc<RwLock<T>>) -> Option<Self> {
-        ArcRwLockWriteGuardian::try_take(inner)?
-            .ok()
-            .map(UntrackedWriteGuard)
+        Self::try_new_at(inner, None)
+    }
+
+    /// [`UntrackedWriteGuard::try_new`], naming where the value was created if the write is
+    /// re-entrant.
+    pub(crate) fn try_new_at(
+        inner: Arc<RwLock<T>>,
+        defined_at: Option<&'static Location<'static>>,
+    ) -> Option<Self> {
+        let lock = lock_id(&*inner);
+        match ArcRwLockWriteGuardian::try_take(inner) {
+            Some(taken) => Some(Self {
+                guard: taken.unwrap_or_else(PoisonError::into_inner),
+                _held: Held::new(lock),
+            }),
+            None => {
+                if SINGLE_THREADED || held_by_this_thread(lock) {
+                    report_reentered(Access::Write, defined_at);
+                }
+                None
+            }
+        }
+    }
+
+    /// Takes a write guard on the given lock, waiting while another thread uses it; `None`
+    /// if this thread is using it (the write is inside the value's own `with` or `update`,
+    /// or a guard of its is alive here), which would never end. That is logged, once.
+    pub(crate) fn take(
+        inner: Arc<RwLock<T>>,
+        defined_at: Option<&'static Location<'static>>,
+    ) -> Option<Self> {
+        let lock = lock_id(&*inner);
+        let taken = match ArcRwLockWriteGuardian::try_take(Arc::clone(&inner)) {
+            Some(taken) => taken,
+            None if SINGLE_THREADED || held_by_this_thread(lock) => {
+                report_reentered(Access::Write, defined_at);
+                return None;
+            }
+            None => ArcRwLockWriteGuardian::take(inner),
+        };
+        Some(Self {
+            guard: taken.unwrap_or_else(PoisonError::into_inner),
+            _held: Held::new(lock),
+        })
     }
 }
 
@@ -341,29 +440,13 @@ impl<T> Deref for UntrackedWriteGuard<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        self.guard.deref()
     }
 }
 
 impl<T> DerefMut for UntrackedWriteGuard<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
-    }
-}
-
-// Dropping the write guard will notify dependencies.
-impl<S, T> Drop for WriteGuard<S, T>
-where
-    S: Notify,
-{
-    fn drop(&mut self) {
-        // first, drop the inner guard
-        drop(self.guard.take());
-
-        // then, notify about a change
-        if let Some(triggerable) = self.triggerable.as_ref() {
-            triggerable.notify();
-        }
+        self.guard.deref_mut()
     }
 }
 

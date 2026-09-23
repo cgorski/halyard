@@ -264,9 +264,9 @@ where
         if !is_suppressing_resource_load() {
             let mut fut = (self.action_fn)(&input).fuse();
 
-            // Update the state before loading
-            self.in_flight.update(|n| *n += 1);
-            let current_version = self.dispatched.get_value();
+            // Update the state before loading (saturating, as the completions below)
+            self.in_flight.update(|n| *n = n.saturating_add(1));
+            let current_version = self.dispatched.try_get_value().unwrap_or(0);
             self.input.try_update(|inp| **inp = Some(input));
 
             // Spawn the task
@@ -285,14 +285,17 @@ where
                         // otherwise, update the value
                         result = fut => {
                             in_flight.update(|n| *n = n.saturating_sub(1));
-                            let is_latest = dispatched.get_value() <= current_version;
+                            let is_latest = dispatched
+                                .try_get_value()
+                                .is_none_or(|latest| latest <= current_version);
                             if is_latest {
-                                version.update(|n| *n += 1);
+                                // wrapping: every completion changes the version
+                                version.update(|n| *n = n.wrapping_add(1));
                                 value.update(|n| **n = Some(result));
                             }
                         }
                     }
-                    if in_flight.get_untracked() == 0 {
+                    if in_flight.try_get_untracked() == Some(0) {
                         input.update(|inp| **inp = None);
                     }
                 }
@@ -316,9 +319,9 @@ where
         if !is_suppressing_resource_load() {
             let mut fut = (self.action_fn)(&input).fuse();
 
-            // Update the state before loading
-            self.in_flight.update(|n| *n += 1);
-            let current_version = self.dispatched.get_value();
+            // Update the state before loading (saturating, as the completions below)
+            self.in_flight.update(|n| *n = n.saturating_add(1));
+            let current_version = self.dispatched.try_get_value().unwrap_or(0);
             self.input.try_update(|inp| **inp = Some(input));
 
             // Spawn the task
@@ -337,14 +340,17 @@ where
                         // otherwise, update the value
                         result = fut => {
                             in_flight.update(|n| *n = n.saturating_sub(1));
-                            let is_latest = dispatched.get_value() <= current_version;
+                            let is_latest = dispatched
+                                .try_get_value()
+                                .is_none_or(|latest| latest <= current_version);
                             if is_latest {
-                                version.update(|n| *n += 1);
+                                // wrapping: every completion changes the version
+                                version.update(|n| *n = n.wrapping_add(1));
                                 value.update(|n| **n = Some(result));
                             }
                         }
                     }
-                    if in_flight.get_untracked() == 0 {
+                    if in_flight.try_get_untracked() == Some(0) {
                         input.update(|inp| **inp = None);
                     }
                 }
@@ -534,7 +540,7 @@ where
     #[track_caller]
     pub fn pending(&self) -> ArcMemo<bool> {
         let in_flight = self.in_flight.clone();
-        ArcMemo::new(move |_| in_flight.get() > 0)
+        ArcMemo::new(move |_| in_flight.try_get().is_some_and(|n| n > 0))
     }
 }
 
@@ -740,7 +746,10 @@ where
     /// input, etc.
     #[track_caller]
     pub fn clear(&self) {
-        self.inner.try_with_value(|inner| inner.clear());
+        // on a clone, so that subscribers notified of the change run with nothing borrowed
+        if let Some(inner) = self.inner.try_get_value() {
+            inner.clear();
+        }
     }
 }
 
@@ -1163,4 +1172,68 @@ where
     Fu: Future<Output = O> + Send + 'static,
 {
     Action::new(action_fn)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traits::Set;
+    use std::time::{Duration, Instant};
+
+    fn doubler() -> ArcAction<u32, u32> {
+        _ = Executor::init_futures_executor();
+        ArcAction::new(|n: &u32| {
+            let n = *n;
+            async move { n * 2 }
+        })
+    }
+
+    /// Dispatching counts the call in flight; at the counter's limit that overflowed (a panic
+    /// in debug builds). It saturates, and the action still runs.
+    #[test]
+    fn dispatching_with_the_in_flight_counter_at_its_limit_saturates() {
+        let owner = Owner::new();
+        owner.set();
+        let action = doubler();
+        action.in_flight.set(usize::MAX);
+
+        // the local task does not run until the local executor is polled
+        action.dispatch_local(1);
+        assert_eq!(action.in_flight.try_get_untracked(), Some(usize::MAX));
+
+        // the pool may already have finished the call (and taken it out of flight)
+        action.dispatch(1);
+        let in_flight = action.in_flight.try_get_untracked();
+        assert!(
+            matches!(in_flight, Some(n) if n >= usize::MAX - 1),
+            "{in_flight:?}"
+        );
+    }
+
+    /// A completed call bumps the version; at its limit that overflowed (a panic in debug
+    /// builds, on whatever thread ran the task). It wraps, so the version still changes.
+    #[test]
+    fn completing_with_the_version_at_its_limit_wraps() {
+        let owner = Owner::new();
+        owner.set();
+
+        let local = doubler();
+        local.version.set(usize::MAX);
+        local.dispatch_local(1);
+        Executor::poll_local();
+        assert_eq!(local.version.try_get_untracked(), Some(0));
+        assert_eq!(local.value().try_get_untracked(), Some(Some(2)));
+
+        let threaded = doubler();
+        threaded.version.set(usize::MAX);
+        threaded.dispatch(2);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while threaded.version.try_get_untracked() != Some(0)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(threaded.version.try_get_untracked(), Some(0));
+        assert_eq!(threaded.value().try_get_untracked(), Some(Some(4)));
+    }
 }

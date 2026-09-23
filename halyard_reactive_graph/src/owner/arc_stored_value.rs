@@ -6,7 +6,7 @@ use std::{
     fmt::{Debug, Formatter},
     hash::Hash,
     panic::Location,
-    sync::{Arc, RwLock},
+    sync::{Arc, PoisonError, RwLock},
 };
 
 /// A reference-counted getter for any value non-reactively.
@@ -104,7 +104,8 @@ where
     type Value = ReadGuard<T, Plain<T>>;
 
     fn try_read_value(&self) -> Option<ReadGuard<T, Plain<T>>> {
-        Plain::try_new(Arc::clone(&self.value)).map(ReadGuard::new)
+        Plain::try_new_at(Arc::clone(&self.value), self.defined_at())
+            .map(ReadGuard::new)
     }
 }
 
@@ -115,7 +116,10 @@ where
     type Value = T;
 
     fn try_write_value(&self) -> Option<UntrackedWriteGuard<T>> {
-        UntrackedWriteGuard::try_new(self.value.clone())
+        UntrackedWriteGuard::try_new_at(
+            Arc::clone(&self.value),
+            self.defined_at(),
+        )
     }
 }
 
@@ -130,6 +134,11 @@ impl<T> IntoInner for ArcStoredValue<T> {
 
     #[inline(always)]
     fn into_inner(self) -> Option<Self::Value> {
-        Some(Arc::into_inner(self.value)?.into_inner().unwrap())
+        // a lock poisoned by a panic still holds the value
+        Some(
+            Arc::into_inner(self.value)?
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 }

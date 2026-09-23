@@ -1,6 +1,7 @@
 use crate::{
     channel::{channel, Receiver},
     effect::{inner::EffectInner, EffectFunction},
+    error::{GraphError, ReportOnce},
     graph::{
         AnySubscriber, ReactiveNode, SourceSet, Subscriber, ToAnySubscriber,
         WithObserver,
@@ -149,11 +150,9 @@ where
 {
     /// Stops this effect before it is disposed.
     pub fn stop(self) {
-        if let Some(inner) = self
-            .inner
-            .and_then(|this| this.try_update_value(|inner| inner.take()))
-        {
-            drop(inner);
+        if let Some(inner) = self.inner {
+            // the effect stops when its inner value is dropped, once nothing is using it
+            inner.replace_value(None);
         }
     }
 }
@@ -519,7 +518,11 @@ impl<S> ToAnySubscriber for Effect<S>
 where
     S: Storage<StoredEffect>,
 {
+    /// If the effect is not running (it was stopped or disposed, or effects do not run), this
+    /// is a subscriber that tracks nothing; that is logged once.
     fn to_any_subscriber(&self) -> AnySubscriber {
+        static NOT_RUNNING: ReportOnce = ReportOnce::new();
+
         self.inner
             .and_then(|inner| {
                 inner
@@ -528,7 +531,11 @@ where
                     })
                     .flatten()
             })
-            .expect("tried to set effect that has been stopped")
+            .unwrap_or_else(|| {
+                NOT_RUNNING
+                    .report(|| GraphError::NotRunning { what: "an Effect" });
+                AnySubscriber::inert()
+            })
     }
 }
 
@@ -563,4 +570,25 @@ where
     let watch = Effect::watch(deps, callback, immediate);
 
     move || watch.stop()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::ReactiveNode;
+
+    /// A stopped effect has no subscriber: this used to panic ("tried to set effect that has
+    /// been stopped"). It is a subscriber that tracks nothing.
+    #[test]
+    fn a_stopped_effect_is_a_subscriber_that_tracks_nothing() {
+        _ = Executor::init_futures_executor();
+        let owner = Owner::new();
+        owner.set();
+        let effect = Effect::new_isomorphic(|_| ());
+        effect.stop();
+
+        let subscriber = effect.to_any_subscriber();
+
+        assert!(!subscriber.update_if_necessary());
+    }
 }

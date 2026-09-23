@@ -154,13 +154,16 @@ where
     pub fn new_owning(
         fun: impl Fn(Option<T>) -> (T, bool) + Send + Sync + 'static,
     ) -> Self {
+        let caller = Location::caller();
+        let defined_at =
+            cfg!(any(debug_assertions, halyard_debuginfo)).then_some(caller);
         let inner = Arc::new_cyclic(|weak| {
             let subscriber = AnySubscriber(
                 weak.as_ptr() as usize,
                 Weak::clone(weak) as Weak<dyn Subscriber + Send + Sync>,
             );
 
-            MemoInner::new(Arc::new(fun), subscriber)
+            MemoInner::new(Arc::new(fun), subscriber, defined_at)
         });
         Self {
             #[cfg(any(debug_assertions, halyard_debuginfo))]
@@ -328,12 +331,19 @@ where
     fn try_read_untracked(&self) -> Option<Self::Value> {
         self.update_if_necessary();
 
-        Mapped::try_new(Arc::clone(&self.inner.value), |t| {
-            // safe to unwrap here because update_if_necessary
-            // guarantees the value is Some
-            t.as_ref().unwrap().as_borrowed()
+        let value = Plain::try_new_at(
+            Arc::clone(&self.inner.value),
+            self.defined_at(),
+        )?;
+        // The value is missing only while it is being recomputed (it is handed to the
+        // memo's function), by another thread or by the function itself reading the memo.
+        // The guard just taken keeps it from being taken away while it lives, so the
+        // mapping below always finds it.
+        value.is_some().then(|| {
+            ReadGuard::new(Mapped::new_with_guard(value, |t| {
+                t.as_ref().unwrap().as_borrowed()
+            }))
         })
-        .map(ReadGuard::new)
     }
 }
 

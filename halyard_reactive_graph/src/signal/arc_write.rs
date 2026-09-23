@@ -8,7 +8,7 @@ use core::fmt::{Debug, Formatter, Result};
 use std::{
     hash::Hash,
     panic::Location,
-    sync::{Arc, RwLock},
+    sync::{Arc, PoisonError, RwLock},
 };
 
 /// A reference-counted setter for a reactive signal.
@@ -121,7 +121,12 @@ impl<T> IntoInner for ArcWriteSignal<T> {
 
     #[inline(always)]
     fn into_inner(self) -> Option<Self::Value> {
-        Some(Arc::into_inner(self.value)?.into_inner().unwrap())
+        // a lock poisoned by a panic still holds the value
+        Some(
+            Arc::into_inner(self.value)?
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 }
 
@@ -134,15 +139,19 @@ impl<T> Notify for ArcWriteSignal<T> {
 impl<T: 'static> Write for ArcWriteSignal<T> {
     type Value = T;
 
+    /// Waits while another thread uses the value; `None` if this thread is using it (the
+    /// write is inside the signal's own `with` or `update`, or a guard of its is alive),
+    /// which would never end. That is logged once.
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        self.value
-            .write()
-            .ok()
+        UntrackedWriteGuard::take(Arc::clone(&self.value), self.defined_at())
             .map(|guard| WriteGuard::new(self.clone(), guard))
     }
 
     #[allow(refining_impl_trait)]
     fn try_write_untracked(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
-        UntrackedWriteGuard::try_new(Arc::clone(&self.value))
+        UntrackedWriteGuard::try_new_at(
+            Arc::clone(&self.value),
+            self.defined_at(),
+        )
     }
 }

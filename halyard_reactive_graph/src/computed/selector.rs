@@ -100,10 +100,18 @@ where
                 let next_value = source();
                 *v.write().or_poisoned() = Some(next_value.clone());
                 if prev.as_ref() != Some(&next_value) {
-                    for (key, signal) in &*subs.read().or_poisoned() {
-                        if f(key, &next_value)
-                            || (prev.is_some()
-                                && f(key, prev.as_ref().unwrap()))
+                    // The comparison and the notifications run user code (a subscriber
+                    // may select another key, which writes `subs`): take the listeners out
+                    // of the lock first.
+                    let listeners = subs
+                        .read()
+                        .or_poisoned()
+                        .iter()
+                        .map(|(key, signal)| (key.clone(), signal.clone()))
+                        .collect::<Vec<_>>();
+                    for (key, signal) in listeners {
+                        if f(&key, &next_value)
+                            || prev.as_ref().is_some_and(|prev| f(&key, prev))
                         {
                             signal.update(|n| *n = true);
                         }
@@ -130,7 +138,10 @@ where
             })
         };
         read.track();
-        (self.f)(key, self.v.read().or_poisoned().as_ref().unwrap())
+        // the comparison is user code: it runs on a clone, with the lock released (the
+        // value is set when the selector is created, so it is always there)
+        let current = self.v.read().or_poisoned().clone();
+        current.is_some_and(|current| (self.f)(key, &current))
     }
 
     /// Removes the listener for the given key.

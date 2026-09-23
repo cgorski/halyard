@@ -116,66 +116,72 @@ pub struct ArcAsyncDerived<T> {
     pub(crate) loading: Arc<AtomicBool>,
 }
 
+/// Takes an async lock from synchronous code.
+///
+/// Natively this waits while the lock is in use. In the browser there is nothing to wait
+/// for: a lock in use is held by the code that is running now (re-entry), so this returns
+/// `None` rather than panicking.
 #[allow(dead_code)]
 pub(crate) trait BlockingLock<T> {
-    fn blocking_read_arc(self: &Arc<Self>)
-        -> async_lock::RwLockReadGuardArc<T>;
+    fn blocking_read_arc(
+        self: &Arc<Self>,
+    ) -> Option<async_lock::RwLockReadGuardArc<T>>;
 
     fn blocking_write_arc(
         self: &Arc<Self>,
-    ) -> async_lock::RwLockWriteGuardArc<T>;
+    ) -> Option<async_lock::RwLockWriteGuardArc<T>>;
 
-    fn blocking_read(&self) -> async_lock::RwLockReadGuard<'_, T>;
+    fn blocking_read(&self) -> Option<async_lock::RwLockReadGuard<'_, T>>;
 
-    fn blocking_write(&self) -> async_lock::RwLockWriteGuard<'_, T>;
+    fn blocking_write(&self) -> Option<async_lock::RwLockWriteGuard<'_, T>>;
 }
 
 impl<T> BlockingLock<T> for AsyncRwLock<T> {
     fn blocking_read_arc(
         self: &Arc<Self>,
-    ) -> async_lock::RwLockReadGuardArc<T> {
+    ) -> Option<async_lock::RwLockReadGuardArc<T>> {
         #[cfg(not(target_family = "wasm"))]
         {
-            self.read_arc_blocking()
+            Some(self.read_arc_blocking())
         }
         #[cfg(target_family = "wasm")]
         {
-            self.read_arc().now_or_never().unwrap()
+            self.try_read_arc()
         }
     }
 
     fn blocking_write_arc(
         self: &Arc<Self>,
-    ) -> async_lock::RwLockWriteGuardArc<T> {
+    ) -> Option<async_lock::RwLockWriteGuardArc<T>> {
         #[cfg(not(target_family = "wasm"))]
         {
-            self.write_arc_blocking()
+            Some(self.write_arc_blocking())
         }
         #[cfg(target_family = "wasm")]
         {
-            self.write_arc().now_or_never().unwrap()
+            self.try_write_arc()
         }
     }
 
-    fn blocking_read(&self) -> async_lock::RwLockReadGuard<'_, T> {
+    fn blocking_read(&self) -> Option<async_lock::RwLockReadGuard<'_, T>> {
         #[cfg(not(target_family = "wasm"))]
         {
-            self.read_blocking()
+            Some(self.read_blocking())
         }
         #[cfg(target_family = "wasm")]
         {
-            self.read().now_or_never().unwrap()
+            self.try_read()
         }
     }
 
-    fn blocking_write(&self) -> async_lock::RwLockWriteGuard<'_, T> {
+    fn blocking_write(&self) -> Option<async_lock::RwLockWriteGuard<'_, T>> {
         #[cfg(not(target_family = "wasm"))]
         {
-            self.write_blocking()
+            Some(self.write_blocking())
         }
         #[cfg(target_family = "wasm")]
         {
-            self.write().now_or_never().unwrap()
+            self.try_write()
         }
     }
 }
@@ -280,7 +286,10 @@ macro_rules! spawn_derived {
                         let mut guard = this.inner.write().or_poisoned();
 
                         guard.state = AsyncDerivedState::Clean;
-                        *value.blocking_write() = orig_value;
+                        // the lock was created above and nothing else can hold it yet
+                        if let Some(mut value) = value.blocking_write() {
+                            *value = orig_value;
+                        }
                         this.loading.store(false, Ordering::Relaxed);
                         (true, None)
                     }
@@ -367,7 +376,8 @@ macro_rules! spawn_derived {
 
                                     let this_version = {
                                         let mut guard = inner.write().or_poisoned();
-                                        guard.version += 1;
+                                        // wrapping: only equality with the latest matters
+                                        guard.version = guard.version.wrapping_add(1);
                                         let version = guard.version;
                                         let suspense_ids = mem::take(&mut guard.suspenses)
                                             .into_iter()
@@ -678,16 +688,11 @@ impl<T: 'static> Write for ArcAsyncDerived<T> {
     type Value = Option<T>;
 
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        // increment the version, such that a rerun triggered previously does not overwrite this
-        // new value
-        let mut guard = self.inner.write().or_poisoned();
-        guard.version += 1;
-
-        // tell any suspenses to stop waiting for this
-        drop(mem::take(&mut guard.pending_suspenses));
+        let value = self.value.blocking_write()?;
+        self.bump_version();
 
         Some(MappedMut::new(
-            WriteGuard::new(self.clone(), self.value.blocking_write()),
+            WriteGuard::new(self.clone(), value),
             |v| v.deref(),
             |v| v.deref_mut(),
         ))
@@ -696,19 +701,24 @@ impl<T: 'static> Write for ArcAsyncDerived<T> {
     fn try_write_untracked(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        // increment the version, such that a rerun triggered previously does not overwrite this
-        // new value
-        let mut guard = self.inner.write().or_poisoned();
-        guard.version += 1;
+        let value = self.value.blocking_write()?;
+        self.bump_version();
 
-        // tell any suspenses to stop waiting for this
-        drop(mem::take(&mut guard.pending_suspenses));
+        Some(MappedMut::new(value, |v| v.deref(), |v| v.deref_mut()))
+    }
+}
 
-        Some(MappedMut::new(
-            self.value.blocking_write(),
-            |v| v.deref(),
-            |v| v.deref_mut(),
-        ))
+impl<T> ArcAsyncDerived<T> {
+    /// Before a write: increments the version, so that a load that started earlier does not
+    /// overwrite the written value (wrapping: only equality with the latest matters), and
+    /// tells any suspenses to stop waiting for that load.
+    pub(crate) fn bump_version(&self) {
+        let suspenses = {
+            let mut guard = self.inner.write().or_poisoned();
+            guard.version = guard.version.wrapping_add(1);
+            mem::take(&mut guard.pending_suspenses)
+        };
+        drop(suspenses);
     }
 }
 
@@ -778,5 +788,35 @@ impl<T> Subscriber for ArcAsyncDerived<T> {
 
     fn clear_sources(&self, subscriber: &AnySubscriber) {
         self.inner.clear_sources(subscriber);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traits::{GetUntracked, Set, UpdateUntracked};
+
+    fn loaded(value: u32) -> ArcAsyncDerived<u32> {
+        _ = halyard_any_spawner::Executor::init_futures_executor();
+        ArcAsyncDerived::new_mock(move || async move { value })
+    }
+
+    /// Writing bumps a version counter so that an older load does not overwrite the write;
+    /// at its limit the bump overflowed (a panic in debug builds). It wraps.
+    #[test]
+    fn writing_at_the_version_limit_wraps() {
+        let owner = Owner::new();
+        owner.set();
+        let derived = loaded(1);
+
+        derived.inner.write().or_poisoned().version = usize::MAX;
+        derived.set(Some(2));
+        assert_eq!(derived.try_get_untracked(), Some(Some(2)));
+        assert_eq!(derived.inner.read().or_poisoned().version, 0);
+
+        derived.inner.write().or_poisoned().version = usize::MAX;
+        derived.try_update_untracked(|value| *value = Some(3));
+        assert_eq!(derived.try_get_untracked(), Some(Some(3)));
+        assert_eq!(derived.inner.read().or_poisoned().version, 0);
     }
 }

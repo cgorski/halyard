@@ -143,9 +143,15 @@ where
                 Poll::Pending
             }
             (_, Poll::Pending) => Poll::Pending,
-            (_, Poll::Ready(guard)) => {
-                Poll::Ready(guard.as_ref().unwrap().clone())
-            }
+            (_, Poll::Ready(guard)) => match guard.as_ref() {
+                Some(value) => Poll::Ready(value.clone()),
+                // emptied (`set(None)`) after it loaded: ready with the next value (a write
+                // or a reload wakes the wakers)
+                None => {
+                    self.wakers.write().or_poisoned().push(waker.clone());
+                    Poll::Pending
+                }
+            },
         }
     }
 }
@@ -209,11 +215,53 @@ where
                 Poll::Pending
             }
             (_, Poll::Pending) => Poll::Pending,
+            // emptied (`set(None)`) after it loaded: ready with the next value
+            (_, Poll::Ready(guard)) if guard.is_none() => {
+                self.wakers.write().or_poisoned().push(waker.clone());
+                Poll::Pending
+            }
+            // The value was just seen to be there, and the read guard keeps it from being
+            // emptied while the guard lives, so the mapping always finds it.
             (_, Poll::Ready(guard)) => Poll::Ready(ReadGuard::new(
                 Mapped::new_with_guard(AsyncPlain { guard }, |guard| {
                     guard.as_ref().unwrap()
                 }),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{owner::Owner, traits::Set};
+    use futures::FutureExt;
+
+    fn emptied() -> ArcAsyncDerived<u32> {
+        _ = halyard_any_spawner::Executor::init_futures_executor();
+        let derived = ArcAsyncDerived::new_mock(|| async { 1 });
+        derived.set(None);
+        derived
+    }
+
+    /// `set(None)` empties a loaded value: awaiting it used to panic (an `unwrap` of the
+    /// missing value). It waits for the next value.
+    #[test]
+    fn awaiting_an_emptied_value_waits_for_the_next_one() {
+        let owner = Owner::new();
+        owner.set();
+        let derived = emptied();
+
+        assert_eq!(derived.clone().into_future().now_or_never(), None);
+    }
+
+    /// The same by reference: the guard it gave panicked when read.
+    #[test]
+    fn awaiting_an_emptied_value_by_reference_waits_for_the_next_one() {
+        let owner = Owner::new();
+        owner.set();
+        let derived = emptied();
+
+        assert_eq!(derived.by_ref().now_or_never().map(|value| *value), None);
     }
 }

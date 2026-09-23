@@ -507,13 +507,15 @@ where
 
             crate::spawn(async move {
                 let new_value = fut.await;
-                let canceled = submission.canceled.get_untracked();
+                let canceled =
+                    submission.canceled.try_get_untracked().unwrap_or(false);
                 if !canceled {
                     submission.value.try_set(Some(new_value));
                 }
                 submission.input.try_set(None);
                 submission.pending.try_set(false);
-                version.try_update(|n| *n += 1);
+                // wrapping: every submission changes the version
+                version.try_update(|n| *n = n.wrapping_add(1));
             })
         }
     }
@@ -569,7 +571,8 @@ where
 
         self.submissions
             .try_update(|subs| subs.push(submission.clone()));
-        self.version.try_update(|n| *n += 1);
+        // wrapping: every submission changes the version
+        self.version.try_update(|n| *n = n.wrapping_add(1));
     }
 }
 
@@ -813,3 +816,27 @@ impl<I, O, S> Clone for Submission<I, O, S> {
 }
 
 impl<I, O, S> Copy for Submission<I, O, S> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{owner::Owner, traits::WithUntracked};
+
+    /// Adding a submission bumps the version; at its limit that overflowed (a panic in debug
+    /// builds). It wraps, so the version still changes.
+    #[test]
+    fn adding_a_submission_with_the_version_at_its_limit_wraps() {
+        let owner = Owner::new();
+        owner.set();
+        let action = ArcMultiAction::new(|n: &u32| {
+            let n = *n;
+            async move { n }
+        });
+        action.version.set(usize::MAX);
+
+        action.dispatch_sync(7);
+
+        assert_eq!(action.version.try_get_untracked(), Some(0));
+        assert_eq!(action.submissions.try_with_untracked(Vec::len), Some(1));
+    }
+}

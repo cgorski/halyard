@@ -18,6 +18,7 @@ mod arena_item;
 mod context;
 mod storage;
 mod stored_value;
+#[cfg(feature = "sandboxed-arenas")]
 use self::arena::Arena;
 pub use arc_stored_value::ArcStoredValue;
 #[cfg(feature = "sandboxed-arenas")]
@@ -531,18 +532,9 @@ impl Drop for OwnerInner {
         let nodes = mem::take(&mut self.nodes);
         if !nodes.is_empty() {
             #[cfg(not(feature = "sandboxed-arenas"))]
-            Arena::with_mut(|arena| {
-                for node in nodes {
-                    _ = arena.remove(node);
-                }
-            });
+            arena::remove_from_active_arena(nodes);
             #[cfg(feature = "sandboxed-arenas")]
-            {
-                let mut arena = self.arena.write().or_poisoned();
-                for node in nodes {
-                    _ = arena.remove(node);
-                }
-            }
+            arena::remove_nodes(&self.arena, nodes);
         }
     }
 }
@@ -572,18 +564,11 @@ impl Cleanup for RwLock<OwnerInner> {
 
         if !nodes.is_empty() {
             #[cfg(not(feature = "sandboxed-arenas"))]
-            Arena::with_mut(|arena| {
-                for node in nodes {
-                    _ = arena.remove(node);
-                }
-            });
+            arena::remove_from_active_arena(nodes);
             #[cfg(feature = "sandboxed-arenas")]
             {
                 let arena = self.read().or_poisoned().arena.clone();
-                let mut arena = arena.write().or_poisoned();
-                for node in nodes {
-                    _ = arena.remove(node);
-                }
+                arena::remove_nodes(&arena, nodes);
             }
         }
     }

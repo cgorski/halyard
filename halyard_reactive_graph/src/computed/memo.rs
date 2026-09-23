@@ -310,9 +310,7 @@ where
         ReadGuard<T, Mapped<Plain<Option<<S as Storage<T>>::Wrapped>>, T>>;
 
     fn try_read_untracked(&self) -> Option<Self::Value> {
-        self.inner
-            .try_get_value()
-            .map(|inner| inner.read_untracked())
+        self.inner.try_get_value()?.try_read_untracked()
     }
 }
 

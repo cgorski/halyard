@@ -1,4 +1,7 @@
-use super::{guards::WriteGuard, ArcWriteSignal};
+use super::{
+    guards::{UntrackedWriteGuard, WriteGuard},
+    ArcWriteSignal,
+};
 use crate::{
     owner::{ArenaItem, FromLocal, LocalStorage, Storage, SyncStorage},
     traits::{
@@ -7,8 +10,7 @@ use crate::{
     },
 };
 use core::fmt::Debug;
-use guardian::ArcRwLockWriteGuardian;
-use std::{hash::Hash, ops::DerefMut, panic::Location, sync::Arc};
+use std::{hash::Hash, ops::DerefMut, panic::Location};
 
 /// An arena-allocated setter for a reactive signal.
 ///
@@ -176,10 +178,12 @@ where
 {
     type Value = T;
 
+    /// Waits while another thread uses the value; `None` if this thread is using it (the
+    /// write is inside the signal's own `with` or `update`, or a guard of its is alive),
+    /// which would never end. That is logged once.
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        let guard = self.inner.try_with_value(|n| {
-            ArcRwLockWriteGuardian::take(Arc::clone(&n.value)).ok()
-        })??;
+        let inner = self.inner.try_get_value()?;
+        let guard = UntrackedWriteGuard::take(inner.value, self.defined_at())?;
         Some(WriteGuard::new(*self, guard))
     }
 

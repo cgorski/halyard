@@ -19,7 +19,13 @@ new_key_type! {
 
 pub struct Arena;
 
-pub type ArenaMap = SlotMap<NodeId, Box<dyn Any + Send + Sync>>;
+/// An arena entry. It is reference-counted so that a value can be used through a clone of
+/// its entry after the arena's lock is released: no application code (a stored closure, a
+/// setter, a value's `Drop`) ever runs while the arena is locked, so none can re-enter it
+/// (docs/no-panics.md, "Structural changes" 2).
+pub type ArenaEntry = Arc<dyn Any + Send + Sync>;
+
+pub type ArenaMap = SlotMap<NodeId, ArenaEntry>;
 
 #[cfg(not(feature = "sandboxed-arenas"))]
 static MAP: OnceLock<RwLock<ArenaMap>> = OnceLock::new();
@@ -41,24 +47,9 @@ impl Arena {
         }
     }
 
-    #[track_caller]
-    pub fn with<U>(fun: impl FnOnce(&ArenaMap) -> U) -> U {
-        #[cfg(not(feature = "sandboxed-arenas"))]
-        {
-            fun(&MAP.get_or_init(Default::default).read().or_poisoned())
-        }
-        #[cfg(feature = "sandboxed-arenas")]
-        {
-            Arena::try_with(fun).unwrap_or_else(|| {
-                panic!(
-                    "at {}, the `sandboxed-arenas` feature is active, but no \
-                     Arena is active",
-                    std::panic::Location::caller()
-                )
-            })
-        }
-    }
-
+    /// Runs `fun` on the arena, locked for reading; `None` if no arena is active (with
+    /// `sandboxed-arenas`, on a thread that has not set an owner). `fun` must only look
+    /// entries up: application code must never run under this lock.
     #[track_caller]
     pub fn try_with<U>(fun: impl FnOnce(&ArenaMap) -> U) -> Option<U> {
         #[cfg(not(feature = "sandboxed-arenas"))]
@@ -76,24 +67,15 @@ impl Arena {
         }
     }
 
+    /// A clone of the entry for `node`, if it exists (and an arena is active).
     #[track_caller]
-    pub fn with_mut<U>(fun: impl FnOnce(&mut ArenaMap) -> U) -> U {
-        #[cfg(not(feature = "sandboxed-arenas"))]
-        {
-            fun(&mut MAP.get_or_init(Default::default).write().or_poisoned())
-        }
-        #[cfg(feature = "sandboxed-arenas")]
-        {
-            Arena::try_with_mut(fun).unwrap_or_else(|| {
-                panic!(
-                    "at {}, the `sandboxed-arenas` feature is active, but no \
-                     Arena is active",
-                    std::panic::Location::caller()
-                )
-            })
-        }
+    pub fn get(node: NodeId) -> Option<ArenaEntry> {
+        Arena::try_with(|arena| arena.get(node).cloned()).flatten()
     }
 
+    /// Runs `fun` on the arena, locked for writing; `None` if no arena is active. `fun` must
+    /// only insert, remove or replace entries, and hand removed entries back to be dropped
+    /// once the lock is released (a value's `Drop` may use the graph).
     #[track_caller]
     pub fn try_with_mut<U>(fun: impl FnOnce(&mut ArenaMap) -> U) -> Option<U> {
         #[cfg(not(feature = "sandboxed-arenas"))]
@@ -113,6 +95,25 @@ impl Arena {
             })
         }
     }
+}
+
+/// Removes `nodes` from `arena`, and drops their values once its lock is released: a value's
+/// `Drop` (a stored closure's captures, an owner) may use the graph.
+pub(crate) fn remove_nodes(arena: &RwLock<ArenaMap>, nodes: Vec<NodeId>) {
+    let removed = {
+        let mut arena = arena.write().or_poisoned();
+        nodes
+            .into_iter()
+            .filter_map(|node| arena.remove(node))
+            .collect::<Vec<_>>()
+    };
+    drop(removed);
+}
+
+/// Removes `nodes` from the active arena, as [`remove_nodes`] does.
+#[cfg(not(feature = "sandboxed-arenas"))]
+pub(crate) fn remove_from_active_arena(nodes: Vec<NodeId>) {
+    remove_nodes(MAP.get_or_init(Default::default), nodes);
 }
 
 #[cfg(feature = "sandboxed-arenas")]

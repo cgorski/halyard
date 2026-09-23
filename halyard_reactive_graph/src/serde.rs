@@ -7,7 +7,28 @@ use crate::{
     traits::With,
     wrappers::read::{Signal, SignalTypes},
 };
-use serde::{Deserialize, Serialize};
+use serde::{ser::Error as _, Deserialize, Serialize};
+
+/// Serializes the value a reactive value holds (tracking it, as `with` does). A reactive value
+/// whose value is gone (its owner was disposed), or is being written by this thread, has no
+/// value to serialize: that is a serialization error, not a panic.
+fn serialize_value<R, S>(reactive: &R, serializer: S) -> Result<S::Ok, S::Error>
+where
+    R: With + ?Sized,
+    R::Value: Serialize,
+    S: serde::Serializer,
+{
+    let mut serializer = Some(serializer);
+    reactive
+        .try_with(|value| serializer.take().map(|s| value.serialize(s)))
+        .flatten()
+        .unwrap_or_else(|| {
+            Err(S::Error::custom(
+                "the reactive value has no value to serialize: its owner was \
+                 disposed, or this thread is writing it",
+            ))
+        })
+}
 
 impl<T, St> Serialize for ReadSignal<T, St>
 where
@@ -18,7 +39,7 @@ where
     where
         S: serde::Serializer,
     {
-        self.with(|value| value.serialize(serializer))
+        serialize_value(self, serializer)
     }
 }
 
@@ -31,7 +52,7 @@ where
     where
         S: serde::Serializer,
     {
-        self.with(|value| value.serialize(serializer))
+        serialize_value(self, serializer)
     }
 }
 
@@ -44,7 +65,7 @@ where
     where
         S: serde::Serializer,
     {
-        self.with(|value| value.serialize(serializer))
+        serialize_value(self, serializer)
     }
 }
 
@@ -53,7 +74,7 @@ impl<T: Serialize + 'static> Serialize for ArcReadSignal<T> {
     where
         S: serde::Serializer,
     {
-        self.with(|value| value.serialize(serializer))
+        serialize_value(self, serializer)
     }
 }
 
@@ -62,7 +83,7 @@ impl<T: Serialize + 'static> Serialize for ArcRwSignal<T> {
     where
         S: serde::Serializer,
     {
-        self.with(|value| value.serialize(serializer))
+        serialize_value(self, serializer)
     }
 }
 
@@ -71,7 +92,7 @@ impl<T: Serialize + 'static, St: Storage<T>> Serialize for ArcMemo<T, St> {
     where
         S: serde::Serializer,
     {
-        self.with(|value| value.serialize(serializer))
+        serialize_value(self, serializer)
     }
 }
 
@@ -85,7 +106,7 @@ where
     where
         S: serde::Serializer,
     {
-        self.with(|value| value.serialize(serializer))
+        serialize_value(self, serializer)
     }
 }
 
@@ -100,7 +121,7 @@ where
     {
         match &self.0 {
             None => None::<T>.serialize(serializer),
-            Some(signal) => signal.with(|value| value.serialize(serializer)),
+            Some(signal) => serialize_value(signal, serializer),
         }
     }
 }
@@ -114,7 +135,7 @@ where
     where
         S: serde::Serializer,
     {
-        self.with(|value| value.serialize(serializer))
+        serialize_value(self, serializer)
     }
 }
 

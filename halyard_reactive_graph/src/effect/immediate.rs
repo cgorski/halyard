@@ -1,4 +1,5 @@
 use crate::{
+    error::{GraphError, ReportOnce},
     graph::{AnySubscriber, ReactiveNode, ToAnySubscriber},
     owner::on_cleanup,
     traits::{DefinedAt, Dispose},
@@ -6,7 +7,7 @@ use crate::{
 use halyard_or_poisoned::OrPoisoned;
 use std::{
     panic::Location,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, PoisonError, RwLock, TryLockError},
 };
 
 /// Effects run a certain chunk of code whenever the signals they depend on change.
@@ -68,7 +69,7 @@ impl ImmediateEffect {
     /// (Unless [batch] is used.)
     ///
     /// NOTE: this requires a `Fn` function because it might recurse.
-    /// Use [Self::new_mut] to pass a `FnMut` function, it'll panic on recursion.
+    /// Use [Self::new_mut] to pass a `FnMut` function, which skips a recursive run.
     #[track_caller]
     #[must_use]
     pub fn new(fun: impl Fn() + Send + Sync + 'static) -> Self {
@@ -85,20 +86,33 @@ impl ImmediateEffect {
     /// Creates a new effect which runs immediately, then again as soon as any tracked signal changes.
     /// (Unless [batch] is used.)
     ///
-    /// # Panics
-    /// Panics on recursion or if triggered in parallel. Also see [Self::new]
+    /// A `FnMut` cannot run twice at once: if the effect is triggered while its function is
+    /// running (it wrote a signal it reads, or another thread triggered it at the same time),
+    /// that run is skipped, and this is logged once. Also see [Self::new].
     #[track_caller]
     #[must_use]
     pub fn new_mut(fun: impl FnMut() + Send + Sync + 'static) -> Self {
-        const MSG: &str = "The effect recursed or its function panicked.";
+        static RETRIGGERED: ReportOnce = ReportOnce::new();
+        let defined_at = Location::caller();
         let fun = Mutex::new(fun);
-        Self::new(move || fun.try_lock().expect(MSG)())
+        Self::new(move || match fun.try_lock() {
+            Ok(mut fun) => fun(),
+            // a run that panicked left the function as it was
+            Err(TryLockError::Poisoned(poisoned)) => {
+                PoisonError::into_inner(poisoned)()
+            }
+            Err(TryLockError::WouldBlock) => {
+                RETRIGGERED.report(|| GraphError::EffectRetriggered {
+                    defined_at: Some(defined_at),
+                })
+            }
+        })
     }
     /// Creates a new effect which runs immediately, then again as soon as any tracked signal changes.
     /// (Unless [batch] is used.)
     ///
     /// NOTE: this requires a `Fn` function because it might recurse.
-    /// Use [Self::new_mut_scoped] to pass a `FnMut` function, it'll panic on recursion.
+    /// Use [Self::new_mut_scoped] to pass a `FnMut` function, which skips a recursive run.
     /// NOTE: this effect is automatically cleaned up when the current owner is cleared or disposed.
     #[track_caller]
     pub fn new_scoped(fun: impl Fn() + Send + Sync + 'static) {
@@ -111,8 +125,8 @@ impl ImmediateEffect {
     ///
     /// NOTE: this effect is automatically cleaned up when the current owner is cleared or disposed.
     ///
-    /// # Panics
-    /// Panics on recursion or if triggered in parallel. Also see [Self::new_scoped]
+    /// A run triggered while the function is running is skipped, as with [Self::new_mut].
+    /// Also see [Self::new_scoped]
     #[track_caller]
     pub fn new_mut_scoped(fun: impl FnMut() + Send + Sync + 'static) {
         let effect = Self::new_mut(fun);
@@ -135,9 +149,19 @@ impl ImmediateEffect {
 }
 
 impl ToAnySubscriber for ImmediateEffect {
+    /// Without the `effects` feature (unless it was made with `new_isomorphic`) the effect
+    /// does not run: this is then a subscriber that tracks nothing, and that is logged once.
     fn to_any_subscriber(&self) -> AnySubscriber {
-        const MSG: &str = "tried to set effect that has been stopped";
-        self.inner.as_ref().expect(MSG).to_any_subscriber()
+        static NOT_RUNNING: ReportOnce = ReportOnce::new();
+        match &self.inner {
+            Some(inner) => inner.to_any_subscriber(),
+            None => {
+                NOT_RUNNING.report(|| GraphError::NotRunning {
+                    what: "an ImmediateEffect",
+                });
+                AnySubscriber::inert()
+            }
+        }
     }
 }
 
@@ -157,10 +181,15 @@ pub fn batch<T>(f: impl FnOnce() -> T) -> T {
     struct ExecuteOnDrop;
     impl Drop for ExecuteOnDrop {
         fn drop(&mut self) {
-            let effects = {
-                let mut batch = inner::BATCH.write().or_poisoned();
-                batch.take().unwrap().into_inner().expect("lock poisoned")
-            };
+            // only the outermost batch holds this, and only it takes the set it created
+            let effects = inner::BATCH
+                .write()
+                .or_poisoned()
+                .take()
+                .map(|effects| {
+                    effects.into_inner().unwrap_or_else(PoisonError::into_inner)
+                })
+                .unwrap_or_default();
             // TODO: Should we skip the effects if it's panicking?
             for effect in effects {
                 effect.update_if_necessary();
@@ -338,8 +367,8 @@ mod inner {
                 let any_subscriber = guard.any_subscriber.clone();
                 let fun = guard.fun.clone();
 
-                // New run has started.
-                guard.run_count_start += 1;
+                // New run has started. (Saturating: the stack is exhausted long before.)
+                guard.run_count_start = guard.run_count_start.saturating_add(1);
                 // We get a value for this run, the highest value will be what we keep the sources from.
                 let recursion_count = guard.run_count_start;
                 // We clear the sources before running the effect.
@@ -362,7 +391,7 @@ mod inner {
                 let mut guard = self.write().or_poisoned();
 
                 // This run has completed.
-                guard.run_done_count += 1;
+                guard.run_done_count = guard.run_done_count.saturating_add(1);
 
                 // We update the done count.
                 // Sources will only be added if recursion_done_max < recursion_count_start.
@@ -448,5 +477,56 @@ mod inner {
                 log_warning(format_args!("{MSG}"));
             }
         }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// The run counters used to overflow (a panic in debug builds) at their limit; they
+        /// saturate, and the effect still runs.
+        #[test]
+        fn run_counters_at_their_limit_still_run_the_effect() {
+            let owner = Owner::new();
+            owner.set();
+            let runs = Arc::new(AtomicUsize::new(0));
+            let effect = EffectInner::new({
+                let runs = Arc::clone(&runs);
+                move || {
+                    runs.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+            {
+                let mut effect = effect.write().or_poisoned();
+                effect.run_count_start = usize::MAX;
+                effect.run_done_count = usize::MAX;
+            }
+
+            effect.update_if_necessary();
+
+            assert_eq!(runs.load(Ordering::Relaxed), 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Without the `effects` feature an `ImmediateEffect` has no inner effect: asking for its
+    /// subscriber used to panic ("tried to set effect that has been stopped"). It is a
+    /// subscriber that tracks nothing.
+    #[cfg(not(feature = "effects"))]
+    #[test]
+    fn an_effect_that_does_not_run_is_a_subscriber_that_tracks_nothing() {
+        use super::*;
+        use crate::{graph::ReactiveNode, owner::Owner};
+
+        let owner = Owner::new();
+        owner.set();
+        let effect = ImmediateEffect::new(|| ());
+
+        let subscriber = effect.to_any_subscriber();
+
+        assert!(!subscriber.update_if_necessary());
     }
 }

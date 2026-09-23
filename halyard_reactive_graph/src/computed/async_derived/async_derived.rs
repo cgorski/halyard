@@ -14,10 +14,8 @@ use crate::{
     unwrap_signal,
 };
 use core::fmt::Debug;
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     future::Future,
-    mem,
     ops::{Deref, DerefMut},
     panic::Location,
 };
@@ -324,9 +322,7 @@ where
         ReadGuard<Option<T>, Mapped<AsyncPlain<SendOption<T>>, Option<T>>>;
 
     fn try_read_untracked(&self) -> Option<Self::Value> {
-        self.inner
-            .try_get_value()
-            .map(|inner| inner.read_untracked())
+        self.inner.try_get_value()?.try_read_untracked()
     }
 }
 
@@ -336,7 +332,9 @@ where
     S: Storage<ArcAsyncDerived<T>>,
 {
     fn notify(&self) {
-        self.inner.try_with_value(|inner| inner.notify());
+        if let Some(inner) = self.inner.try_get_value() {
+            inner.notify();
+        }
     }
 }
 
@@ -348,19 +346,9 @@ where
     type Value = Option<T>;
 
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        let guard = self
-            .inner
-            .try_with_value(|n| n.value.blocking_write_arc())?;
-
-        self.inner.try_with_value(|n| {
-            let mut guard = n.inner.write().or_poisoned();
-            // increment the version, such that a rerun triggered previously does not overwrite this
-            // new value
-            guard.version += 1;
-
-            // tell any suspenses to stop waiting for this
-            drop(mem::take(&mut guard.pending_suspenses));
-        });
+        let inner = self.inner.try_get_value()?;
+        let guard = inner.value.blocking_write_arc()?;
+        inner.bump_version();
 
         Some(MappedMut::new(
             WriteGuard::new(*self, guard),
@@ -372,21 +360,11 @@ where
     fn try_write_untracked(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.inner.try_with_value(|n| {
-            let mut guard = n.inner.write().or_poisoned();
-            // increment the version, such that a rerun triggered previously does not overwrite this
-            // new value
-            guard.version += 1;
+        let inner = self.inner.try_get_value()?;
+        let guard = inner.value.blocking_write_arc()?;
+        inner.bump_version();
 
-            // tell any suspenses to stop waiting for this
-            drop(mem::take(&mut guard.pending_suspenses));
-        });
-
-        self.inner
-            .try_with_value(|n| n.value.blocking_write_arc())
-            .map(|inner| {
-                MappedMut::new(inner, |v| v.deref(), |v| v.deref_mut())
-            })
+        Some(MappedMut::new(guard, |v| v.deref(), |v| v.deref_mut()))
     }
 }
 
@@ -405,11 +383,13 @@ where
     T: 'static,
     S: Storage<ArcAsyncDerived<T>>,
 {
+    /// Once its owner is gone, a source that never changes.
+    #[track_caller]
     fn to_any_source(&self) -> AnySource {
         self.inner
             .try_get_value()
             .map(|inner| inner.to_any_source())
-            .unwrap_or_else(unwrap_signal!(self))
+            .unwrap_or_else(|| AnySource::inert(self.defined_at()))
     }
 }
 
@@ -418,11 +398,12 @@ where
     T: 'static,
     S: Storage<ArcAsyncDerived<T>>,
 {
+    /// Once its owner is gone, a subscriber that tracks nothing.
     fn to_any_subscriber(&self) -> AnySubscriber {
         self.inner
             .try_get_value()
             .map(|inner| inner.to_any_subscriber())
-            .unwrap_or_else(unwrap_signal!(self))
+            .unwrap_or_else(AnySubscriber::inert)
     }
 }
 
@@ -497,5 +478,39 @@ where
         if let Some(inner) = self.inner.try_get_value() {
             inner.clear_sources(subscriber);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        owner::Owner,
+        traits::{GetUntracked, Set, UpdateUntracked},
+    };
+    use halyard_or_poisoned::OrPoisoned;
+
+    fn set_version(derived: &AsyncDerived<u32>, version: usize) {
+        derived.inner.try_with_value(|inner| {
+            inner.inner.write().or_poisoned().version = version
+        });
+    }
+
+    /// Writing bumps a version counter; at its limit the bump overflowed (a panic in debug
+    /// builds). It wraps.
+    #[test]
+    fn writing_at_the_version_limit_wraps() {
+        _ = halyard_any_spawner::Executor::init_futures_executor();
+        let owner = Owner::new();
+        owner.set();
+        let derived = AsyncDerived::new_mock(|| async { 1_u32 });
+
+        set_version(&derived, usize::MAX);
+        derived.set(Some(2));
+        assert_eq!(derived.try_get_untracked(), Some(Some(2)));
+
+        set_version(&derived, usize::MAX);
+        derived.try_update_untracked(|value| *value = Some(3));
+        assert_eq!(derived.try_get_untracked(), Some(Some(3)));
     }
 }

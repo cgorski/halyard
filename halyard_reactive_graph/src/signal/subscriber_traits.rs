@@ -14,7 +14,6 @@ use crate::{
         ToAnySource,
     },
     traits::{DefinedAt, IsDisposed},
-    unwrap_signal,
 };
 use halyard_or_poisoned::OrPoisoned;
 use std::{
@@ -55,7 +54,7 @@ impl<T: AsSubscriberSet + DefinedAt> ReactiveNode for T {
 
     fn mark_subscribers_check(&self) {
         if let Some(inner) = self.as_subscriber_set() {
-            let subs = inner.borrow().read().unwrap().clone();
+            let subs = inner.borrow().read().or_poisoned().clone();
             for sub in subs {
                 sub.mark_dirty();
             }
@@ -76,19 +75,21 @@ impl<T: AsSubscriberSet + DefinedAt> ReactiveNode for T {
 impl<T: AsSubscriberSet + DefinedAt> Source for T {
     fn clear_subscribers(&self) {
         if let Some(inner) = self.as_subscriber_set() {
-            inner.borrow().write().unwrap().take();
+            // the subscribers are dropped after the lock is released
+            let subscribers = inner.borrow().write().or_poisoned().take();
+            drop(subscribers);
         }
     }
 
     fn add_subscriber(&self, subscriber: AnySubscriber) {
         if let Some(inner) = self.as_subscriber_set() {
-            inner.borrow().write().unwrap().subscribe(subscriber)
+            inner.borrow().write().or_poisoned().subscribe(subscriber)
         }
     }
 
     fn remove_subscriber(&self, subscriber: &AnySubscriber) {
         if let Some(inner) = self.as_subscriber_set() {
-            inner.borrow().write().unwrap().unsubscribe(subscriber)
+            inner.borrow().write().or_poisoned().unsubscribe(subscriber)
         }
     }
 }
@@ -97,6 +98,7 @@ impl<T: AsSubscriberSet + DefinedAt + IsDisposed> ToAnySource for T
 where
     T::Output: Borrow<Arc<RwLock<SubscriberSet>>>,
 {
+    /// Once the signal's owner is gone, a source that never changes.
     #[track_caller]
     fn to_any_source(&self) -> AnySource {
         self.as_subscriber_set()
@@ -106,10 +108,10 @@ where
                     Arc::as_ptr(subs) as usize,
                     Arc::downgrade(subs) as Weak<dyn Source + Send + Sync>,
                     #[cfg(any(debug_assertions, halyard_debuginfo))]
-                    self.defined_at().expect("no DefinedAt in debug mode"),
+                    self.defined_at().unwrap_or(std::panic::Location::caller()),
                 )
             })
-            .unwrap_or_else(unwrap_signal!(self))
+            .unwrap_or_else(|| AnySource::inert(self.defined_at()))
     }
 }
 
@@ -121,7 +123,7 @@ impl ReactiveNode for RwLock<SubscriberSet> {
     fn mark_check(&self) {}
 
     fn mark_subscribers_check(&self) {
-        let subs = self.write().unwrap().take();
+        let subs = self.write().or_poisoned().take();
         for sub in subs {
             sub.mark_dirty();
         }
@@ -149,5 +151,31 @@ impl Source for RwLock<SubscriberSet> {
 
     fn remove_subscriber(&self, subscriber: &AnySubscriber) {
         self.write().or_poisoned().unsubscribe(subscriber)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        graph::{ReactiveNode, ToAnySource},
+        owner::Owner,
+        signal::RwSignal,
+        traits::Dispose,
+    };
+
+    /// A disposed signal has no subscriber set to point at: it used to panic ("you tried to
+    /// access a reactive value ... but it has already been disposed"). It is a source that
+    /// never changes.
+    #[test]
+    fn a_disposed_signal_is_a_source_that_never_changes() {
+        let owner = Owner::new();
+        owner.set();
+        let signal = RwSignal::new(0);
+        signal.dispose();
+
+        let source = signal.to_any_source();
+
+        assert!(!source.update_if_necessary());
+        source.mark_dirty();
     }
 }

@@ -10,7 +10,7 @@ use core::fmt::{Debug, Formatter, Result};
 use std::{
     hash::Hash,
     panic::Location,
-    sync::{Arc, RwLock},
+    sync::{Arc, PoisonError, RwLock},
 };
 
 /// A reference-counted getter for a reactive signal.
@@ -133,7 +133,12 @@ impl<T> IntoInner for ArcReadSignal<T> {
 
     #[inline(always)]
     fn into_inner(self) -> Option<Self::Value> {
-        Some(Arc::into_inner(self.value)?.into_inner().unwrap())
+        // a lock poisoned by a panic still holds the value
+        Some(
+            Arc::into_inner(self.value)?
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 }
 
@@ -151,6 +156,7 @@ impl<T: 'static> ReadUntracked for ArcReadSignal<T> {
 
     #[track_caller]
     fn try_read_untracked(&self) -> Option<Self::Value> {
-        Plain::try_new(Arc::clone(&self.value)).map(ReadGuard::new)
+        Plain::try_new_at(Arc::clone(&self.value), self.defined_at())
+            .map(ReadGuard::new)
     }
 }

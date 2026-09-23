@@ -102,6 +102,9 @@ where
 
 /// Takes a memoized, read-only slice of a signal. This is equivalent to the
 /// read-only half of [`create_slice`].
+///
+/// The slice reads the signal's reference-counted form, which lives as long as the slice
+/// does. If the signal has already been disposed, so is the slice (logged once).
 #[track_caller]
 pub fn create_read_slice<T, O>(
     signal: RwSignal<T>,
@@ -111,7 +114,16 @@ where
     T: Send + Sync + 'static,
     O: PartialEq + Send + Sync + 'static,
 {
-    Memo::new(move |_| signal.with(getter)).into()
+    match signal.try_to_arc() {
+        Some(source) => Memo::new(move |_| source.with(getter)).into(),
+        None => {
+            crate::signal::report_derived_from_disposed(
+                "a read slice was made",
+                signal.defined_at(),
+            );
+            Signal::disposed()
+        }
+    }
 }
 
 /// Creates a setter to access one slice of a signal. This is equivalent to the

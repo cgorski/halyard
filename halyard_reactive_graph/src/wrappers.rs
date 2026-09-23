@@ -524,12 +524,11 @@ pub mod read {
         S: Storage<T> + Storage<SignalTypes<T, S>>,
     {
         fn track(&self) {
-            let inner = self
-                .inner
-                // clone the inner Arc type and release the lock
-                // prevents deadlocking if the derived value includes taking a lock on the arena
-                .try_with_value(Clone::clone)
-                .unwrap_or_else(unwrap_signal!(self));
+            // a clone of the inner value, so that a derived closure runs with nothing borrowed;
+            // a signal whose owner is gone has nothing to track
+            let Some(inner) = self.inner.try_with_value(Clone::clone) else {
+                return;
+            };
             match inner {
                 SignalTypes::ReadSignal(i) => {
                     i.track();
@@ -603,6 +602,21 @@ pub mod read {
                         .map(ReadGuard::new)
                     }),
             )
+        }
+    }
+
+    impl<T, S> Signal<T, S>
+    where
+        S: Storage<T>,
+    {
+        /// A signal whose value is gone: for a signal made from a disposed one.
+        #[track_caller]
+        pub(crate) fn disposed() -> Self {
+            Self {
+                inner: ArenaItem::disposed(),
+                #[cfg(any(debug_assertions, halyard_debuginfo))]
+                defined_at: std::panic::Location::caller(),
+            }
         }
     }
 
@@ -870,9 +884,21 @@ pub mod read {
     where
         T: Clone + Send + Sync + 'static,
     {
+        /// The signal reads through the mapped signal's reference-counted form, which lives
+        /// as long as this does. If the mapped signal was disposed, so is this one (logged
+        /// once).
         #[track_caller]
         fn from(value: MappedSignal<T>) -> Self {
-            Self::derive(move || value.get())
+            match value.try_to_arc() {
+                Some(mapped) => Self::derive(move || mapped.get()),
+                None => {
+                    crate::signal::report_derived_from_disposed(
+                        "a Signal was made",
+                        value.defined_at(),
+                    );
+                    Self::disposed()
+                }
+            }
         }
     }
 
@@ -1016,7 +1042,7 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: Signal<T>) -> Self {
-            Signal::derive(move || Some(value.get()))
+            Signal::derive(move || value.try_get())
         }
     }
 
@@ -1026,7 +1052,7 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: Signal<T, LocalStorage>) -> Self {
-            Signal::derive_local(move || Some(value.get()))
+            Signal::derive_local(move || value.try_get())
         }
     }
 
@@ -1061,42 +1087,52 @@ pub mod read {
     impl From<Signal<&'static str>> for Signal<String> {
         #[track_caller]
         fn from(value: Signal<&'static str>) -> Self {
-            Signal::derive(move || value.read().to_string())
+            Signal::derive(move || {
+                value.try_read().map(|v| v.to_string()).unwrap_or_default()
+            })
         }
     }
 
     impl From<Signal<&'static str, LocalStorage>> for Signal<String, LocalStorage> {
         #[track_caller]
         fn from(value: Signal<&'static str, LocalStorage>) -> Self {
-            Signal::derive_local(move || value.read().to_string())
+            Signal::derive_local(move || {
+                value.try_read().map(|v| v.to_string()).unwrap_or_default()
+            })
         }
     }
 
     impl From<Signal<&'static str>> for Signal<String, LocalStorage> {
         #[track_caller]
         fn from(value: Signal<&'static str>) -> Self {
-            Signal::derive_local(move || value.read().to_string())
+            Signal::derive_local(move || {
+                value.try_read().map(|v| v.to_string()).unwrap_or_default()
+            })
         }
     }
 
     impl From<Signal<&'static str>> for Signal<Option<String>> {
         #[track_caller]
         fn from(value: Signal<&'static str>) -> Self {
-            Signal::derive(move || Some(value.read().to_string()))
+            Signal::derive(move || value.try_read().map(|v| v.to_string()))
         }
     }
 
     impl From<Signal<&'static str>> for Signal<Option<String>, LocalStorage> {
         #[track_caller]
         fn from(value: Signal<&'static str>) -> Self {
-            Signal::derive_local(move || Some(value.read().to_string()))
+            Signal::derive_local(move || {
+                value.try_read().map(|v| v.to_string())
+            })
         }
     }
 
     impl From<Signal<Option<&'static str>>> for Signal<Option<String>> {
         #[track_caller]
         fn from(value: Signal<Option<&'static str>>) -> Self {
-            Signal::derive(move || value.read().map(str::to_string))
+            Signal::derive(move || {
+                value.try_read().and_then(|v| v.map(str::to_string))
+            })
         }
     }
 
@@ -1105,7 +1141,9 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: Signal<Option<&'static str>, LocalStorage>) -> Self {
-            Signal::derive_local(move || value.read().map(str::to_string))
+            Signal::derive_local(move || {
+                value.try_read().and_then(|v| v.map(str::to_string))
+            })
         }
     }
 
@@ -1114,7 +1152,9 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: Signal<Option<&'static str>>) -> Self {
-            Signal::derive_local(move || value.read().map(str::to_string))
+            Signal::derive_local(move || {
+                value.try_read().and_then(|v| v.map(str::to_string))
+            })
         }
     }
 
@@ -1342,7 +1382,7 @@ pub mod read {
             match value {
                 MaybeSignal::Static(value) => Signal::stored(Some(value)),
                 MaybeSignal::Dynamic(signal) => {
-                    Signal::derive(move || Some(signal.get()))
+                    Signal::derive(move || signal.try_get())
                 }
             }
         }
@@ -1358,7 +1398,7 @@ pub mod read {
             match value {
                 MaybeSignal::Static(value) => Signal::stored_local(Some(value)),
                 MaybeSignal::Dynamic(signal) => {
-                    Signal::derive_local(move || Some(signal.get()))
+                    Signal::derive_local(move || signal.try_get())
                 }
             }
         }
@@ -1876,7 +1916,7 @@ pub mod read {
         T: Send + Sync + Clone,
     {
         fn from(value: ReadSignal<T>) -> Self {
-            Self(Some(Signal::derive(move || Some(value.get()))))
+            Self(Some(Signal::derive(move || value.try_get())))
         }
     }
 
@@ -1885,7 +1925,7 @@ pub mod read {
         T: Send + Sync + Clone,
     {
         fn from(value: RwSignal<T>) -> Self {
-            Self(Some(Signal::derive(move || Some(value.get()))))
+            Self(Some(Signal::derive(move || value.try_get())))
         }
     }
 
@@ -1894,7 +1934,7 @@ pub mod read {
         T: Send + Sync + Clone,
     {
         fn from(value: Memo<T>) -> Self {
-            Self(Some(Signal::derive(move || Some(value.get()))))
+            Self(Some(Signal::derive(move || value.try_get())))
         }
     }
 
@@ -1903,7 +1943,7 @@ pub mod read {
         T: Send + Sync + Clone,
     {
         fn from(value: Signal<T>) -> Self {
-            Self(Some(Signal::derive(move || Some(value.get()))))
+            Self(Some(Signal::derive(move || value.try_get())))
         }
     }
 
@@ -1995,7 +2035,7 @@ pub mod read {
         T: Send + Sync + Clone,
     {
         fn from(value: ReadSignal<T, LocalStorage>) -> Self {
-            Self(Some(Signal::derive_local(move || Some(value.get()))))
+            Self(Some(Signal::derive_local(move || value.try_get())))
         }
     }
 
@@ -2004,7 +2044,7 @@ pub mod read {
         T: Send + Sync + Clone,
     {
         fn from(value: RwSignal<T, LocalStorage>) -> Self {
-            Self(Some(Signal::derive_local(move || Some(value.get()))))
+            Self(Some(Signal::derive_local(move || value.try_get())))
         }
     }
 
@@ -2013,7 +2053,7 @@ pub mod read {
         T: Send + Sync + Clone,
     {
         fn from(value: Memo<T, LocalStorage>) -> Self {
-            Self(Some(Signal::derive_local(move || Some(value.get()))))
+            Self(Some(Signal::derive_local(move || value.try_get())))
         }
     }
 
@@ -2022,7 +2062,7 @@ pub mod read {
         T: Send + Sync + Clone,
     {
         fn from(value: Signal<T, LocalStorage>) -> Self {
-            Self(Some(Signal::derive_local(move || Some(value.get()))))
+            Self(Some(Signal::derive_local(move || value.try_get())))
         }
     }
 
@@ -2229,10 +2269,13 @@ pub mod write {
                 SignalSetterTypes::Default => Some(new_value),
                 SignalSetterTypes::Write(w) => w.try_set(new_value),
                 SignalSetterTypes::Mapped(s) => {
+                    // handed back if the setter is gone
                     let mut new_value = Some(new_value);
 
-                    let _ = s.try_with_value(|setter| {
-                        setter(new_value.take().unwrap())
+                    s.try_with_value(|setter| {
+                        if let Some(new_value) = new_value.take() {
+                            setter(new_value);
+                        }
                     });
 
                     new_value

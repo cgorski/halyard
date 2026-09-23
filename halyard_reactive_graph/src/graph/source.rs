@@ -30,6 +30,24 @@ pub struct AnySource(
     pub(crate)  &'static Location<'static>,
 );
 
+impl AnySource {
+    /// A source that never changes and has no subscribers: what a reactive value whose value
+    /// is gone stands for in the graph.
+    #[track_caller]
+    pub(crate) fn inert(
+        defined_at: Option<&'static Location<'static>>,
+    ) -> Self {
+        #[cfg(not(any(debug_assertions, halyard_debuginfo)))]
+        let _ = defined_at;
+        AnySource(
+            0,
+            Weak::<super::Inert>::new() as Weak<dyn Source + Send + Sync>,
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at.unwrap_or(Location::caller()),
+        )
+    }
+}
+
 impl DefinedAt for AnySource {
     fn defined_at(&self) -> Option<&'static Location<'static>> {
         #[cfg(any(debug_assertions, halyard_debuginfo))]
