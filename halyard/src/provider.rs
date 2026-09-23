@@ -37,9 +37,17 @@ where
     T: Send + Sync + 'static,
     Chil: IntoView + 'static,
 {
-    let owner = Owner::current()
-        .expect("no current reactive Owner found")
-        .child();
+    let owner = match Owner::current() {
+        Some(parent) => parent.child(),
+        None => {
+            crate::logging::warn!(
+                "[halyard] <Provider/> was created outside any reactive owner; \
+                 its value is provided on a new root owner that lives as long \
+                 as its children."
+            );
+            Owner::new()
+        }
+    };
     let children = children.into_inner();
     let children = owner.with(|| {
         provide_context(value);

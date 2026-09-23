@@ -133,17 +133,24 @@ where
                 }
             }
         });
-        let has_tasks =
-            Arc::new(move || !tasks.with_untracked(SlotMap::is_empty));
+        let has_tasks = Arc::new({
+            let tasks = tasks.clone();
+            move || !tasks.with_untracked(SlotMap::is_empty)
+        });
 
-        OwnedView::new(SuspenseBoundary::<false, _, _> {
-            id,
-            none_pending,
-            fallback,
-            children,
-            error_boundary_parent,
-            has_tasks,
-        })
+        OwnedView::new_with_owner(
+            SuspenseBoundary::<false, _, _> {
+                id,
+                none_pending,
+                fallback,
+                children,
+                error_boundary_parent,
+                has_tasks,
+                tasks,
+                owner: owner.clone(),
+            },
+            owner.clone(),
+        )
     })
 }
 
@@ -159,6 +166,16 @@ fn nonce_or_not() -> Option<Arc<str>> {
     }
 }
 
+/// Records that the chunk `id` could not be rendered on the server (it read a local resource),
+/// so that the client renders it instead of hydrating it.
+fn set_incomplete_chunk(id: SerializedDataId) {
+    // Without a shared context nothing is sent to a client to hydrate (e.g. a view rendered
+    // to a string outside a server integration), so there is nothing to record.
+    if let Some(sc) = Owner::current_shared_context() {
+        sc.set_incomplete_chunk(id);
+    }
+}
+
 pub(crate) struct SuspenseBoundary<const TRANSITION: bool, Fal, Chil> {
     pub id: SerializedDataId,
     pub none_pending: ArcMemo<bool>,
@@ -166,6 +183,11 @@ pub(crate) struct SuspenseBoundary<const TRANSITION: bool, Fal, Chil> {
     pub children: Chil,
     pub error_boundary_parent: Option<ErrorBoundarySuspendedChildren>,
     pub has_tasks: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// The pending tasks registered by resources read under this boundary (the `tasks` of
+    /// the [`SuspenseContext`] provided to the children).
+    pub tasks: ArcRwSignal<SlotMap<DefaultKey, ()>>,
+    /// The owner the boundary was created under, which provides that context.
+    pub owner: Owner,
 }
 
 impl<const TRANSITION: bool, Fal, Chil> Render
@@ -182,7 +204,8 @@ where
         let mut children = Some(self.children);
         let mut fallback = Some(self.fallback);
         let none_pending = self.none_pending;
-        let mut nth_run = 0;
+        // only 0, 1 and "2 or more" matter, so saturating is exact
+        let mut nth_run: usize = 0;
         let outer_owner = Owner::new();
 
         RenderEffect::new(move |prev| {
@@ -192,7 +215,7 @@ where
             //    (because we initially render the children to register Futures, the "first
             //    fallback" is probably the 2nd run
             let show_b = !none_pending.get() && (!TRANSITION || nth_run < 2);
-            nth_run += 1;
+            nth_run = nth_run.saturating_add(1);
             let this = OwnedView::new_with_owner(
                 EitherKeepAlive {
                     a: children.take(),
@@ -218,7 +241,7 @@ where
                 // we increment it manually here so that future resource changes won't cause the transition fallback
                 // to be displayed for the first time
                 // see https://github.com/leptos-rs/leptos/issues/3868, https://github.com/leptos-rs/leptos/issues/4492
-                nth_run += 1;
+                nth_run = nth_run.saturating_add(1);
             }
 
             state
@@ -260,6 +283,8 @@ where
             children,
             error_boundary_parent,
             has_tasks,
+            tasks,
+            owner,
         } = self;
         SuspenseBoundary {
             id,
@@ -268,6 +293,8 @@ where
             children: children.add_any_attr(attr),
             error_boundary_parent,
             has_tasks,
+            tasks,
+            owner,
         }
     }
 }
@@ -319,8 +346,8 @@ where
         Self: Sized,
     {
         buf.next_id();
-        let suspense_context = use_context::<SuspenseContext>().unwrap();
-        let owner = Owner::current().unwrap();
+        let tasks = self.tasks;
+        let owner = self.owner;
 
         let notify_error_boundary =
             ArcStoredValue::new(self.error_boundary_parent.map(|children| {
@@ -334,7 +361,6 @@ where
         // 2. we read from a local resource, meaning this Suspense can never resolve on the server
 
         // first, create listener for tasks
-        let tasks = suspense_context.tasks.clone();
         let (tasks_tx, mut tasks_rx) =
             futures::channel::oneshot::channel::<()>();
 
@@ -432,8 +458,7 @@ where
                     // this will only have fired by this point for local resources accessed
                     // *synchronously*
                     _ = local_rx => {
-                        let sc = Owner::current_shared_context().expect("no shared context");
-                        sc.set_incomplete_chunk(self.id);
+                        set_incomplete_chunk(self.id);
                         if let Some(tx) =
                             notify_error_boundary.write_value().take()
                         {
@@ -441,10 +466,21 @@ where
                         }
                         None
                     }
-                    _ = tasks_rx => {
-                        let children = {
-                            let mut children_lock = children.lock().or_poisoned();
-                            children_lock.take().expect("children should not be removed until we render here")
+                    _ = tasks_rx => 'resolved: {
+                        // the children are only taken here, and this branch runs once
+                        let children = children.lock().or_poisoned().take();
+                        let Some(children) = children else {
+                            crate::logging::warn!(
+                                "[halyard] <Suspense/> could not render its children on \
+                                 the server: they were gone when their resources \
+                                 resolved. Rendering the fallback instead."
+                            );
+                            if let Some(tx) =
+                                notify_error_boundary.write_value().take()
+                            {
+                                let _ = tx.send(());
+                            }
+                            break 'resolved None;
                         };
 
                         // if we ran this earlier, reactive reads would always be registered as None
@@ -458,8 +494,7 @@ where
                         // resources?" Future
                         select! {
                             _ = local_rx => {
-                                let sc = Owner::current_shared_context().expect("no shared context");
-                                sc.set_incomplete_chunk(self.id);
+                                set_incomplete_chunk(self.id);
                                 if let Some(tx) =
                                     notify_error_boundary.write_value().take()
                                 {
@@ -560,7 +595,8 @@ where
         let mut children = Some(self.children);
         let mut fallback = Some(self.fallback);
         let none_pending = self.none_pending;
-        let mut nth_run = 0;
+        // only 0 and "1 or more" matter, so saturating is exact
+        let mut nth_run: usize = 0;
         let outer_owner = Owner::new();
 
         RenderEffect::new(move |prev| {
@@ -570,7 +606,7 @@ where
             //    (because we initially render the children to register Futures, the "first
             //    fallback" is probably the 2nd run
             let show_b = !none_pending.get() && (!TRANSITION || nth_run < 1);
-            nth_run += 1;
+            nth_run = nth_run.saturating_add(1);
             let this = OwnedView::new_with_owner(
                 EitherKeepAlive {
                     a: children.take(),

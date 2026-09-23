@@ -116,8 +116,10 @@ where
                 }
             }
         });
-        let has_tasks =
-            Arc::new(move || !tasks.with_untracked(SlotMap::is_empty));
+        let has_tasks = Arc::new({
+            let tasks = tasks.clone();
+            move || !tasks.with_untracked(SlotMap::is_empty)
+        });
         if let Some(set_pending) = set_pending {
             Effect::new_isomorphic({
                 let none_pending = none_pending.clone();
@@ -127,13 +129,18 @@ where
             });
         }
 
-        OwnedView::new(SuspenseBoundary::<true, _, _> {
-            id,
-            none_pending,
-            fallback,
-            children,
-            error_boundary_parent,
-            has_tasks,
-        })
+        OwnedView::new_with_owner(
+            SuspenseBoundary::<true, _, _> {
+                id,
+                none_pending,
+                fallback,
+                children,
+                error_boundary_parent,
+                has_tasks,
+                tasks,
+                owner: owner.clone(),
+            },
+            owner.clone(),
+        )
     })
 }

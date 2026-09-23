@@ -96,7 +96,16 @@ where
         <Suspense fallback=|| ()>
             {Suspend::new(async move {
                 ready.await;
-                children(res.read_untracked().as_ref().unwrap())
+                // the resource stores its value before it reports that it is ready
+                let value = res.read_untracked();
+                let view = value.as_ref().map(children);
+                if view.is_none() {
+                    crate::logging::warn!(
+                        "[halyard] <Await/> was ready but its future's value is \
+                         missing; rendering nothing."
+                    );
+                }
+                view
             })}
 
         </Suspense>

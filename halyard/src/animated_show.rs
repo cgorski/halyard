@@ -10,6 +10,18 @@ use halyard_reactive_graph::{
     wrappers::read::Signal,
 };
 use halyard_tachys::prelude::*;
+use wasm_bindgen::JsValue;
+
+/// `<AnimatedShow/>` could not schedule hiding its children.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "[halyard] <AnimatedShow/> could not schedule hiding its children after \
+     {delay:?} (setTimeout failed: {js:?}); hiding them now"
+)]
+struct SetTimeoutError {
+    delay: Duration,
+    js: JsValue,
+}
 
 /// A component that will show its children when the `when` condition is `true`.
 /// Additionally, you need to specify a `hide_delay`. If the `when` condition changes to `false`,
@@ -72,9 +84,13 @@ pub fn AnimatedShow(
     let show = RwSignal::new(when.get_untracked());
 
     let eff = RenderEffect::new(move |_| {
-        if when.get() {
+        // `when` is gone once its owner is disposed: then there is nothing left to animate
+        let Some(when) = when.try_get() else {
+            return;
+        };
+        if when {
             // clear any possibly active timer
-            if let Some(h) = handle.get_value() {
+            if let Some(h) = handle.try_get_value().flatten() {
                 h.clear();
             }
 
@@ -83,12 +99,22 @@ pub fn AnimatedShow(
         } else {
             cls.set(hide_class);
 
-            let h = halyard_dom::helpers::set_timeout_with_handle(
+            match halyard_dom::helpers::set_timeout_with_handle(
                 move || show.set(false),
                 hide_delay,
-            )
-            .expect("set timeout in AnimatedShow");
-            handle.set_value(Some(h));
+            ) {
+                Ok(h) => handle.set_value(Some(h)),
+                Err(js) => {
+                    crate::logging::warn!(
+                        "{}",
+                        SetTimeoutError {
+                            delay: hide_delay,
+                            js
+                        }
+                    );
+                    show.set(false);
+                }
+            }
         }
     });
 

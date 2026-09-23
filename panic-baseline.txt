@@ -1,6 +1,6 @@
 # Panic sites per crate in library code (scripts/panic-ratchet.sh).
 # May only go down. Regenerate with: scripts/panic-ratchet.sh --update
-halyard 27
+halyard 0
 halyard_actix 6
 halyard_any_spawner 12
 halyard_axum 13

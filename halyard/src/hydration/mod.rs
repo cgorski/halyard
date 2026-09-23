@@ -85,61 +85,14 @@ pub fn HydrationScripts(
         OnceLock::new();
 
     if let Some(splits) = SPLIT_MANIFEST.get_or_init(|| {
-        let root = root.clone().unwrap_or_default();
-
-        let (wasm_split_js, wasm_split_manifest) = if options.hash_files {
-            let hash_path = std::env::current_exe()
-                .map(|path| {
-                    path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
-                })
-                .unwrap_or_default()
-                .join(options.hash_file.as_ref());
-            let hashes = std::fs::read_to_string(&hash_path)
-                .expect("failed to read hash file");
-
-            let mut split =
-                "__wasm_split.______________________.js".to_string();
-            let mut manifest = "__wasm_split_manifest.json".to_string();
-            for line in hashes.lines() {
-                let line = line.trim();
-                if !line.is_empty() {
-                    if let Some((file, hash)) = line.split_once(':') {
-                        if file == "manifest" {
-                            manifest.clear();
-                            manifest.push_str("__wasm_split_manifest.");
-                            manifest.push_str(hash.trim());
-                            manifest.push_str(".json");
-                        }
-                        if file == "split" {
-                            split.clear();
-                            split.push_str("__wasm_split.");
-                            split.push_str(hash.trim());
-                            split.push_str(".js");
-                        }
-                    }
-                }
-            }
-            (split, manifest)
-        } else {
-            (
-                "__wasm_split.______________________.js".to_string(),
-                "__wasm_split_manifest.json".to_string(),
-            )
-        };
-
-        let site_dir = &options.site_root;
-        let pkg_dir = &options.site_pkg_dir;
-        let path = PathBuf::from(site_dir.to_string());
-        let path = path.join(pkg_dir.to_string()).join(wasm_split_manifest);
-        let file = std::fs::read_to_string(path).ok()?;
-
-        let manifest = WasmSplitManifest(ArcStoredValue::new((
-            format!("{root}/{pkg_dir}"),
-            serde_json::from_str(&file).expect("could not read manifest file"),
-            wasm_split_js,
-        )));
-
-        Some(manifest)
+        load_split_manifest(&options, root.as_deref().unwrap_or_default())
+            .unwrap_or_else(|err| {
+                halyard::logging::error!(
+                    "[halyard] Rendering pages without preloads for lazy-loaded \
+                     code: {err}"
+                );
+                None
+            })
     }) {
         provide_context(splits.clone());
     }
@@ -197,31 +150,35 @@ pub fn HydrationScripts(
 /// `cargo build` therefore requested `_bg.wasm` while the build tool had
 /// written `.wasm`, the request 404ed, and hydration never ran. Nothing here
 /// depends on compile-time environment variables any more.
+///
+/// If file hashing is on but the hash file is missing or cannot be read, one error is logged
+/// and the unhashed names are returned.
 pub fn hydration_file_names(options: &HalyardOptions) -> (String, String) {
     let mut js_file_name = options.output_name.to_string();
     let mut wasm_file_name = options.wasm_file_stem().to_string();
     if options.hash_files {
-        let hash_path = std::env::current_exe()
-            .map(|path| {
-                path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
-            })
-            .unwrap_or_default()
-            .join(options.hash_file.as_ref());
+        let hash_path = hash_file_path(options);
         if hash_path.exists() {
-            let hashes = std::fs::read_to_string(&hash_path)
-                .expect("failed to read hash file");
-            for line in hashes.lines() {
-                let line = line.trim();
-                if !line.is_empty() {
-                    if let Some((file, hash)) = line.split_once(':') {
-                        if file == "js" {
-                            js_file_name.push_str(&format!(".{}", hash.trim()));
-                        } else if file == "wasm" {
-                            wasm_file_name
-                                .push_str(&format!(".{}", hash.trim()));
+            match read_hash_file(hash_path) {
+                Ok(hashes) => {
+                    for line in hashes.lines() {
+                        let line = line.trim();
+                        if !line.is_empty() {
+                            if let Some((file, hash)) = line.split_once(':') {
+                                if file == "js" {
+                                    js_file_name
+                                        .push_str(&format!(".{}", hash.trim()));
+                                } else if file == "wasm" {
+                                    wasm_file_name
+                                        .push_str(&format!(".{}", hash.trim()));
+                                }
+                            }
                         }
                     }
                 }
+                Err(err) => halyard::logging::error!(
+                    "[halyard] Using the unhashed JS and WASM file names: {err}"
+                ),
             }
         } else {
             halyard::logging::error!(
@@ -230,6 +187,95 @@ pub fn hydration_file_names(options: &HalyardOptions) -> (String, String) {
         }
     }
     (js_file_name, wasm_file_name)
+}
+
+/// A server-side file that [`HydrationScripts`] or [`hydration_file_names`] needs could not be
+/// used. The failure is logged and the page is still rendered: without the hash file, with the
+/// unhashed file names; without the split manifest (read once per process), with no preloads
+/// for lazy-loaded code.
+#[derive(Debug, thiserror::Error)]
+enum HydrationFileError {
+    /// `hash_files` is on, but the hash file could not be read.
+    #[error("could not read the file-hash file {}: {source}", path.display())]
+    ReadHashFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// The wasm-split manifest exists but is not valid JSON of the expected shape.
+    #[error("could not parse the wasm-split manifest {}: {source}", path.display())]
+    ParseSplitManifest {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+}
+
+/// Where the hash file written by the build tool is: next to the server binary.
+fn hash_file_path(options: &HalyardOptions) -> PathBuf {
+    std::env::current_exe()
+        .map(|path| path.parent().map(|p| p.to_path_buf()).unwrap_or_default())
+        .unwrap_or_default()
+        .join(options.hash_file.as_ref())
+}
+
+fn read_hash_file(path: PathBuf) -> Result<String, HydrationFileError> {
+    std::fs::read_to_string(&path)
+        .map_err(|source| HydrationFileError::ReadHashFile { path, source })
+}
+
+/// Loads the wasm-split manifest (the preloads for lazy-loaded code) for [`HydrationScripts`].
+/// `Ok(None)` if there is no manifest, i.e. the application has no lazy-loaded code.
+fn load_split_manifest(
+    options: &HalyardOptions,
+    root: &str,
+) -> Result<Option<WasmSplitManifest>, HydrationFileError> {
+    let (wasm_split_js, wasm_split_manifest) = if options.hash_files {
+        let hashes = read_hash_file(hash_file_path(options))?;
+
+        let mut split = "__wasm_split.______________________.js".to_string();
+        let mut manifest = "__wasm_split_manifest.json".to_string();
+        for line in hashes.lines() {
+            let line = line.trim();
+            if !line.is_empty() {
+                if let Some((file, hash)) = line.split_once(':') {
+                    if file == "manifest" {
+                        manifest.clear();
+                        manifest.push_str("__wasm_split_manifest.");
+                        manifest.push_str(hash.trim());
+                        manifest.push_str(".json");
+                    }
+                    if file == "split" {
+                        split.clear();
+                        split.push_str("__wasm_split.");
+                        split.push_str(hash.trim());
+                        split.push_str(".js");
+                    }
+                }
+            }
+        }
+        (split, manifest)
+    } else {
+        (
+            "__wasm_split.______________________.js".to_string(),
+            "__wasm_split_manifest.json".to_string(),
+        )
+    };
+
+    let site_dir = &options.site_root;
+    let pkg_dir = &options.site_pkg_dir;
+    let path = PathBuf::from(site_dir.to_string());
+    let path = path.join(pkg_dir.to_string()).join(wasm_split_manifest);
+    let Ok(file) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let preloads = serde_json::from_str(&file).map_err(|source| {
+        HydrationFileError::ParseSplitManifest { path, source }
+    })?;
+
+    Ok(Some(WasmSplitManifest(ArcStoredValue::new((
+        format!("{root}/{pkg_dir}"),
+        preloads,
+        wasm_split_js,
+    )))))
 }
 
 /// If this is provided via context, it means that you are using the islands router and
@@ -243,3 +289,83 @@ pub fn hydration_file_names(options: &HalyardOptions) -> (String, String) {
 /// included, as they only need to be sent to the client once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IslandsRouterNavigation;
+
+#[cfg(test)]
+mod tests {
+    use super::{load_split_manifest, HydrationFileError};
+    use halyard_config::HalyardOptions;
+    use std::{path::PathBuf, sync::Arc};
+
+    /// A fresh directory under the system temp dir, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("halyard-{name}-{}", std::process::id()));
+            _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn split_manifest_reports_an_unreadable_hash_file() {
+        // the "hash file" is a directory, which exists but cannot be read
+        let dir = TempDir::new("unreadable-hash-file");
+        let options = HalyardOptions::builder()
+            .output_name("app")
+            .hash_files(true)
+            .hash_file(Arc::from(dir.path()))
+            .build();
+        let result = load_split_manifest(&options, "");
+        assert!(
+            matches!(result, Err(HydrationFileError::ReadHashFile { .. })),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn split_manifest_reports_invalid_json() {
+        let dir = TempDir::new("invalid-split-manifest");
+        std::fs::create_dir_all(dir.0.join("pkg")).unwrap();
+        std::fs::write(
+            dir.0.join("pkg").join("__wasm_split_manifest.json"),
+            "not json",
+        )
+        .unwrap();
+        let options = HalyardOptions::builder()
+            .output_name("app")
+            .site_root(dir.path())
+            .build();
+        let result = load_split_manifest(&options, "");
+        assert!(
+            matches!(
+                result,
+                Err(HydrationFileError::ParseSplitManifest { .. })
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn split_manifest_is_optional() {
+        let dir = TempDir::new("no-split-manifest");
+        let options = HalyardOptions::builder()
+            .output_name("app")
+            .site_root(dir.path())
+            .build();
+        let result = load_split_manifest(&options, "");
+        assert!(matches!(result, Ok(None)), "{result:?}");
+    }
+}

@@ -145,6 +145,18 @@ struct ErrorBoundaryViewState<Chil, Fal> {
     fallback: Option<Fal>,
 }
 
+/// The value of the boundary's render effect: `None` if the view state was lost, i.e. the
+/// effect was re-run without its previous value (see [`warn_state_lost`]). A lost boundary
+/// renders nothing.
+type BoundaryState<Chil, Fal> = Option<ErrorBoundaryViewState<Chil, Fal>>;
+
+fn warn_state_lost() {
+    crate::logging::warn!(
+        "[halyard] <ErrorBoundary/> lost its view state: its render effect ran again \
+         without the previous state. The boundary renders nothing from now on."
+    );
+}
+
 impl<Chil, Fal> Mountable for ErrorBoundaryViewState<Chil, Fal>
 where
     Chil: Mountable,
@@ -193,19 +205,19 @@ where
     FalFn: FnMut(ArcRwSignal<Errors>) -> Fal + Send + 'static,
     Fal: Render + 'static,
 {
-    type State = RenderEffect<ErrorBoundaryViewState<Chil::State, Fal::State>>;
+    type State = RenderEffect<BoundaryState<Chil::State, Fal::State>>;
 
     fn build(mut self) -> Self::State {
         let hook = Arc::clone(&self.hook);
         let _hook = halyard_throw_error::set_error_hook(Arc::clone(&hook));
         let mut children = Some(self.children.build());
         RenderEffect::new(
-            move |prev: Option<
-                ErrorBoundaryViewState<Chil::State, Fal::State>,
-            >| {
+            move |prev: Option<BoundaryState<Chil::State, Fal::State>>| {
                 let _hook =
                     halyard_throw_error::set_error_hook(Arc::clone(&hook));
-                if let Some(mut state) = prev {
+                if let Some(prev) = prev {
+                    // lost on an earlier run, which reported it
+                    let mut state = prev?;
                     match (self.errors_empty.get(), &mut state.fallback) {
                         // no errors, and was showing fallback
                         (true, Some(fallback)) => {
@@ -228,14 +240,16 @@ where
                         // in either case, rebuilding doesn't require us to do anything
                         _ => {}
                     }
-                    state
+                    Some(state)
                 } else {
+                    // the children are only taken on the first run
+                    let Some(children) = children.take() else {
+                        warn_state_lost();
+                        return None;
+                    };
                     let fallback = (!self.errors_empty.get())
                         .then(|| (self.fallback)(self.errors.clone()).build());
-                    ErrorBoundaryViewState {
-                        children: children.take().unwrap(),
-                        fallback,
-                    }
+                    Some(ErrorBoundaryViewState { children, fallback })
                 }
             },
         )
@@ -465,12 +479,12 @@ where
         let cursor = cursor.to_owned();
         let position = position.to_owned();
         RenderEffect::new(
-            move |prev: Option<
-                ErrorBoundaryViewState<Chil::State, Fal::State>,
-            >| {
+            move |prev: Option<BoundaryState<Chil::State, Fal::State>>| {
                 let _hook =
                     halyard_throw_error::set_error_hook(Arc::clone(&hook));
-                if let Some(mut state) = prev {
+                if let Some(prev) = prev {
+                    // lost on an earlier run, which reported it
+                    let mut state = prev?;
                     match (self.errors_empty.get(), &mut state.fallback) {
                         // no errors, and was showing fallback
                         (true, Some(fallback)) => {
@@ -493,9 +507,13 @@ where
                         // in either case, rebuilding doesn't require us to do anything
                         _ => {}
                     }
-                    state
+                    Some(state)
                 } else {
-                    let children = children.take().unwrap();
+                    // the children are only taken on the first run
+                    let Some(children) = children.take() else {
+                        warn_state_lost();
+                        return None;
+                    };
                     let (children, fallback) = if self.errors_empty.get() {
                         (
                             children.hydrate::<FROM_SERVER>(&cursor, &position),
@@ -511,7 +529,7 @@ where
                         )
                     };
 
-                    ErrorBoundaryViewState { children, fallback }
+                    Some(ErrorBoundaryViewState { children, fallback })
                 }
             },
         )
@@ -522,7 +540,7 @@ where
         cursor: &Cursor,
         position: &PositionState,
     ) -> Self::State {
-        let mut children = Some(self.children);
+        let children = self.children;
         let hook = Arc::clone(&self.hook);
         let cursor = cursor.to_owned();
         let position = position.to_owned();
@@ -533,7 +551,6 @@ where
             let errors = self.errors.clone();
             let fallback_fn = Arc::clone(&fallback_fn);
             async move {
-                let children = children.take().unwrap();
                 let (children, fallback) = if errors_empty.get() {
                     (children.hydrate_async(&cursor, &position).await, None)
                 } else {
@@ -545,17 +562,17 @@ where
                     (children, Some(fallback))
                 };
 
-                ErrorBoundaryViewState { children, fallback }
+                Some(ErrorBoundaryViewState { children, fallback })
             }
         };
 
         RenderEffect::new_with_async_value(
-            move |prev: Option<
-                ErrorBoundaryViewState<Chil::State, Fal::State>,
-            >| {
+            move |prev: Option<BoundaryState<Chil::State, Fal::State>>| {
                 let _hook =
                     halyard_throw_error::set_error_hook(Arc::clone(&hook));
-                if let Some(mut state) = prev {
+                if let Some(prev) = prev {
+                    // lost on an earlier run, which reported it
+                    let mut state = prev?;
                     match (self.errors_empty.get(), &mut state.fallback) {
                         // no errors, and was showing fallback
                         (true, Some(fallback)) => {
@@ -581,9 +598,12 @@ where
                         // in either case, rebuilding doesn't require us to do anything
                         _ => {}
                     }
-                    state
+                    Some(state)
                 } else {
-                    unreachable!()
+                    // the effect starts from `initial`, so it only gets here if its value was
+                    // taken, and there is nothing to rebuild the children from
+                    warn_state_lost();
+                    None
                 }
             },
             initial,

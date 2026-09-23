@@ -18,7 +18,7 @@ use halyard_tachys::{
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
-use wasm_bindgen::{JsCast, JsValue, UnwrapThrowExt};
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{
     Event, FormData, HtmlButtonElement, HtmlFormElement, HtmlInputElement,
     SubmitEvent,
@@ -130,7 +130,8 @@ where
                         err.to_string(),
                     )
                     .into_app_error())));
-                    version.update(|n| *n += 1);
+                    // a version only has to change, so it wraps rather than overflows
+                    version.update(|n| *n = n.wrapping_add(1));
                 }
             }
         }
@@ -285,7 +286,12 @@ where
     ) -> Result<Self, serde_qs::Error> {
         let data =
             web_sys::UrlSearchParams::new_with_str_sequence_sequence(form_data)
-                .unwrap_throw();
+                .map_err(|err| {
+                    <serde_qs::Error as serde::de::Error>::custom(format!(
+                        "the form data has a value that is not text (a file \
+                         input?): {err:?}"
+                    ))
+                })?;
         let data = data.to_string().as_string().unwrap_or_default();
         serde_qs::Config::new(5, false).deserialize_str::<Self>(&data)
     }
@@ -302,10 +308,11 @@ fn form_data_from_event(
                 Some(form.clone())
             } else if let Some(input) = el.dyn_ref::<HtmlInputElement>() {
                 submitter_name_value = Some((input.name(), input.value()));
-                Some(ev.target().unwrap().unchecked_into())
+                // no target: `MissingForm` below
+                ev.target().map(JsCast::unchecked_into)
             } else if let Some(button) = el.dyn_ref::<HtmlButtonElement>() {
                 submitter_name_value = Some((button.name(), button.value()));
-                Some(ev.target().unwrap().unchecked_into())
+                ev.target().map(JsCast::unchecked_into)
             } else {
                 None
             }

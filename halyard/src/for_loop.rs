@@ -11,6 +11,20 @@ use halyard_tachys::{
 };
 use std::hash::Hash;
 
+/// The owner of a `<For/>`: the current owner or, if the list is created outside any owner,
+/// a new root owner that lives as long as the list does (after a warning).
+fn list_owner(component: &str) -> Owner {
+    Owner::current().unwrap_or_else(|| {
+        crate::logging::warn!(
+            "[halyard] <{component}/> was created outside any reactive owner; its \
+             rows are owned by a new root owner that lives as long as the list. \
+             Create views inside `mount_to`, `hydrate_body` or `Owner::with` so \
+             that they are disposed with the rest of the application."
+        );
+        Owner::new()
+    })
+}
+
 /// Iterates over children and displays them, keyed by the `key` function given.
 ///
 /// This is much more efficient than naively iterating over nodes with `.iter().map(|n| view! { ... })...`,
@@ -135,7 +149,7 @@ where
     // this means
     // a) the reactive owner for each row will not be cleared when the whole list updates
     // b) context provided in each row will not wipe out the others
-    let parent = Owner::current().expect("no reactive owner");
+    let parent = list_owner("For");
     let children = move |_, child| {
         let owner = parent.with(Owner::new);
         let view = owner.with(|| children(child));
@@ -209,7 +223,7 @@ where
     // this means
     // a) the reactive owner for each row will not be cleared when the whole list updates
     // b) context provided in each row will not wipe out the others
-    let parent = Owner::current().expect("no reactive owner");
+    let parent = list_owner("ForEnumerate");
     let children = move |index, child| {
         let owner = parent.with(Owner::new);
         let (index, set_index) = ArcRwSignal::new(index).split();

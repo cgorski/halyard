@@ -3,6 +3,22 @@ use halyard_dom::helpers::document;
 use halyard_macro::component;
 use halyard_reactive_graph::{effect::Effect, graph::untrack, owner::Owner};
 use std::sync::Arc;
+use wasm_bindgen::JsValue;
+
+/// Why a `<Portal/>` rendered nothing.
+#[derive(Debug, thiserror::Error)]
+enum PortalError {
+    /// No `mount` was given and the document has no `<body>`.
+    #[error("no `mount` element was given and the document has no <body>")]
+    NoBody,
+    /// The DOM refused to create the portal's container element.
+    #[error("could not create the <{tag}> container: {js:?}")]
+    CreateContainer { tag: &'static str, js: JsValue },
+}
+
+fn warn_portal(err: PortalError) {
+    crate::logging::warn!("[halyard] <Portal/> renders nothing: {err}");
+}
 
 /// Renders components somewhere else in the DOM.
 ///
@@ -36,20 +52,30 @@ where
         use send_wrapper::SendWrapper;
         use wasm_bindgen::JsCast;
 
-        let mount = mount.unwrap_or_else(|| {
-            document().body().expect("body to exist").unchecked_into()
-        });
+        let Some(mount) =
+            mount.or_else(|| document().body().map(JsCast::unchecked_into))
+        else {
+            warn_portal(PortalError::NoBody);
+            return;
+        };
         let children = children.into_inner();
 
         Effect::new(move |_| {
             let container = if is_svg {
                 document()
                     .create_element_ns(Some("http://www.w3.org/2000/svg"), "g")
-                    .expect("SVG element creation to work")
+                    .map_err(|js| PortalError::CreateContainer { tag: "g", js })
             } else {
-                document()
-                    .create_element("div")
-                    .expect("HTML element creation to work")
+                document().create_element("div").map_err(|js| {
+                    PortalError::CreateContainer { tag: "div", js }
+                })
+            };
+            let container = match container {
+                Ok(container) => container,
+                Err(err) => {
+                    warn_portal(err);
+                    return;
+                }
             };
 
             let render_root = if use_shadow {
