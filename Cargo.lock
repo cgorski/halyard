@@ -1792,6 +1792,7 @@ dependencies = [
  "futures",
  "halyard",
  "halyard_or_poisoned",
+ "html-escape",
  "indexmap",
  "send_wrapper",
  "thiserror 2.0.17",

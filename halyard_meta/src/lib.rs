@@ -252,8 +252,11 @@ impl ServerMetaContextOutput {
         // all registered meta tags, then the <title>
         let mut head = self.elements.try_iter().collect::<String>();
         if let Some(title) = self.title.as_string() {
+            // The title is text: escaped like any other text node, so a title
+            // holding `</title><script>` (a committee or contact name, say) stays
+            // text and cannot end the element early.
             head.push_str("<title>");
-            head.push_str(&title);
+            head.push_str(&html_escape::encode_text(&title));
             head.push_str("</title>");
         }
 
@@ -796,6 +799,22 @@ mod tests {
             "<!DOCTYPE html><html data-theme=\"dark\" lang=\"en\"><head>\
              <meta charset=\"utf-8\"><!--HEAD--><title>Reports</title></head>\
              <body class=\"app\"><main>content</main></body></html>"
+        );
+    }
+
+    /// A title is text: markup in it is escaped, so it cannot end `<title>` and inject
+    /// a script (the browser sets `document.title` as text, which is already safe).
+    #[test]
+    fn a_title_with_markup_stays_text() {
+        let page = inject_title(
+            "A & B </title><script>alert(1)</script>",
+            "<html><head><!--HEAD--></head><body></body></html>",
+        );
+
+        assert_eq!(
+            page,
+            "<html><head><!--HEAD--><title>A &amp; B &lt;/title&gt;&lt;script&gt;\
+             alert(1)&lt;/script&gt;</title></head><body></body></html>"
         );
     }
 
