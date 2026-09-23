@@ -2054,6 +2054,7 @@ dependencies = [
  "sledgehammer_bindgen",
  "sledgehammer_utils",
  "slotmap",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-test",
  "tracing",

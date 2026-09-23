@@ -301,20 +301,17 @@ pub fn dom_path(node: &Node) -> String {
             node.node_name().to_lowercase()
         };
         if let Some(parent) = node.parent_node() {
-            // 1-based index among *all* child nodes (comments and text included),
+            // index among *all* child nodes (comments and text included),
             // because that is what the hydration cursor walks
             let children = parent.child_nodes();
-            let mut index = 0;
-            for i in 0..children.length() {
-                if let Some(child) = children.item(i) {
-                    if child.is_same_node(Some(&node)) {
-                        index = i + 1;
-                        break;
-                    }
-                }
-            }
-            if children.length() > 1 && index > 0 {
-                segment.push_str(&format!(":nth-child({index})"));
+            let count = children.length();
+            let index = (0..count).find(|&i| {
+                children
+                    .item(i)
+                    .is_some_and(|child| child.is_same_node(Some(&node)))
+            });
+            if let Some(suffix) = nth_child_suffix(index, count) {
+                segment.push_str(&suffix);
             }
             current = Some(parent);
         } else {
@@ -324,6 +321,17 @@ pub fn dom_path(node: &Node) -> String {
     }
     segments.reverse();
     segments.join(" > ")
+}
+
+/// The `:nth-child(n)` suffix (1-based) for the child node at 0-based `index` among its
+/// parent's `count` child nodes. `None` for an only child, for a node not found among
+/// its parent's children, and for an index whose position does not fit in a `u32`.
+fn nth_child_suffix(index: Option<u32>, count: u32) -> Option<String> {
+    if count <= 1 {
+        return None;
+    }
+    let position = index?.checked_add(1)?;
+    Some(format!(":nth-child({position})"))
 }
 
 /// Reports a hydration mismatch. The first mismatch of a hydration pass is logged in full
@@ -396,4 +404,32 @@ pub(crate) fn failed_to_cast_marker_node(node: Node) -> Comment {
 pub(crate) fn failed_to_cast_text_node(node: Node) -> Text {
     report_mismatch("a text node", &node);
     Rndr::create_text_node("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nth_child_suffix;
+
+    #[test]
+    fn nth_child_suffix_does_not_overflow_at_the_largest_index() {
+        assert_eq!(nth_child_suffix(Some(u32::MAX), u32::MAX), None);
+        assert_eq!(
+            nth_child_suffix(Some(u32::MAX - 1), u32::MAX).as_deref(),
+            Some(":nth-child(4294967295)")
+        );
+    }
+
+    #[test]
+    fn nth_child_suffix_is_one_based_and_only_among_siblings() {
+        assert_eq!(
+            nth_child_suffix(Some(0), 3).as_deref(),
+            Some(":nth-child(1)")
+        );
+        assert_eq!(
+            nth_child_suffix(Some(2), 3).as_deref(),
+            Some(":nth-child(3)")
+        );
+        assert_eq!(nth_child_suffix(Some(0), 1), None);
+        assert_eq!(nth_child_suffix(None, 3), None);
+    }
 }

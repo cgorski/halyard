@@ -48,6 +48,7 @@ use web_sys::Node;
 
 /// Helpers for interacting with the DOM.
 pub mod dom;
+mod dom_error;
 /// Types for building a statically-typed HTML view tree.
 pub mod html;
 /// Supports adding interactivity to HTML.
