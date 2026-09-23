@@ -63,78 +63,38 @@ impl<T: AsPath> PossibleRouteMatch for StaticSegment<T> {
     }
 
     fn test<'a>(&self, path: &'a str) -> Option<PartialPathMatch<'a>> {
-        let mut matched_len = 0;
-        let mut test = path.chars().peekable();
-        let mut this = self.0.as_path().chars();
-        let mut has_matched =
-            self.0.as_path().is_empty() || self.0.as_path() == "/";
+        let segment = self.0.as_path();
 
-        // match an initial /
-        if let Some('/') = test.peek() {
-            test.next();
+        // `""` and `"/"` are pass-through parents (e.g. nested wrapper routes): they
+        // consume nothing and leave the rest of the path to their children. A non-empty
+        // path must start with `/`, otherwise we are not certain about being at the
+        // beginning of a segment in the path.
+        if segment.is_empty() {
+            return (path.is_empty() || path.starts_with('/'))
+                .then(|| PartialPathMatch::new(path, vec![], ""));
+        }
+        if segment == "/" {
+            // the `/` is reported as matched but not eaten, so that the next segment
+            // can still tell that it is matching from the beginning of a segment
+            return path
+                .starts_with('/')
+                .then(|| PartialPathMatch::new(path, vec![], "/"));
+        }
 
-            if !self.0.as_path().is_empty() {
-                matched_len += 1;
-            }
-            if self.0.as_path().starts_with('/') || self.0.as_path().is_empty()
-            {
-                this.next();
-            }
-        } else if !path.is_empty() {
-            // Path must start with `/` otherwise we are not certain about being at the beginning of the segment in the path
+        let rest = path.strip_prefix('/')?;
+        let name = segment.strip_prefix('/').unwrap_or(segment);
+        // a `/` inside the name can never match: the path's `/` ends the segment
+        if name.contains('/') {
             return None;
         }
-
-        for char in test {
-            let n = this.next();
-            // when we get a closing /, stop matching
-            if char == '/' {
-                if n.is_some() {
-                    return None;
-                }
-                break;
-            } else if n.is_none() {
-                // segment is exhausted but the path continues with a
-                // non-`/` byte: an overlong path must not match a shorter
-                // static segment (e.g. `/foobar` must not match `fo`).
-                // `""` and `"/"` are the exceptions: they are pass-through
-                // parents (e.g. nested wrapper routes) that consume nothing
-                // and leave the rest of the path to their children.
-                if self.0.as_path().is_empty() || self.0.as_path() == "/" {
-                    break;
-                }
-                return None;
-            }
-            // if the next character in the path matches the
-            // next character in the segment, add it to the match
-            else if Some(char) == n {
-                has_matched = true;
-                matched_len += char.len_utf8();
-            }
-            // otherwise, this route doesn't match and we should
-            // return None
-            else {
-                return None;
-            }
-        }
-
-        // if we still have remaining, unmatched characters in this segment, it was not a match
-        if this.next().is_some() {
+        let remaining = rest.strip_prefix(name)?;
+        // the whole segment must match: `/foobar` does not match `fo`
+        if !(remaining.is_empty() || remaining.starts_with('/')) {
             return None;
         }
-
-        // build the match object
-        let (matched, remaining) = if matched_len == 1 && path.starts_with('/')
-        {
-            // If only thing that matched is `/` we can't eat it, otherwise next invocation of the
-            // test function will not be able to tell that we are matching from the beginning of the path segment
-            ("/", path)
-        } else {
-            // the remaining is built from the path in, with the slice moved
-            // by the length of this match
-            path.split_at(matched_len)
-        };
-        has_matched.then(|| PartialPathMatch::new(remaining, vec![], matched))
+        // `remaining` is the end of `path`, so this removes exactly its length
+        let matched = path.strip_suffix(remaining)?;
+        Some(PartialPathMatch::new(remaining, vec![], matched))
     }
 
     fn generate_path(&self, path: &mut Vec<PathSegment>) {
@@ -327,6 +287,54 @@ mod tests {
     fn no_partial_match_on_overlong_path() {
         let def = StaticSegment("fo");
         assert!(def.test("/foobar").is_none());
+    }
+
+    #[test]
+    fn static_segments_match_multibyte_names_whole() {
+        let def = StaticSegment("café");
+        let m = def.test("/café/menu").expect("should match");
+        assert_eq!(m.matched(), "/café");
+        assert_eq!(m.remaining(), "/menu");
+        assert!(def.test("/cafés").is_none());
+        assert!(def.test("/caf").is_none());
+        assert!(def.test("/cafe").is_none());
+        assert!(def.test("café").is_none());
+        assert!(StaticSegment("é").test("/éa").is_none());
+    }
+
+    /// What `StaticSegment` matches, for a table of segments and paths (the behaviour the
+    /// loop without arithmetic must keep).
+    #[test]
+    fn static_segment_table() {
+        // (segment, path, Some((matched, remaining)) or None)
+        let cases: &[(&'static str, &str, Option<(&str, &str)>)] = &[
+            ("", "", Some(("", ""))),
+            ("", "/", Some(("", "/"))),
+            ("", "/a/b", Some(("", "/a/b"))),
+            ("", "a", None),
+            ("/", "", None),
+            ("/", "/", Some(("/", "/"))),
+            ("/", "/a", Some(("/", "/a"))),
+            ("/", "a", None),
+            ("a", "", None),
+            ("a", "/", None),
+            ("a", "/a", Some(("/a", ""))),
+            ("a", "/a/", Some(("/a", "/"))),
+            ("a", "/a//", Some(("/a", "//"))),
+            ("a", "/ab", None),
+            ("a", "a", None),
+            ("a", "//a", None),
+            ("/a", "/a/b", Some(("/a", "/b"))),
+            ("ab", "/a", None),
+            ("a/b", "/a/b", None),
+            ("a/", "/a/", None),
+        ];
+        for &(segment, path, expected) in cases {
+            let got = StaticSegment(segment)
+                .test(path)
+                .map(|m| (m.matched(), m.remaining()));
+            assert_eq!(got, expected, "StaticSegment({segment:?}) on {path:?}");
+        }
     }
 
     #[test]

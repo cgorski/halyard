@@ -1,6 +1,22 @@
 use super::{PartialPathMatch, PathSegment, PossibleRouteMatch};
-use core::iter;
 use std::borrow::Cow;
+
+/// Splits off the segment that `path` starts with: `(matched, value, remaining)`, where
+/// `matched` is the leading `/` and `value`, `value` runs up to (not including) the next
+/// `/`, and `remaining` is the rest of `path`.
+///
+/// A path that does not start with `/` is not at the start of a segment, as for
+/// [`StaticSegment`](super::StaticSegment): `None`.
+fn first_segment(path: &str) -> Option<(&str, &str, &str)> {
+    let rest = path.strip_prefix('/')?;
+    let (value, remaining) = match rest.find('/') {
+        Some(end) => rest.split_at_checked(end)?,
+        None => (rest, ""),
+    };
+    // `remaining` is the end of `path`, so this removes exactly its length
+    let matched = path.strip_suffix(remaining)?;
+    Some((matched, value, remaining))
+}
 
 /// A segment that captures a value from the url and maps it to a key.
 ///
@@ -40,37 +56,12 @@ impl PossibleRouteMatch for ParamSegment {
     }
 
     fn test<'a>(&self, path: &'a str) -> Option<PartialPathMatch<'a>> {
-        let mut matched_len = 0;
-        let mut param_offset = 0;
-        let mut param_len = 0;
-        let mut test = path.chars();
-
-        // match an initial /
-        if let Some('/') = test.next() {
-            matched_len += 1;
-            param_offset = 1;
-        }
-        for char in test {
-            // when we get a closing /, stop matching
-            if char == '/' {
-                break;
-            }
-            // otherwise, push into the matched param
-            else {
-                matched_len += char.len_utf8();
-                param_len += char.len_utf8();
-            }
-        }
-
-        if matched_len == 0 || (matched_len == 1 && path.starts_with('/')) {
+        let (matched, value, remaining) = first_segment(path)?;
+        // a param needs a value: `/` or `//x` do not match
+        if value.is_empty() {
             return None;
         }
-
-        let (matched, remaining) = path.split_at(matched_len);
-        let param_value = vec![(
-            Cow::Borrowed(self.0),
-            path[param_offset..param_len + param_offset].to_string(),
-        )];
+        let param_value = vec![(Cow::Borrowed(self.0), value.to_string())];
         Some(PartialPathMatch::new(remaining, param_value, matched))
     }
 
@@ -130,31 +121,14 @@ impl PossibleRouteMatch for WildcardSegment {
     }
 
     fn test<'a>(&self, path: &'a str) -> Option<PartialPathMatch<'a>> {
-        let mut matched_len = 0;
-        let mut param_offset = 0;
-        let mut param_len = 0;
-        let mut test = path.chars();
-
-        // match an initial /
-        if let Some('/') = test.next() {
-            matched_len += 1;
-            param_offset += 1;
-        }
-        for char in test {
-            matched_len += char.len_utf8();
-            param_len += char.len_utf8();
-        }
-
-        let (matched, remaining) = path.split_at(matched_len);
-        let param_value = iter::once((
-            Cow::Borrowed(self.0),
-            path[param_offset..param_len + param_offset].to_string(),
-        ));
-        Some(PartialPathMatch::new(
-            remaining,
-            param_value.into_iter().collect(),
-            matched,
-        ))
+        // the rest of the path, which may be empty; a non-empty rest must start a segment
+        let value = if path.is_empty() {
+            path
+        } else {
+            path.strip_prefix('/')?
+        };
+        let param_value = vec![(Cow::Borrowed(self.0), value.to_string())];
+        Some(PartialPathMatch::new("", param_value, path))
     }
 
     fn generate_path(&self, path: &mut Vec<PathSegment>) {
@@ -171,44 +145,15 @@ impl PossibleRouteMatch for OptionalParamSegment {
     }
 
     fn test<'a>(&self, path: &'a str) -> Option<PartialPathMatch<'a>> {
-        let mut matched_len = 0;
-        let mut param_offset = 0;
-        let mut param_len = 0;
-        let mut test = path.chars();
-
-        // match an initial /
-        if let Some('/') = test.next() {
-            matched_len += 1;
-            param_offset = 1;
-        }
-        for char in test {
-            // when we get a closing /, stop matching
-            if char == '/' {
-                break;
+        match first_segment(path) {
+            Some((matched, value, remaining)) if !value.is_empty() => {
+                let param_value =
+                    vec![(Cow::Borrowed(self.0), value.to_string())];
+                Some(PartialPathMatch::new(remaining, param_value, matched))
             }
-            // otherwise, push into the matched param
-            else {
-                matched_len += char.len_utf8();
-                param_len += char.len_utf8();
-            }
+            // no value here: match nothing and leave the path to the next segment
+            _ => Some(PartialPathMatch::new(path, Vec::new(), "")),
         }
-
-        let matched_len = if matched_len == 1 && path.starts_with('/') {
-            0
-        } else {
-            matched_len
-        };
-        let (matched, remaining) = path.split_at(matched_len);
-        let param_value = (matched_len > 0)
-            .then(|| {
-                (
-                    Cow::Borrowed(self.0),
-                    path[param_offset..param_len + param_offset].to_string(),
-                )
-            })
-            .into_iter()
-            .collect();
-        Some(PartialPathMatch::new(remaining, param_value, matched))
     }
 
     fn generate_path(&self, path: &mut Vec<PathSegment>) {
@@ -379,5 +324,74 @@ mod tests {
         let params = matched.params();
         assert_eq!(params[0], ("a".into(), "foo".into()));
         assert_eq!(params[1], ("b".into(), "qux".into()));
+    }
+
+    // A path that does not start with `/` is not at the start of a segment (the rule
+    // `StaticSegment` already had). These segments used to drop the path's first character
+    // uncounted and then split the path at a byte count that was off by that character: a
+    // wrong match for ASCII, and a panic ("not a char boundary") when the first character
+    // is multibyte. `RouteDefs::match_route` hands them such paths when a base is a partial
+    // prefix of the path (see `matching::tests::base_that_is_a_partial_prefix_is_no_match`).
+
+    #[test]
+    fn param_without_leading_slash_is_no_match() {
+        assert!(ParamSegment("a").test("éa").is_none());
+        assert!(ParamSegment("a").test("foo").is_none());
+        assert!(ParamSegment("a").test("foo/bar").is_none());
+    }
+
+    #[test]
+    fn wildcard_without_leading_slash_is_no_match() {
+        assert!(WildcardSegment("a").test("éa").is_none());
+        assert!(WildcardSegment("a").test("foo/bar").is_none());
+    }
+
+    #[test]
+    fn optional_param_without_leading_slash_matches_nothing() {
+        for path in ["éa", "foo", "foo/bar"] {
+            let matched = OptionalParamSegment("a")
+                .test(path)
+                .expect("an optional param always matches");
+            assert_eq!(matched.matched(), "");
+            assert_eq!(matched.remaining(), path);
+            assert!(matched.params().is_empty());
+        }
+    }
+
+    #[test]
+    fn params_capture_multibyte_values() {
+        let matched = ParamSegment("a").test("/é🦀/x").expect("param");
+        assert_eq!(matched.matched(), "/é🦀");
+        assert_eq!(matched.remaining(), "/x");
+        assert_eq!(matched.params(), vec![("a".into(), "é🦀".into())]);
+
+        let matched = OptionalParamSegment("a").test("/ñ").expect("optional");
+        assert_eq!(matched.matched(), "/ñ");
+        assert_eq!(matched.params(), vec![("a".into(), "ñ".into())]);
+
+        let matched = WildcardSegment("a").test("/é/ü/").expect("wildcard");
+        assert_eq!(matched.matched(), "/é/ü/");
+        assert_eq!(matched.remaining(), "");
+        assert_eq!(matched.params(), vec![("a".into(), "é/ü/".into())]);
+    }
+
+    #[test]
+    fn empty_and_slash_only_paths() {
+        assert!(ParamSegment("a").test("").is_none());
+        assert!(ParamSegment("a").test("/").is_none());
+        assert!(ParamSegment("a").test("//x").is_none());
+
+        let matched = WildcardSegment("a").test("").expect("wildcard");
+        assert_eq!((matched.matched(), matched.remaining()), ("", ""));
+        assert_eq!(matched.params(), vec![("a".into(), "".into())]);
+        let matched = WildcardSegment("a").test("/").expect("wildcard");
+        assert_eq!((matched.matched(), matched.remaining()), ("/", ""));
+        assert_eq!(matched.params(), vec![("a".into(), "".into())]);
+
+        for path in ["", "/", "//x"] {
+            let matched = OptionalParamSegment("a").test(path).expect("opt");
+            assert_eq!((matched.matched(), matched.remaining()), ("", path));
+            assert!(matched.params().is_empty());
+        }
     }
 }

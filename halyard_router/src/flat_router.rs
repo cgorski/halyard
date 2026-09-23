@@ -1,4 +1,5 @@
 use crate::{
+    error::{report, report_once, RouterError},
     hooks::Matched,
     location::{LocationProvider, Url},
     matching::{MatchParams, RouteDefs},
@@ -29,7 +30,7 @@ use halyard_tachys::{
         MarkBranch, Mountable, Position, PositionState, Render, RenderHtml,
     },
 };
-use std::{cell::RefCell, iter, mem, rc::Rc};
+use std::{cell::RefCell, iter, mem, rc::Rc, sync::atomic::AtomicBool};
 
 pub(crate) struct FlatRoutesView<Loc, Defs, FalFn> {
     pub current_url: ArcRwSignal<Url>,
@@ -132,13 +133,7 @@ where
             })),
             Some(new_match) => {
                 let (view, child) = new_match.into_view_and_child();
-
-                #[cfg(debug_assertions)]
-                if child.is_some() {
-                    panic!(
-                        "<FlatRoutes> should not be used with nested routes."
-                    );
-                }
+                warn_if_nested(child.is_some());
 
                 let mut view = Box::pin(owner.with(|| {
                     provide_context(params_memo);
@@ -274,13 +269,7 @@ where
             }
             Some(new_match) => {
                 let (view, child) = new_match.into_view_and_child();
-
-                #[cfg(debug_assertions)]
-                if child.is_some() {
-                    panic!(
-                        "<FlatRoutes> should not be used with nested routes."
-                    );
-                }
+                warn_if_nested(child.is_some());
 
                 let spawned_path = url_snapshot.path().to_string();
 
@@ -350,14 +339,29 @@ where
     type Output<SomeNewAttr: halyard::attr::Attribute> =
         FlatRoutesView<Loc, Defs, FalFn>;
 
+    // without the trait's `where Self::Output<NewAttr>: RenderHtml`, which would hide that
+    // `Output` is `Self` here
     fn add_any_attr<NewAttr: halyard::attr::Attribute>(
         self,
         _attr: NewAttr,
-    ) -> Self::Output<NewAttr>
-    where
-        Self::Output<NewAttr>: RenderHtml,
-    {
-        todo!()
+    ) -> Self::Output<NewAttr> {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_once(
+            &REPORTED,
+            &RouterError::AttributesIgnored {
+                component: "<FlatRoutes/>",
+            },
+        );
+        self
+    }
+}
+
+/// `<FlatRoutes/>` renders a matched route's own view and nothing nested in it. This
+/// used to be a panic in debug builds (and silently ignored in release builds).
+fn warn_if_nested(has_child: bool) {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    if has_child {
+        report_once(&REPORTED, &RouterError::NestedRoutesInFlatRoutes);
     }
 }
 
@@ -532,7 +536,14 @@ where
                         ScopedFuture::new(async move { view.choose().await })
                     })
                     .now_or_never()
-                    .expect("async route used in SSR");
+                    .unwrap_or_else(|| {
+                        report(&RouterError::RouteNotReady {
+                            during: "server rendering",
+                            instead: "it is rendered empty, and the browser \
+                                      renders it after hydrating",
+                        });
+                        ().into_any()
+                    });
                 let view = MatchedRoute(id, view);
                 view.into_any()
             }
@@ -698,13 +709,7 @@ where
             })),
             Some(new_match) => {
                 let (view, child) = new_match.into_view_and_child();
-
-                #[cfg(debug_assertions)]
-                if child.is_some() {
-                    panic!(
-                        "<FlatRoutes> should not be used with nested routes."
-                    );
-                }
+                warn_if_nested(child.is_some());
 
                 let mut view = Box::pin(owner.with(|| {
                     provide_context(params_memo);
@@ -729,10 +734,34 @@ where
                         matched,
                     })),
                     None => {
-                        panic!(
-                            "lazy routes should not be used with \
-                             hydrate_body(); use hydrate_lazy() instead"
-                        );
+                        report(&RouterError::RouteNotReady {
+                            during: "hydrate_body()",
+                            instead: "the page is hydrated without it, and it is \
+                                      rendered once it has loaded (hydrate_lazy() \
+                                      waits for lazy routes)",
+                        });
+                        // as `build` does: an empty view now, the route's once it is ready
+                        let state =
+                            Rc::new(RefCell::new(FlatRoutesViewState {
+                                view: ()
+                                    .into_any()
+                                    .hydrate::<FROM_SERVER>(cursor, position),
+                                id,
+                                owner,
+                                params,
+                                path,
+                                url,
+                                matched,
+                            }));
+                        Executor::spawn_local({
+                            let state = Rc::clone(&state);
+                            async move {
+                                let view = view.await;
+                                view.into_any()
+                                    .rebuild(&mut state.borrow_mut().view);
+                            }
+                        });
+                        state
                     }
                 }
             }
@@ -794,13 +823,7 @@ where
             })),
             Some(new_match) => {
                 let (view, child) = new_match.into_view_and_child();
-
-                #[cfg(debug_assertions)]
-                if child.is_some() {
-                    panic!(
-                        "<FlatRoutes> should not be used with nested routes."
-                    );
-                }
+                warn_if_nested(child.is_some());
 
                 let view = Box::pin(owner.with(|| {
                     provide_context(params_memo);
@@ -829,5 +852,72 @@ where
 
     fn into_owned(self) -> Self::Owned {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        location::{BrowserUrl, RequestUrl},
+        NestedRoute, StaticSegment,
+    };
+    use halyard::tachys::html::class::class;
+    use std::future::pending;
+
+    /// A route whose view is not ready synchronously (as a lazy route's is not until its
+    /// code has loaded).
+    #[derive(Clone)]
+    struct NotReady;
+
+    impl ChooseView for NotReady {
+        async fn choose(self) -> AnyView {
+            pending::<AnyView>().await
+        }
+
+        async fn preload(&self) {
+            pending::<()>().await
+        }
+    }
+
+    fn flat_view<Defs>(
+        routes: Defs,
+        path: &str,
+    ) -> FlatRoutesView<BrowserUrl, Defs, impl FnOnce() -> &'static str + Send>
+    {
+        FlatRoutesView {
+            current_url: ArcRwSignal::new(
+                RequestUrl::new(path).parse().expect("a test URL"),
+            ),
+            location: None,
+            routes: RouteDefs::new(routes),
+            fallback: || "not found",
+            outer_owner: Owner::new(),
+            set_is_routing: None,
+            transition: false,
+        }
+    }
+
+    /// A route that is not ready used to be unwrapped on the server ("async route used in
+    /// SSR"), failing the request. It is rendered empty.
+    #[test]
+    fn route_not_ready_on_the_server_is_rendered_empty() {
+        let view = flat_view(
+            NestedRoute::new(StaticSegment("page"), NotReady),
+            "/page",
+        );
+        _ = view.choose_ssr();
+    }
+
+    /// Attributes spread onto a component that renders `<FlatRoutes/>` reach its view,
+    /// whose `add_any_attr` was `todo!()`. They are ignored.
+    #[test]
+    fn attributes_on_flat_routes_are_ignored() {
+        let view = flat_view(
+            NestedRoute::new(StaticSegment("page"), NotReady),
+            "/other",
+        )
+        .add_any_attr(class("x"));
+        assert_eq!(view.current_url.read_untracked().path(), "/other");
     }
 }

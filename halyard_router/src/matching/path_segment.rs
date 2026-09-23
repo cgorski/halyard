@@ -37,7 +37,10 @@ impl ExpandOptionals for Vec<PathSegment> {
                     let mut unit_variant = next_to_check.to_vec();
                     unit_variant.remove(idx);
                     let mut param_variant = next_to_check.to_vec();
-                    param_variant[idx] = PathSegment::Param(name.clone());
+                    // `idx` is this segment's index in the copy
+                    if let Some(segment) = param_variant.get_mut(idx) {
+                        *segment = PathSegment::Param(name.clone());
+                    }
                     segments.push(unit_variant);
                     segments.push(param_variant);
                     break;

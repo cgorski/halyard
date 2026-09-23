@@ -1,5 +1,9 @@
 use super::{handle_anchor_click, LocationChange, LocationProvider, Url};
-use crate::{hooks::use_navigate, params::ParamsMap};
+use crate::{
+    error::{js_reason, report, RouterError},
+    hooks::use_navigate,
+    params::ParamsMap,
+};
 use core::fmt;
 use futures::channel::oneshot;
 use halyard::{ev, prelude::*};
@@ -36,10 +40,11 @@ impl BrowserUrl {
     fn scroll_to_el(loc_scroll: bool) {
         if let Ok(hash) = window().location().hash() {
             if !hash.is_empty() {
-                let hash = js_sys::decode_uri(&hash[1..])
-                    .ok()
-                    .and_then(|decoded| decoded.as_string())
-                    .unwrap_or(hash);
+                let hash =
+                    js_sys::decode_uri(hash.strip_prefix('#').unwrap_or(&hash))
+                        .ok()
+                        .and_then(|decoded| decoded.as_string())
+                        .unwrap_or(hash);
                 let el = document().get_element_by_id(&hash);
                 if let Some(el) = el {
                     el.scroll_into_view();
@@ -175,9 +180,13 @@ impl LocationProvider for BrowserUrl {
             move || match Self::current() {
                 Ok(new_url) => {
                     let mut stack = path_stack.write_value();
+                    // back to the first page, or to the one before the current page
                     let is_navigating_back = stack.len() == 1
-                        || (stack.len() >= 2
-                            && stack.get(stack.len() - 2) == Some(&new_url));
+                        || stack
+                            .len()
+                            .checked_sub(2)
+                            .and_then(|previous| stack.get(previous))
+                            == Some(&new_url);
 
                     if is_navigating_back {
                         stack.pop();
@@ -212,7 +221,7 @@ impl LocationProvider for BrowserUrl {
     }
 
     fn complete_navigation(&self, loc: &LocationChange) {
-        let history = window().history().unwrap();
+        let window = window();
 
         let current_path = self
             .path_stack
@@ -221,20 +230,43 @@ impl LocationProvider for BrowserUrl {
             .map(|url| url.to_full_path());
         let add_to_stack = current_path.as_ref() != Some(&loc.value);
 
-        if loc.replace {
-            history
-                .replace_state_with_url(
+        let updated = window.history().and_then(|history| {
+            if loc.replace {
+                history.replace_state_with_url(
                     &loc.state.to_js_value(),
                     "",
                     Some(&loc.value),
                 )
-                .unwrap();
-        } else if add_to_stack {
-            // push the "forward direction" marker
-            let state = &loc.state.to_js_value();
-            history
-                .push_state_with_url(state, "", Some(&loc.value))
-                .unwrap();
+            } else if add_to_stack {
+                // push the "forward direction" marker
+                let state = &loc.state.to_js_value();
+                history.push_state_with_url(state, "", Some(&loc.value))
+            } else {
+                Ok(())
+            }
+        });
+        // the page is showing the new route but the address bar is not: load the page
+        // from the server, so that the two agree (and a reload shows this page)
+        if let Err(error) = updated {
+            report(&RouterError::Browser {
+                action: "updating the browser history",
+                reason: js_reason(&error),
+                instead: "loading the page from the server",
+            });
+            let location = window.location();
+            let loaded = if loc.replace {
+                location.replace(&loc.value)
+            } else {
+                location.assign(&loc.value)
+            };
+            if let Err(error) = loaded {
+                report(&RouterError::Browser {
+                    action: "loading the page from the server",
+                    reason: js_reason(&error),
+                    instead: "the address bar keeps the previous URL",
+                });
+            }
+            return;
         }
 
         // add this URL to the "path stack" for detecting back navigations, and
@@ -255,8 +287,18 @@ impl LocationProvider for BrowserUrl {
         let Some(url) = resolve_redirect_url(loc) else {
             return; // resolve_redirect_url() already logs an error
         };
-        let current_origin = location().origin().unwrap();
-        if url.origin() == current_origin {
+        let same_origin = match location().origin() {
+            Ok(current_origin) => url.origin() == current_origin,
+            Err(error) => {
+                report(&RouterError::Browser {
+                    action: "reading this page's origin for a redirect",
+                    reason: js_reason(&error),
+                    instead: "loading the redirect target from the server",
+                });
+                false
+            }
+        };
+        if same_origin {
             let navigate = navigate.clone();
             // delay by a tick here, so that the Action updates *before* the redirect
             request_animation_frame(move || {

@@ -1,10 +1,16 @@
-use crate::{hooks::RawParamsMap, params::ParamsMap, PathSegment};
+use crate::{
+    error::{report, RouterError},
+    hooks::RawParamsMap,
+    params::ParamsMap,
+    PathSegment,
+};
 use futures::{channel::oneshot, stream, Stream, StreamExt};
 use halyard::task::spawn;
 use halyard_reactive_graph::{owner::Owner, traits::GetUntracked};
 use std::{
     fmt::{Debug, Display},
     future::Future,
+    iter,
     ops::Deref,
     pin::Pin,
     sync::Arc,
@@ -259,7 +265,31 @@ impl StaticPath {
                     }
                     paths = new_paths;
                 }
-                OptionalParam(_) => todo!(),
+                // both variants, as `ExpandOptionals` lists them: without the segment,
+                // and with each prerendered value
+                OptionalParam(name) => {
+                    let values = params
+                        .as_ref()
+                        .and_then(|params| params.get(name))
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    paths = paths
+                        .into_iter()
+                        .flat_map(|path| {
+                            let with_values = values
+                                .iter()
+                                .map(|val| ResolvedStaticPath {
+                                    path: if val.starts_with('/') {
+                                        format!("{}{val}", path.path)
+                                    } else {
+                                        format!("{}/{val}", path.path)
+                                    },
+                                })
+                                .collect::<Vec<_>>();
+                            iter::once(path).chain(with_values)
+                        })
+                        .collect();
+                }
             }
         }
         paths
@@ -308,6 +338,7 @@ impl ResolvedStaticPath {
         WriterFut: Future<Output = Result<(), std::io::Error>> + Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
+        let path = self.path.clone();
 
         // spawns a separate task for each path it's rendering
         // this allows us to parallelize all static site rendering,
@@ -340,24 +371,7 @@ impl ResolvedStaticPath {
                 }
 
                 // if there's a regeneration function, keep looping
-                let params = if regenerate.is_empty() {
-                    None
-                } else {
-                    Some(
-                        owner
-                            .use_context_bidirectional::<RawParamsMap>()
-                            .expect(
-                                "using static routing, but couldn't find \
-                                 ParamsMap",
-                            )
-                            .get_untracked(),
-                    )
-                };
-                let mut regenerate = stream::select_all(
-                    regenerate
-                        .into_iter()
-                        .map(|r| owner.with(|| r(params.as_ref().unwrap()))),
-                );
+                let mut regenerate = regeneration(&owner, regenerate, &self);
                 while regenerate.next().await.is_some() {
                     let (owner, html) = render_fn(&self).await;
                     if !was_error(&owner) {
@@ -374,13 +388,129 @@ impl ResolvedStaticPath {
             }
         });
 
-        rx.await.unwrap()
+        // no answer means the task ended before rendering the page (it was dropped, or
+        // the render or writer panicked): nothing was written, so the server answers as
+        // for a page that does not exist
+        rx.await.unwrap_or_else(|_| {
+            report(&RouterError::StaticRenderAborted { path });
+            (Owner::new(), None)
+        })
     }
+}
+
+/// The regeneration triggers of the page that rendered with `owner`, for its route params;
+/// none if the render provided no params (logged).
+fn regeneration(
+    owner: &Owner,
+    regenerate: Vec<RegenerationFn>,
+    path: &ResolvedStaticPath,
+) -> stream::SelectAll<PinnedStream<()>> {
+    let params = if regenerate.is_empty() {
+        None
+    } else {
+        let params = owner
+            .use_context_bidirectional::<RawParamsMap>()
+            .map(|params| params.get_untracked());
+        if params.is_none() {
+            report(&RouterError::StaticRegenerationWithoutParams {
+                path: path.to_string(),
+            });
+        }
+        params
+    };
+    let triggers = params.map(|params| {
+        regenerate
+            .into_iter()
+            .map(|r| owner.with(|| r(&params)))
+            .collect::<Vec<_>>()
+    });
+    stream::select_all(triggers.unwrap_or_default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use halyard_any_spawner::{
+        CustomExecutor, Executor, PinnedFuture as SpawnedFuture,
+        PinnedLocalFuture,
+    };
+
+    /// An optional param in a static route was `todo!()`. Each variant is listed: without
+    /// the segment, and with each of its prerendered values.
+    #[test]
+    fn static_path_with_an_optional_param_lists_each_variant() {
+        let mut params = StaticParamsMap::new();
+        params.insert("page", vec!["2".into(), "/3".into()]);
+        let segments = StaticPath::new(vec![
+            PathSegment::Static("/posts".into()),
+            PathSegment::OptionalParam("page".into()),
+        ]);
+        assert_eq!(
+            segments.into_paths(Some(params)),
+            vec![
+                ResolvedStaticPath::new("/posts"),
+                ResolvedStaticPath::new("/posts/2"),
+                ResolvedStaticPath::new("/posts/3"),
+            ]
+        );
+
+        let segments = StaticPath::new(vec![
+            PathSegment::Static("/posts".into()),
+            PathSegment::OptionalParam("page".into()),
+            PathSegment::Static("all".into()),
+        ]);
+        assert_eq!(
+            segments.into_paths(None),
+            vec![ResolvedStaticPath::new("/posts/all")]
+        );
+    }
+
+    /// A page with regeneration triggers whose render provided no route params (e.g. it
+    /// rendered the fallback) used to panic in its regeneration task. It is not regenerated.
+    #[test]
+    fn regeneration_without_params_does_not_regenerate() {
+        let owner = Owner::new();
+        let regenerate = vec![RegenerationFn(Arc::new(|_: &ParamsMap| {
+            Box::pin(stream::iter([()])) as PinnedStream<()>
+        }))];
+        let path = ResolvedStaticPath::new("/posts/1");
+        let mut triggers = regeneration(&owner, regenerate, &path);
+        assert_eq!(futures::executor::block_on(triggers.next()), None);
+    }
+
+    /// Drops every task, as an executor that is shutting down does.
+    struct DropsTasks;
+
+    impl CustomExecutor for DropsTasks {
+        fn spawn(&self, _fut: SpawnedFuture<()>) {}
+
+        fn spawn_local(&self, _fut: PinnedLocalFuture<()>) {}
+
+        fn poll_local(&self) {}
+    }
+
+    /// `build` waits for its render task's answer; a task that ended without one (dropped,
+    /// or panicked in the render function) used to be unwrapped. Nothing was written, and
+    /// the server answers as for a missing page.
+    #[test]
+    fn static_route_whose_render_task_is_dropped_writes_nothing() {
+        // global for this test binary: no other test here spawns a task (without an
+        // executor that is a panic in debug builds)
+        _ = Executor::init_custom_executor(DropsTasks);
+        let (_owner, html) = futures::executor::block_on(
+            ResolvedStaticPath::new("/posts/1").build(
+                |_: &ResolvedStaticPath| async {
+                    (Owner::new(), String::new())
+                },
+                |_: &ResolvedStaticPath, _: &Owner, _: String| async {
+                    Ok::<(), std::io::Error>(())
+                },
+                |_: &Owner| false,
+                Vec::new(),
+            ),
+        );
+        assert_eq!(html, None);
+    }
 
     #[test]
     fn static_path_segments_into_path_ignore_empty_segments() {

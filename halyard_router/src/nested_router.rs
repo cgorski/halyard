@@ -1,4 +1,5 @@
 use crate::{
+    error::{report, report_once, RouterError},
     flat_router::MatchedRoute,
     hooks::Matched,
     location::{LocationProvider, Url},
@@ -10,7 +11,7 @@ use crate::{
 };
 use futures::{
     channel::oneshot,
-    future::{join_all, AbortHandle, Abortable},
+    future::{join_all, AbortHandle, Abortable, JoinAll},
     FutureExt,
 };
 use halyard::{
@@ -49,7 +50,7 @@ use std::{
     iter, mem,
     pin::Pin,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 pub(crate) struct NestedRoutesView<Loc, Defs, FalFn> {
@@ -114,7 +115,7 @@ where
         let matched_view = match new_match {
             None => EitherOf3::B(fallback()),
             Some(route) => {
-                route.build_nested_route(
+                let top = route.build_nested_route(
                     &url,
                     base,
                     &mut loaders,
@@ -123,7 +124,7 @@ where
                 );
                 drop(url);
 
-                EitherOf3::C(top_level_outlet(&outlets, &outer_owner))
+                EitherOf3::C(top_level_outlet(&top, &outer_owner))
             }
         };
 
@@ -248,12 +249,15 @@ where
                 });
 
                 // if it was on the fallback, show the view instead
+                // (`rebuild_nested_route` has just built the outlets from the top)
                 if matches!(state.view.borrow().state, EitherOf3::B(_)) {
-                    EitherOf3::<(), Fal, AnyView>::C(top_level_outlet(
-                        &state.outlets,
-                        &self.outer_owner,
-                    ))
-                    .rebuild(&mut *state.view.borrow_mut());
+                    if let Some(top) = state.outlets.first() {
+                        EitherOf3::<(), Fal, AnyView>::C(top_level_outlet(
+                            top,
+                            &self.outer_owner,
+                        ))
+                        .rebuild(&mut *state.view.borrow_mut());
+                    }
                 }
             }
         }
@@ -270,14 +274,20 @@ where
     type Output<SomeNewAttr: halyard::attr::Attribute> =
         NestedRoutesView<Loc, Defs, FalFn>;
 
+    // without the trait's `where Self::Output<NewAttr>: RenderHtml`, which would hide that
+    // `Output` is `Self` here
     fn add_any_attr<NewAttr: halyard::attr::Attribute>(
         self,
         _attr: NewAttr,
-    ) -> Self::Output<NewAttr>
-    where
-        Self::Output<NewAttr>: RenderHtml,
-    {
-        todo!()
+    ) -> Self::Output<NewAttr> {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_once(
+            &REPORTED,
+            &RouterError::AttributesIgnored {
+                component: "<Routes/>",
+            },
+        );
+        self
     }
 }
 
@@ -351,40 +361,7 @@ where
 
             RouteList::register(RouteList::from(routes));
         } else {
-            let NestedRoutesView {
-                routes,
-                outer_owner,
-                current_url,
-                fallback,
-                base,
-                ..
-            } = self;
-            let current_url = current_url.read_untracked();
-
-            let mut outlets = Vec::new();
-            let new_match = routes.match_route(current_url.path());
-            let view = match new_match {
-                None => Either::Left(fallback()),
-                Some(route) => {
-                    let mut loaders = Vec::new();
-                    route.build_nested_route(
-                        &current_url,
-                        base,
-                        &mut loaders,
-                        &mut outlets,
-                        &outer_owner,
-                    );
-
-                    // outlets will not send their views if the loaders are never polled
-                    // the loaders are async so that they can lazy-load routes in the browser,
-                    // but they should always be synchronously available on the server
-                    join_all(mem::take(&mut loaders))
-                        .now_or_never()
-                        .expect("async routes not supported in SSR");
-
-                    Either::Right(top_level_outlet(&outlets, &outer_owner))
-                }
-            };
+            let (view, _outlets) = self.choose_ssr(false);
             view.to_html_with_buf(
                 buf,
                 position,
@@ -405,47 +382,7 @@ where
     ) where
         Self: Sized,
     {
-        let NestedRoutesView {
-            routes,
-            outer_owner,
-            current_url,
-            fallback,
-            base,
-            ..
-        } = self;
-        let current_url = current_url.read_untracked();
-
-        let mut outlets = Vec::new();
-        let new_match = routes.match_route(current_url.path());
-        let view = match new_match {
-            None => Either::Left(fallback()),
-            Some(route) => {
-                let mut loaders = Vec::new();
-                route.build_nested_route(
-                    &current_url,
-                    base,
-                    &mut loaders,
-                    &mut outlets,
-                    &outer_owner,
-                );
-
-                let preload_owners = outlets
-                    .iter()
-                    .map(|o| o.preload_owner.clone())
-                    .collect::<Vec<_>>();
-                outer_owner
-                    .with(|| Owner::on_cleanup(move || drop(preload_owners)));
-
-                // outlets will not send their views if the loaders are never polled
-                // the loaders are async so that they can lazy-load routes in the browser,
-                // but they should always be synchronously available on the server
-                join_all(mem::take(&mut loaders))
-                    .now_or_never()
-                    .expect("async routes not supported in SSR");
-
-                Either::Right(top_level_outlet(&outlets, &outer_owner))
-            }
-        };
+        let (view, _outlets) = self.choose_ssr(true);
         view.to_html_async_with_buf::<OUT_OF_ORDER>(
             buf,
             position,
@@ -482,7 +419,7 @@ where
             match new_match {
                 None => EitherOf3::B(fallback()),
                 Some(route) => {
-                    route.build_nested_route(
+                    let top = route.build_nested_route(
                         &url,
                         base,
                         &mut loaders,
@@ -491,11 +428,20 @@ where
                     );
                     drop(url);
 
-                    join_all(mem::take(&mut loaders)).now_or_never().expect(
-                        "lazy routes not supported with hydrate_body(); use \
-                         hydrate_lazy() instead",
-                    );
-                    EitherOf3::C(top_level_outlet(&outlets, &outer_owner))
+                    if let Err(rest) = load_now(mem::take(&mut loaders)) {
+                        report(&RouterError::RouteNotReady {
+                            during: "hydrate_body()",
+                            instead: "the page is hydrated without it, and it is \
+                                      rendered once it has loaded (hydrate_lazy() \
+                                      waits for lazy routes)",
+                        });
+                        Executor::spawn_local(async move {
+                            for trigger in rest.await {
+                                trigger.notify();
+                            }
+                        });
+                    }
+                    EitherOf3::C(top_level_outlet(&top, &outer_owner))
                 }
             }
             .hydrate::<FROM_SERVER>(cursor, position),
@@ -538,7 +484,7 @@ where
             match new_match {
                 None => EitherOf3::B(fallback()),
                 Some(route) => {
-                    route.build_nested_route(
+                    let top = route.build_nested_route(
                         &url,
                         base,
                         &mut loaders,
@@ -548,7 +494,7 @@ where
                     drop(url);
 
                     join_all(mem::take(&mut loaders)).await;
-                    EitherOf3::C(top_level_outlet(&outlets, &outer_owner))
+                    EitherOf3::C(top_level_outlet(&top, &outer_owner))
                 }
             }
             .hydrate::<true>(cursor, position),
@@ -566,6 +512,80 @@ where
 
     fn into_owned(self) -> Self::Owned {
         self
+    }
+}
+
+impl<Loc, Defs, FalFn, Fal> NestedRoutesView<Loc, Defs, FalFn>
+where
+    Defs: MatchNestedRoutes,
+    FalFn: FnOnce() -> Fal,
+{
+    /// The view to render on the server: the matched routes, or the fallback, and the
+    /// routes' outlets, to keep alive (with their preload owners, which own what the
+    /// routes preloaded) while the view is rendered. With `streaming`, the preload owners
+    /// live as long as the router's owner, since streamed chunks can render later.
+    fn choose_ssr(
+        self,
+        streaming: bool,
+    ) -> (Either<Fal, AnyView>, Vec<RouteContext>) {
+        let NestedRoutesView {
+            routes,
+            outer_owner,
+            current_url,
+            fallback,
+            base,
+            ..
+        } = self;
+        let current_url = current_url.read_untracked();
+
+        let mut outlets = Vec::new();
+        let Some(route) = routes.match_route(current_url.path()) else {
+            return (Either::Left(fallback()), outlets);
+        };
+        let mut loaders = Vec::new();
+        let top = route.build_nested_route(
+            &current_url,
+            base,
+            &mut loaders,
+            &mut outlets,
+            &outer_owner,
+        );
+
+        if streaming {
+            let preload_owners = outlets
+                .iter()
+                .map(|o| o.preload_owner.clone())
+                .collect::<Vec<_>>();
+            outer_owner
+                .with(|| Owner::on_cleanup(move || drop(preload_owners)));
+        }
+
+        // the loaders are async so that routes can load lazily in the browser, but on
+        // the server they should always be ready at once
+        if load_now(loaders).is_err() {
+            report(&RouterError::RouteNotReady {
+                during: "server rendering",
+                instead: "it is rendered empty, and the browser renders it \
+                          after hydrating",
+            });
+        }
+
+        (Either::Right(top_level_outlet(&top, &outer_owner)), outlets)
+    }
+}
+
+type Loader = Pin<Box<dyn Future<Output = ArcTrigger>>>;
+
+/// Polls the matched routes' loaders once. An outlet renders its route's view only once
+/// the route's loader has run. Returns the loaders' triggers if all are done, otherwise
+/// the rest of the work, to finish later.
+fn load_now(
+    loaders: Vec<Loader>,
+) -> Result<Vec<ArcTrigger>, Pin<Box<JoinAll<Loader>>>> {
+    let mut all = Box::pin(join_all(loaders));
+    match all.as_mut().now_or_never() {
+        Some(triggers) => Ok(triggers),
+        None => Err(all),
     }
 }
 
@@ -618,14 +638,15 @@ impl Clone for RouteContext {
 }
 
 trait AddNestedRoute {
+    /// Adds this route's outlet, and its children's, to `outlets`; returns this route's.
     fn build_nested_route(
         self,
         url: &Url,
         base: Option<Oco<'static, str>>,
-        loaders: &mut Vec<Pin<Box<dyn Future<Output = ArcTrigger>>>>,
+        loaders: &mut Vec<Loader>,
         outlets: &mut Vec<RouteContext>,
         outer_owner: &Owner,
-    );
+    ) -> RouteContext;
 
     #[allow(clippy::too_many_arguments)]
     fn rebuild_nested_route(
@@ -633,7 +654,7 @@ trait AddNestedRoute {
         url: &Url,
         base: Option<Oco<'static, str>>,
         items: &mut usize,
-        loaders: &mut Vec<Pin<Box<dyn Future<Output = ArcTrigger>>>>,
+        loaders: &mut Vec<Loader>,
         full_loaders: &mut Vec<oneshot::Receiver<Option<Owner>>>,
         outlets: &mut Vec<RouteContext>,
         set_is_routing: bool,
@@ -650,10 +671,10 @@ where
         self,
         url: &Url,
         base: Option<Oco<'static, str>>,
-        loaders: &mut Vec<Pin<Box<dyn Future<Output = ArcTrigger>>>>,
+        loaders: &mut Vec<Loader>,
         outlets: &mut Vec<RouteContext>,
         outer_owner: &Owner,
-    ) {
+    ) -> RouteContext {
         let orig_url = url;
 
         // the params signal can be updated to allow the same outlet to update to changes in the
@@ -722,15 +743,14 @@ where
             owner: Arc::new(Mutex::new(None)),
             preload_owner: outer_owner.child(),
         };
-        if !outlets.is_empty() {
-            let prev_index = outlets.len().saturating_sub(1);
-            *outlets[prev_index].child.0.lock().or_poisoned() =
-                Some(outlet.clone());
+        if let Some(parent) = outlets.last() {
+            *parent.child.0.lock().or_poisoned() = Some(outlet.clone());
         }
         outlets.push(outlet.clone());
 
         // send the initial view through the channel, and recurse through the children
         let (view, child) = self.into_view_and_child();
+        let this_outlet = outlet.clone();
 
         loaders.push(Box::pin(ScopedFuture::new({
             let url = outlet.url.clone();
@@ -808,6 +828,7 @@ where
                 outer_owner,
             );
         }
+        this_outlet
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -816,7 +837,7 @@ where
         url: &Url,
         base: Option<Oco<'static, str>>,
         items: &mut usize,
-        preloaders: &mut Vec<Pin<Box<dyn Future<Output = ArcTrigger>>>>,
+        preloaders: &mut Vec<Loader>,
         full_loaders: &mut Vec<oneshot::Receiver<Option<Owner>>>,
         outlets: &mut Vec<RouteContext>,
         set_is_routing: bool,
@@ -829,9 +850,10 @@ where
             .map(|route| (route.params.clone(), route.matched.clone()))
             .unzip();
 
-        if outlets.get(*items).is_some() && *items > 0 {
-            *outlets[*items - 1].child.0.lock().or_poisoned() =
-                Some(outlets[*items].clone());
+        // the outlet at this depth is the child of the one above it
+        let parent = items.checked_sub(1).and_then(|above| outlets.get(above));
+        if let (Some(parent), Some(current)) = (parent, outlets.get(*items)) {
+            *parent.child.0.lock().or_poisoned() = Some(current.clone());
         }
 
         let current = outlets.get_mut(*items);
@@ -917,6 +939,7 @@ where
                     let full_tx = Mutex::new(Some(full_tx));
                     full_loaders.push(full_rx);
                     let outlet = current.clone();
+                    let this_child = current.child.clone();
 
                     // send the new view, with the new owner, through the channel to the Outlet,
                     // and notify the trigger so that the reactive view inside the Outlet tracking
@@ -1005,7 +1028,8 @@ where
 
                     // remove all the items lower in the tree
                     // if this match is different, all its children will also be different
-                    outlets.truncate(*items + 1);
+                    // (the outlet at `items` exists, so this cannot overflow)
+                    outlets.truncate(items.saturating_add(1));
 
                     // if this children has matches, then rebuild the lower section of the tree
                     if let Some(child) = child {
@@ -1017,7 +1041,7 @@ where
                             outer_owner,
                         );
                     } else {
-                        *outlets[*items].child.0.lock().or_poisoned() = None;
+                        *this_child.0.lock().or_poisoned() = None;
                     }
 
                     return level;
@@ -1029,7 +1053,7 @@ where
                 current.params.set(new_params);
                 current.url.set(url.to_owned());
                 if let Some(child) = child {
-                    *items += 1;
+                    *items = items.saturating_add(1);
                     child.rebuild_nested_route(
                         url,
                         base,
@@ -1038,7 +1062,7 @@ where
                         full_loaders,
                         outlets,
                         set_is_routing,
-                        level + 1,
+                        level.saturating_add(1),
                         outer_owner,
                     )
                 } else {
@@ -1075,8 +1099,7 @@ where
     }
 }
 
-fn top_level_outlet(outlets: &[RouteContext], outer_owner: &Owner) -> AnyView {
-    let outlet = outlets.first().unwrap();
+fn top_level_outlet(outlet: &RouteContext, outer_owner: &Owner) -> AnyView {
     let child = outlet.child.clone();
     let view_fn = outlet.view_fn.clone();
     let trigger = outlet.trigger.clone();
@@ -1098,10 +1121,23 @@ fn top_level_outlet(outlets: &[RouteContext], outer_owner: &Owner) -> AnyView {
 pub fn Outlet() -> impl RenderHtml
 where
 {
-    let ChildRoute(child) = use_context()
-        .expect("<Outlet/> used without RouteContext being provided.");
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    // a route's context is found through the current owner, so without an owner there is
+    // no route either
+    let route = Owner::current().and_then(|owner| {
+        use_context::<ChildRoute>().map(|child| (owner, child))
+    });
+    let Some((outer_owner, ChildRoute(child))) = route else {
+        report_once(
+            &REPORTED,
+            &RouterError::NoMatchedRoute {
+                what: "<Outlet/>",
+                instead: "it renders nothing",
+            },
+        );
+        return None;
+    };
     let child = child.lock().or_poisoned().clone();
-    let outer_owner = Owner::current().unwrap();
     child.map(|child| {
         move || {
             child.trigger.track();
@@ -1109,4 +1145,107 @@ where
             view_fn(outer_owner.child())
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        location::{BrowserUrl, RequestUrl},
+        NestedRoute, StaticSegment,
+    };
+    use halyard::tachys::html::class::class;
+    use std::future::pending;
+
+    /// A route whose view is not ready synchronously (as a lazy route's is not until its
+    /// code has loaded).
+    #[derive(Clone)]
+    struct NotReady;
+
+    impl ChooseView for NotReady {
+        async fn choose(self) -> AnyView {
+            pending::<AnyView>().await
+        }
+
+        async fn preload(&self) {
+            pending::<()>().await
+        }
+    }
+
+    fn routes_view<Defs>(
+        routes: Defs,
+        path: &str,
+    ) -> NestedRoutesView<BrowserUrl, Defs, impl FnOnce() -> &'static str> {
+        NestedRoutesView {
+            location: None,
+            routes: RouteDefs::new(routes),
+            outer_owner: Owner::new(),
+            current_url: ArcRwSignal::new(
+                RequestUrl::new(path).parse().expect("a test URL"),
+            ),
+            base: None,
+            fallback: || "not found",
+            set_is_routing: None,
+            transition: false,
+        }
+    }
+
+    /// A route that is not ready used to be unwrapped on the server ("async routes not
+    /// supported in SSR"), failing the request. It is rendered without that route's view.
+    #[test]
+    fn route_not_ready_on_the_server_is_rendered_empty() {
+        let view = routes_view(
+            NestedRoute::new(StaticSegment("page"), NotReady),
+            "/page",
+        );
+        let (view, outlets) = view.choose_ssr(false);
+        assert!(matches!(view, Either::Right(_)));
+        assert_eq!(outlets.len(), 1);
+
+        let view = routes_view(
+            NestedRoute::new(StaticSegment("page"), NotReady),
+            "/page",
+        );
+        assert!(matches!(view.choose_ssr(true).0, Either::Right(_)));
+    }
+
+    #[test]
+    fn unmatched_path_on_the_server_is_the_fallback() {
+        let view = routes_view(
+            NestedRoute::new(StaticSegment("page"), NotReady),
+            "/other",
+        );
+        assert!(matches!(
+            view.choose_ssr(false).0,
+            Either::Left("not found")
+        ));
+    }
+
+    /// Attributes spread onto a component that renders `<Routes/>` reach its view, whose
+    /// `add_any_attr` was `todo!()`. The router has no element of its own: the attributes
+    /// are ignored and the routes render as before.
+    #[test]
+    fn attributes_on_nested_routes_are_ignored() {
+        let view = routes_view(
+            NestedRoute::new(StaticSegment("page"), NotReady),
+            "/other",
+        )
+        .add_any_attr(class("x"));
+        assert!(matches!(
+            view.choose_ssr(false).0,
+            Either::Left("not found")
+        ));
+    }
+
+    /// `<Outlet/>` outside a matched route used to panic; it renders nothing.
+    #[test]
+    fn outlet_outside_a_route_renders_nothing() {
+        assert!(Owner::current().is_none());
+        assert_eq!(Outlet().to_html().replace("<!>", ""), "");
+
+        let owner = Owner::new();
+        owner.with(|| {
+            assert_eq!(Outlet().to_html().replace("<!>", ""), "");
+        });
+    }
 }

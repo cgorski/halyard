@@ -260,7 +260,9 @@ where
                             let rematch = path.trim_end_matches(&format!(
                                 "{matched}{remaining}"
                             ));
-                            let new_partial = segments.test(rematch).unwrap();
+                            // a parent that cannot match what is left (e.g. its fixed
+                            // part is in the child's match) does not match with it
+                            let new_partial = segments.test(rematch)?;
                             params = new_partial.params;
                         }
 

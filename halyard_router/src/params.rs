@@ -89,12 +89,8 @@ impl ParamsMap {
     /// Removes a value from the map.
     #[inline(always)]
     pub fn remove(&mut self, key: &str) -> Option<Vec<String>> {
-        for i in 0..self.0.len() {
-            if self.0[i].0 == key {
-                return Some(self.0.swap_remove(i).1);
-            }
-        }
-        None
+        let index = self.0.iter().position(|(k, _)| k == key)?;
+        Some(self.0.swap_remove(index).1)
     }
 
     /// Converts the map to a query string.

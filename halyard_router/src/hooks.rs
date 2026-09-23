@@ -1,15 +1,17 @@
 use crate::{
     components::RouterContext,
-    location::{Location, Url},
+    error::{report, report_once, RouterError},
+    location::{Location, State, Url},
     navigate::NavigateOptions,
     params::{Params, ParamsError, ParamsMap},
+    resolve_path::resolve_path,
 };
 use halyard::{halyard_dom::helpers::request_animation_frame, oco::Oco};
 use halyard_reactive_graph::{
     computed::{ArcMemo, Memo},
-    owner::{expect_context, use_context},
+    owner::use_context,
     signal::{ArcRwSignal, ReadSignal},
-    traits::{Get, GetUntracked, ReadUntracked, With, WriteValue},
+    traits::{Get, GetUntracked, With, WithUntracked, WriteValue},
     wrappers::write::SignalSetter,
 };
 use std::{
@@ -107,9 +109,9 @@ where
     let query_map = use_query_map();
     let navigate = use_navigate();
     let location = use_location();
-    let RouterContext {
-        query_mutations, ..
-    } = expect_context();
+    // outside a router the hooks above have logged it, and there is no URL to update
+    let query_mutations =
+        use_context::<RouterContext>().map(|router| router.query_mutations);
 
     let get = Memo::new({
         let key = key.clone_inplace();
@@ -121,9 +123,19 @@ where
     });
 
     let set = SignalSetter::map(move |value: Option<T>| {
-        let path = location.pathname.get_untracked();
-        let hash = location.hash.get_untracked();
-        let qs = location.query.read_untracked().to_query_string();
+        let Some(query_mutations) = &query_mutations else {
+            return;
+        };
+        // once the location's owner is gone (the page was left), there is nothing to set
+        let (Some(path), Some(hash), Some(qs)) = (
+            location.pathname.try_get_untracked(),
+            location.hash.try_get_untracked(),
+            location
+                .query
+                .try_with_untracked(ParamsMap::to_query_string),
+        ) else {
+            return;
+        };
         let new_url = format!("{path}{qs}{hash}");
         query_mutations
             .write_value()
@@ -167,23 +179,49 @@ pub(crate) fn use_router() -> RouterContext {
 */
 
 /// Returns the current [`Location`], which contains reactive variables
+///
+/// Outside a `<Router>` this is the location `/`, and that is logged once.
 #[track_caller]
 pub fn use_location() -> Location {
-    let RouterContext { location, .. } =
-        use_context().expect("Tried to access Location outside a <Router>.");
-    location
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    match use_context::<RouterContext>() {
+        Some(RouterContext { location, .. }) => location,
+        None => {
+            report_once(
+                &REPORTED,
+                &RouterError::NoRouter {
+                    what: "use_location()",
+                    instead: "it returns the location `/`",
+                },
+            );
+            Location::new(
+                ArcRwSignal::new(Url::root()).read_only(),
+                ArcRwSignal::new(State::default()).read_only(),
+            )
+        }
+    }
 }
 
 pub(crate) type RawParamsMap = ArcMemo<ParamsMap>;
 
 #[track_caller]
 fn use_params_raw() -> RawParamsMap {
-    use_context().expect(
-        "Tried to access params outside the context of a matched <Route>.",
-    )
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    use_context().unwrap_or_else(|| {
+        report_once(
+            &REPORTED,
+            &RouterError::NoMatchedRoute {
+                what: "use_params() or use_params_map()",
+                instead: "there are no params",
+            },
+        );
+        ArcMemo::new(|_| ParamsMap::new())
+    })
 }
 
 /// Returns a raw key-value map of route params.
+///
+/// Outside a matched route the map is empty, and that is logged once.
 #[track_caller]
 pub fn use_params_map() -> Memo<ParamsMap> {
     use_params_raw().into()
@@ -202,15 +240,25 @@ where
 
 #[track_caller]
 fn use_url_raw() -> ArcRwSignal<Url> {
-    use_context().unwrap_or_else(|| {
-        let RouterContext { current_url, .. } = use_context().expect(
-            "Tried to access reactive URL outside a <Router> component.",
-        );
-        current_url
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    use_context().unwrap_or_else(|| match use_context::<RouterContext>() {
+        Some(RouterContext { current_url, .. }) => current_url,
+        None => {
+            report_once(
+                &REPORTED,
+                &RouterError::NoRouter {
+                    what: "use_url(), use_query() or use_query_map()",
+                    instead: "the URL is `/`, with no query",
+                },
+            );
+            ArcRwSignal::new(Url::root())
+        }
     })
 }
 
 /// Gives reactive access to the current URL.
+///
+/// Outside a `<Router>` this is the URL `/`, and that is logged once.
 #[track_caller]
 pub fn use_url() -> ReadSignal<Url> {
     use_url_raw().read_only().into()
@@ -236,26 +284,40 @@ where
 #[derive(Debug, Clone)]
 pub(crate) struct Matched(pub ArcMemo<String>);
 
-/// Resolves the given path relative to the current route.
+/// Resolves the given path relative to the current route (outside a router, relative to
+/// `/`).
 #[track_caller]
 pub(crate) fn use_resolved_path(
     path: impl Fn() -> String + Send + Sync + 'static,
 ) -> ArcMemo<String> {
-    let router = use_context::<RouterContext>()
-        .expect("called use_resolved_path outside a <Router>");
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    let router = use_context::<RouterContext>();
+    if router.is_none() {
+        report_once(
+            &REPORTED,
+            &RouterError::NoRouter {
+                what: "a link (<A/>)",
+                instead:
+                    "a relative href is resolved from `/`, and the browser \
+                          loads the page from the server",
+            },
+        );
+    }
     // TODO make this work with flat routes too?
     let matched = use_context::<Matched>().map(|n| n.0);
     ArcMemo::new(move |_| {
         let path = path();
         if path.starts_with('/') {
-            path
-        } else {
-            router
+            return path;
+        }
+        match &router {
+            Some(router) => router
                 .resolve_path(
                     &path,
                     matched.as_ref().map(|n| n.get()).as_deref(),
                 )
-                .to_string()
+                .to_string(),
+            None => resolve_path("", &path, None).to_string(),
         }
     })
 }
@@ -263,7 +325,8 @@ pub(crate) fn use_resolved_path(
 /// Returns a function that can be used to navigate to a new route.
 ///
 /// This should only be called on the client; it does nothing during
-/// server rendering.
+/// server rendering. Outside a `<Router>` the function it returns does nothing, and logs
+/// each call.
 ///
 /// ```rust
 /// # if false { // can't actually navigate, no <Router/>
@@ -273,17 +336,118 @@ pub(crate) fn use_resolved_path(
 /// ```
 #[track_caller]
 pub fn use_navigate() -> impl Fn(&str, NavigateOptions) + Clone {
-    let cx = use_context::<RouterContext>()
-        .expect("You cannot call `use_navigate` outside a <Router>.");
-    move |path: &str, options: NavigateOptions| cx.navigate(path, options)
+    let cx = use_context::<RouterContext>();
+    move |path: &str, options: NavigateOptions| match &cx {
+        Some(cx) => cx.navigate(path, options),
+        None => report(&RouterError::NavigateWithoutRouter {
+            path: path.to_owned(),
+        }),
+    }
 }
 
 /// Returns a reactive string that contains the route that was matched for
 /// this [`Route`](crate::components::Route).
+///
+/// Outside a matched route the string is empty, and that is logged once.
 #[track_caller]
 pub fn use_matched() -> Memo<String> {
-    use_context::<Matched>()
-        .expect("use_matched called outside a matched Route")
-        .0
-        .into()
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    match use_context::<Matched>() {
+        Some(Matched(matched)) => matched.into(),
+        None => {
+            report_once(
+                &REPORTED,
+                &RouterError::NoMatchedRoute {
+                    what: "use_matched()",
+                    instead: "the matched path is empty",
+                },
+            );
+            ArcMemo::new(|_| String::new()).into()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use halyard_reactive_graph::owner::Owner;
+
+    // Each hook used to `expect` the router's context (or a matched route's) and panic
+    // without it. Outside a router they now return inert values: the URL `/`, empty maps,
+    // and a navigate function that does nothing.
+
+    #[test]
+    fn use_navigate_outside_a_router_does_nothing() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let navigate = use_navigate();
+            navigate("/elsewhere", NavigateOptions::default());
+        });
+    }
+
+    #[test]
+    fn use_location_outside_a_router_is_root() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let location = use_location();
+            assert_eq!(location.pathname.get_untracked(), "/");
+            assert_eq!(location.search.get_untracked(), "");
+            assert_eq!(location.query.get_untracked(), ParamsMap::new());
+        });
+    }
+
+    #[test]
+    fn use_url_outside_a_router_is_root() {
+        let owner = Owner::new();
+        owner.with(|| {
+            assert_eq!(use_url().get_untracked().path(), "/");
+        });
+    }
+
+    #[test]
+    fn use_query_outside_a_router_is_empty() {
+        let owner = Owner::new();
+        owner.with(|| {
+            assert_eq!(use_query_map().get_untracked(), ParamsMap::new());
+            assert_eq!(use_query::<()>().get_untracked(), Ok(()));
+        });
+    }
+
+    #[test]
+    fn use_params_outside_a_route_is_empty() {
+        let owner = Owner::new();
+        owner.with(|| {
+            assert_eq!(use_params_map().get_untracked(), ParamsMap::new());
+            assert_eq!(use_params::<()>().get_untracked(), Ok(()));
+        });
+    }
+
+    #[test]
+    fn use_matched_outside_a_route_is_empty() {
+        let owner = Owner::new();
+        owner.with(|| {
+            assert_eq!(use_matched().get_untracked(), "");
+        });
+    }
+
+    #[test]
+    fn use_resolved_path_outside_a_router_resolves_from_root() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let path = use_resolved_path(|| "reports/1".to_string());
+            assert_eq!(path.get_untracked(), "/reports/1");
+            let path = use_resolved_path(|| "/c".to_string());
+            assert_eq!(path.get_untracked(), "/c");
+        });
+    }
+
+    /// `query_signal` used `expect_context`, the same panic behind another name.
+    #[test]
+    fn query_signal_outside_a_router_reads_nothing() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let (page, _set_page) = query_signal::<u32>("page");
+            assert_eq!(page.get_untracked(), None);
+        });
+    }
 }

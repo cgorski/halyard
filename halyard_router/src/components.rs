@@ -3,8 +3,9 @@ pub use super::{form::*, link::*};
 use crate::location::RequestUrl;
 pub use crate::nested_router::Outlet;
 use crate::{
+    error::{js_reason, report, report_once, RouterError},
     flat_router::FlatRoutesView,
-    hooks::{use_matched, use_navigate},
+    hooks::{use_navigate, Matched},
     location::{
         BrowserUrl, Location, LocationChange, LocationProvider, State, Url,
     },
@@ -26,7 +27,7 @@ use std::{
     borrow::Cow,
     fmt::{Debug, Display},
     mem,
-    sync::Arc,
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
@@ -73,9 +74,8 @@ where
 {
     #[cfg(feature = "ssr")]
     let (location_provider, current_url, redirect_hook) = {
-        let req = use_context::<RequestUrl>().expect("no RequestUrl provided");
-        let parsed = req.parse().expect("could not parse RequestUrl");
-        let current_url = ArcRwSignal::new(parsed);
+        let current_url =
+            ArcRwSignal::new(request_url(use_context::<RequestUrl>()));
 
         (None, current_url, Box::new(move |_: &str| {}))
     };
@@ -83,11 +83,27 @@ where
     #[cfg(not(feature = "ssr"))]
     let (location_provider, current_url, redirect_hook) = {
         let owner = Owner::current();
-        let location =
-            BrowserUrl::new().expect("could not access browser navigation"); // TODO options here
-        location.init(base.clone());
-        provide_context(location.clone());
-        let current_url = location.as_url().clone();
+        // TODO options here
+        let location = match BrowserUrl::new() {
+            Ok(location) => {
+                location.init(base.clone());
+                provide_context(location.clone());
+                Some(location)
+            }
+            Err(error) => {
+                report(&RouterError::Browser {
+                    action: "reading the browser's location",
+                    reason: js_reason(&error),
+                    instead: "rendering the page for `/`, without client-side \
+                              navigation (links load pages from the server)",
+                });
+                None
+            }
+        };
+        let current_url = location.as_ref().map_or_else(
+            || ArcRwSignal::new(Url::root()),
+            |location| location.as_url().clone(),
+        );
 
         let redirect_hook = Box::new(move |loc: &str| {
             if let Some(owner) = &owner {
@@ -95,7 +111,7 @@ where
             }
         });
 
-        (Some(location), current_url, redirect_hook)
+        (location, current_url, redirect_hook)
     };
     // provide router context
     let state = ArcRwSignal::new(State::new(None));
@@ -118,6 +134,31 @@ where
     children()
 }
 
+/// The URL of the request being rendered on the server, or `/` if there is none.
+#[cfg(feature = "ssr")]
+fn request_url(request_url: Option<RequestUrl>) -> Url {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    let Some(request_url) = request_url else {
+        report_once(&REPORTED, &RouterError::NoRequestUrl);
+        return Url::root();
+    };
+    request_url.parse().unwrap_or_else(|source| {
+        report(&RouterError::UnparsableRequestUrl {
+            url: request_url.as_ref().to_owned(),
+            source,
+        });
+        Url::root()
+    })
+}
+
+/// The router's context, and the owner it was found through: contexts are only found
+/// through the current owner, so without an owner there is no router either.
+fn router_and_owner() -> Option<(RouterContext, Owner)> {
+    let owner = Owner::current()?;
+    let router = use_context::<RouterContext>()?;
+    Some((router, owner))
+}
+
 #[derive(Clone)]
 pub(crate) struct RouterContext {
     pub base: Option<Cow<'static, str>>,
@@ -132,6 +173,11 @@ pub(crate) struct RouterContext {
 
 impl RouterContext {
     pub fn navigate(&self, path: &str, options: NavigateOptions) {
+        // there is no browser to navigate during server rendering (as `use_navigate`
+        // documents); parsing the path needs the browser's `window`
+        if cfg!(feature = "ssr") {
+            return;
+        }
         let current = self.current_url.read_untracked();
         let resolved_to = if options.resolve {
             resolve_path(
@@ -169,7 +215,13 @@ impl RouterContext {
         }
 
         if url.origin() != current.origin() {
-            window().location().set_href(path).unwrap();
+            if let Err(error) = window().location().set_href(path) {
+                report(&RouterError::Browser {
+                    action: "loading a page from another origin",
+                    reason: js_reason(&error),
+                    instead: "staying on this page",
+                });
+            }
             return;
         }
 
@@ -231,14 +283,27 @@ where
     FallbackFn: FnOnce() -> Fallback + Clone + Send + 'static,
     Fallback: IntoView + 'static,
 {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
     let location = use_context::<BrowserUrl>();
-    let RouterContext {
-        current_url,
-        base,
-        set_is_routing,
-        ..
-    } = use_context()
-        .expect("<Routes> should be used inside a <Router> component");
+    let Some((
+        RouterContext {
+            current_url,
+            base,
+            set_is_routing,
+            ..
+        },
+        outer_owner,
+    )) = router_and_owner()
+    else {
+        report_once(
+            &REPORTED,
+            &RouterError::NoRouter {
+                what: "<Routes/>",
+                instead: "it renders nothing",
+            },
+        );
+        return None;
+    };
     let base = base.map(|base| {
         let mut base = Oco::from(base);
         base.upgrade_inplace();
@@ -248,9 +313,7 @@ where
         children.into_inner(),
         base.clone().unwrap_or_default(),
     );
-    let outer_owner =
-        Owner::current().expect("creating Routes, but no Owner was found");
-    move || {
+    Some(move || {
         current_url.track();
         outer_owner.with(|| {
             current_url.read_untracked().provide_server_action_error()
@@ -265,7 +328,7 @@ where
             set_is_routing,
             transition,
         }
-    }
+    })
 }
 
 #[component(transparent)]
@@ -284,14 +347,27 @@ where
     FallbackFn: FnOnce() -> Fallback + Clone + Send + 'static,
     Fallback: IntoView + 'static,
 {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
     let location = use_context::<BrowserUrl>();
-    let RouterContext {
-        current_url,
-        base,
-        set_is_routing,
-        ..
-    } = use_context()
-        .expect("<FlatRoutes> should be used inside a <Router> component");
+    let Some((
+        RouterContext {
+            current_url,
+            base,
+            set_is_routing,
+            ..
+        },
+        outer_owner,
+    )) = router_and_owner()
+    else {
+        report_once(
+            &REPORTED,
+            &RouterError::NoRouter {
+                what: "<FlatRoutes/>",
+                instead: "it renders nothing",
+            },
+        );
+        return None;
+    };
 
     // TODO base
     #[allow(unused)]
@@ -305,10 +381,7 @@ where
         base.clone().unwrap_or_default(),
     );
 
-    let outer_owner =
-        Owner::current().expect("creating Router, but no Owner was found");
-
-    move || {
+    Some(move || {
         current_url.track();
         outer_owner.with(|| {
             current_url.read_untracked().provide_server_action_error()
@@ -322,7 +395,7 @@ where
             set_is_routing,
             transition,
         }
-    }
+    })
 }
 
 /// Describes a portion of the nested layout of the app, specifying the route it should match
@@ -506,7 +579,9 @@ macro_rules! define_protected_parent_route {
                 let redirect_path = redirect_path.clone();
                 let fallback = fallback.clone();
                 let view = view.clone();
-                let owner = Owner::current().unwrap();
+                // routes run their views under an owner; without one there is none to
+                // restore
+                let owner = Owner::current();
                 let view = {
                     let fallback = fallback.clone();
                     move || {
@@ -522,7 +597,10 @@ macro_rules! define_protected_parent_route {
                             //
                             // clippy: not redundant, a FnOnce vs FnMut issue
                             #[allow(clippy::redundant_closure)]
-                            Some(true) => EitherOf3::A(owner.with(|| view())),
+                            Some(true) => EitherOf3::A(match &owner {
+                                Some(owner) => owner.with(|| view()),
+                                None => view(),
+                            }),
                             #[allow(clippy::unit_arg)]
                             Some(false) => EitherOf3::B(
                                 view! { <Redirect path=redirect_path()/> }
@@ -576,11 +654,11 @@ pub fn Redirect<P>(
 
     // redirect on the server
     if let Some(redirect_fn) = use_context::<ServerRedirectFunction>() {
-        (redirect_fn.f)(&resolve_path(
-            "",
-            &path,
-            Some(&use_matched().get_untracked()),
-        ));
+        // outside a matched route (e.g. in a layout), relative to the root
+        let matched = use_context::<Matched>()
+            .map(|Matched(matched)| matched.get_untracked())
+            .unwrap_or_default();
+        (redirect_fn.f)(&resolve_path("", &path, Some(&matched)));
     }
     // redirect on the client
     else {
@@ -689,5 +767,151 @@ pub fn RoutingProgress(
         <Show when=move || is_showing.get() fallback=|| ()>
             <progress min="0" max="100" value=move || progress.get()></progress>
         </Show>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StaticSegment;
+
+    fn without_markers(html: &str) -> String {
+        html.replace("<!>", "")
+    }
+
+    /// `<Routes/>` outside a `<Router/>` used to panic; it renders nothing.
+    #[test]
+    fn routes_outside_a_router_render_nothing() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let html = view! {
+                <Routes fallback=|| "not found">
+                    <Route path=StaticSegment("page") view=|| "page"/>
+                </Routes>
+            }
+            .to_html();
+            assert_eq!(without_markers(&html), "");
+        });
+    }
+
+    #[test]
+    fn flat_routes_outside_a_router_render_nothing() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let html = view! {
+                <FlatRoutes fallback=|| "not found">
+                    <Route path=StaticSegment("page") view=|| "page"/>
+                </FlatRoutes>
+            }
+            .to_html();
+            assert_eq!(without_markers(&html), "");
+        });
+    }
+
+    #[test]
+    fn routes_outside_any_owner_render_nothing() {
+        assert!(Owner::current().is_none());
+        let html = view! {
+            <Routes fallback=|| "not found">
+                <Route path=StaticSegment("page") view=|| "page"/>
+            </Routes>
+        }
+        .to_html();
+        assert_eq!(without_markers(&html), "");
+    }
+
+    #[cfg(feature = "ssr")]
+    fn router_path_and_html() -> (String, String) {
+        let view = view! {
+            <Router>
+                <Routes fallback=|| "not found">
+                    <Route path=StaticSegment("page") view=|| "page"/>
+                </Routes>
+            </Router>
+        };
+        let path = use_context::<RouterContext>()
+            .map(|router| router.current_url.get_untracked().path().to_string())
+            .unwrap_or_default();
+        (path, view.to_html())
+    }
+
+    /// On the server `<Router/>` reads the request's URL from context. Rendered without
+    /// one (outside a server integration) it used to panic; it renders the page for `/`.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn router_without_a_request_url_renders_the_page_for_root() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let (path, html) = router_path_and_html();
+            assert_eq!(path, "/");
+            assert_eq!(without_markers(&html), "not found");
+        });
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn router_with_an_unparsable_request_url_renders_the_page_for_root() {
+        let owner = Owner::new();
+        owner.with(|| {
+            provide_context(RequestUrl::new("http://[::1"));
+            let (path, html) = router_path_and_html();
+            assert_eq!(path, "/");
+            assert_eq!(without_markers(&html), "not found");
+        });
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn router_renders_the_request_url() {
+        let owner = Owner::new();
+        owner.with(|| {
+            provide_context(RequestUrl::new("/nothing/here?q=1"));
+            let (path, html) = router_path_and_html();
+            assert_eq!(path, "/nothing/here");
+            assert_eq!(without_markers(&html), "not found");
+        });
+    }
+
+    /// There is no browser during server rendering: navigating parsed the path with the
+    /// browser's `window`, which panics on the server. It does nothing, as `use_navigate`
+    /// documents.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn navigating_during_server_rendering_does_nothing() {
+        let owner = Owner::new();
+        owner.with(|| {
+            provide_context(RequestUrl::new("/other"));
+            let (path, _html) = router_path_and_html();
+            assert_eq!(path, "/other");
+            let navigate = use_navigate();
+            navigate("/elsewhere", NavigateOptions::default());
+            let path = use_context::<RouterContext>().map(|router| {
+                router.current_url.get_untracked().path().to_string()
+            });
+            assert_eq!(path.as_deref(), Some("/other"));
+        });
+    }
+
+    /// Attributes spread onto the router reach `<Routes/>`, whose `add_any_attr` was
+    /// `todo!()`. They are ignored.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn attributes_spread_onto_the_router_are_ignored() {
+        use halyard::tachys::html::class::class;
+
+        let owner = Owner::new();
+        owner.with(|| {
+            provide_context(RequestUrl::new("/other"));
+            let html = view! {
+                <Router>
+                    <Routes fallback=|| "not found">
+                        <Route path=StaticSegment("page") view=|| "page"/>
+                    </Routes>
+                </Router>
+            }
+            .add_any_attr(class("x"))
+            .to_html();
+            assert_eq!(without_markers(&html), "not found");
+        });
     }
 }

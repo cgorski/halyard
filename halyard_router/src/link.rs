@@ -128,11 +128,15 @@ where
         strict_trailing_slash: bool,
         scroll: bool,
     ) -> impl IntoView {
-        let RouterContext { current_url, .. } =
-            use_context().expect("tried to use <A/> outside a <Router/>.");
+        // outside a router (logged by `use_resolved_path`) no link is the current page
+        let current_url = use_context::<RouterContext>()
+            .map(|RouterContext { current_url, .. }| current_url);
         let is_active = {
             let href = href.clone();
             move || {
+                let Some(current_url) = &current_url else {
+                    return false;
+                };
                 let path = normalize_path(&href.read());
                 current_url.with(|loc| {
                     let loc = loc.path();
@@ -196,7 +200,7 @@ fn normalize_path(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
-    let mut del = 0;
+    let mut del: usize = 0;
     let mut it = path
         .split(['?', '#'])
         .next()
@@ -213,12 +217,12 @@ fn normalize_path(path: &str) -> String {
     let mut path = it
         .filter(|v| {
             if *v == ".." {
-                del += 1;
+                del = del.saturating_add(1);
                 false
             } else if *v == "." {
                 false
-            } else if del > 0 {
-                del -= 1;
+            } else if let Some(fewer) = del.checked_sub(1) {
+                del = fewer;
                 false
             } else {
                 true
@@ -227,7 +231,7 @@ fn normalize_path(path: &str) -> String {
         // We cannot reverse before the fold again bc the filter
         // would be forwards again.
         .fold(init, |mut p, v| {
-            p.reserve(v.len() + 1);
+            p.reserve(v.len().saturating_add(1));
             p.insert(0, '/');
             p.insert_str(0, v);
             p
@@ -244,7 +248,18 @@ fn normalize_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_active_for, normalize_path};
+    use super::{is_active_for, normalize_path, A};
+    use halyard::prelude::*;
+
+    /// `<A/>` outside a `<Router/>` used to panic while it was created. It is a plain link
+    /// (resolved from `/`), never marked active.
+    #[test]
+    fn link_outside_a_router_is_a_plain_link() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let _link = view! { <A href="reports">"Reports"</A> };
+        });
+    }
 
     #[test]
     fn is_active_for_matched() {

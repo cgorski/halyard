@@ -14,7 +14,7 @@ pub fn resolve_path<'a>(
             if path.starts_with('/') {
                 base_path
             } else if from_path.find(base_path.as_ref()) != Some(0) {
-                base_path + from_path
+                concat(base_path, from_path)
             } else {
                 from_path
             }
@@ -25,7 +25,20 @@ pub fn resolve_path<'a>(
         let result_empty = result.is_empty();
         let prefix = if result_empty { "/".into() } else { result };
 
-        prefix + normalize(path, result_empty)
+        concat(prefix, normalize(path, result_empty))
+    }
+}
+
+/// `left` followed by `right`, borrowing when one of them is empty (as `Cow`'s `+` does).
+fn concat<'a>(left: Cow<'a, str>, right: Cow<'a, str>) -> Cow<'a, str> {
+    if left.is_empty() {
+        right
+    } else if right.is_empty() {
+        left
+    } else {
+        let mut joined = left.into_owned();
+        joined.push_str(&right);
+        Cow::Owned(joined)
     }
 }
 
@@ -46,13 +59,9 @@ fn has_scheme(path: &str) -> bool {
 #[doc(hidden)]
 fn normalize(path: &str, omit_slash: bool) -> Cow<'_, str> {
     let s = path.trim_start_matches('/');
-    let trim_end = s
-        .chars()
-        .rev()
-        .take_while(|c| *c == '/')
-        .count()
-        .saturating_sub(1);
-    let s = &s[0..s.len() - trim_end];
+    // keep one of any trailing slashes: `s` up to and including the first of them, or all
+    // of `s` if it has none (then that range ends past `s`)
+    let s = s.get(..=s.trim_end_matches('/').len()).unwrap_or(s);
     if s.is_empty() || omit_slash || begins_with_query_or_hash(s) {
         s.into()
     } else {
@@ -96,5 +105,38 @@ mod tests {
     #[test]
     fn normalize_dedup_trailing_slashes() {
         assert_eq!(normalize("foo/bar/////", false), "/foo/bar/");
+    }
+
+    #[test]
+    fn normalize_edge_cases() {
+        assert_eq!(normalize("", false), "");
+        assert_eq!(normalize("/", false), "");
+        assert_eq!(normalize("////", false), "");
+        assert_eq!(normalize("a", true), "a");
+        assert_eq!(normalize("//a//", true), "a/");
+        assert_eq!(normalize("café///", false), "/café/");
+        assert_eq!(normalize("#top", false), "#top");
+    }
+
+    /// The joins that `resolve_path` makes (`base + from`, `prefix + path`).
+    #[test]
+    fn resolve_path_joins() {
+        assert_eq!(resolve_path("", "", None), "/");
+        assert_eq!(resolve_path("", "/", None), "/");
+        assert_eq!(resolve_path("", "foo", None), "/foo");
+        assert_eq!(resolve_path("/base", "foo", None), "/base/foo");
+        assert_eq!(resolve_path("/base", "/foo", Some("/x")), "/base/foo");
+        assert_eq!(resolve_path("/base", "foo", Some("/x")), "/base/x/foo");
+        assert_eq!(
+            resolve_path("/base", "foo", Some("/base/x")),
+            "/base/x/foo"
+        );
+        assert_eq!(resolve_path("", "foo", Some("/x/")), "/x//foo");
+        assert_eq!(resolve_path("", "?q=1", Some("/x")), "/x?q=1");
+        assert_eq!(resolve_path("/é", "ü", Some("/é/ñ")), "/é/ñ/ü");
+        assert_eq!(
+            resolve_path("", "https://a.b/c", Some("/x")),
+            "https://a.b/c"
+        );
     }
 }

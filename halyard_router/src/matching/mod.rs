@@ -158,8 +158,8 @@ pub struct GeneratedRouteData {
 mod tests {
     use super::{NestedRoute, ParamSegment, RouteDefs};
     use crate::{
-        matching::MatchParams, MatchInterface, PathSegment, StaticSegment,
-        WildcardSegment,
+        matching::MatchParams, MatchInterface, OptionalParamSegment,
+        PathSegment, StaticSegment, WildcardSegment,
     };
     use halyard_either_of::{Either, EitherOf4};
 
@@ -359,6 +359,126 @@ mod tests {
 
         let matched = routes.match_route("/usersid");
         assert!(matches!(matched, Some(EitherOf4::D(..))));
+    }
+
+    /// An optional parent whose child matches only once the parent has given its part of
+    /// the path back: the parent is re-tested on what is left before the child, and a
+    /// parent that cannot match that (its fixed part is in the child's match) used to be
+    /// unwrapped, a panic. That combination is no match.
+    #[test]
+    pub fn optional_parent_that_cannot_rematch_is_no_match() {
+        let routes = RouteDefs::<_>::new(
+            NestedRoute::new(
+                (StaticSegment("a"), OptionalParamSegment("b")),
+                || (),
+            )
+            .child(NestedRoute::new(StaticSegment("a"), || ())),
+        );
+        assert!(routes.match_route("/a").is_none());
+        assert!(routes.match_route("/a/").is_none());
+        let matched = routes.match_route("/a/x/a").expect("parent and child");
+        assert_eq!(matched.to_params(), vec![("b".into(), "x".into())]);
+    }
+
+    /// The optional-parent fallback that does work: the child takes the whole path and the
+    /// parent's optional param is left empty.
+    #[test]
+    pub fn optional_parent_falls_back_to_child() {
+        let routes = RouteDefs::<_>::new(
+            NestedRoute::new(OptionalParamSegment("lang"), || ())
+                .child(NestedRoute::new(StaticSegment("about"), || ())),
+        );
+        let matched = routes.match_route("/about").expect("child only");
+        assert!(matched.to_params().is_empty());
+        let matched = routes.match_route("/fr/about").expect("both");
+        assert_eq!(matched.to_params(), vec![("lang".into(), "fr".into())]);
+    }
+
+    /// A base that is a prefix of the path but ends inside a segment (`/app` of
+    /// `/appé...`) leaves the routes a path without a leading `/`. A param route used to
+    /// panic on it when the next character was multibyte.
+    #[test]
+    pub fn base_that_is_a_partial_prefix_is_no_match() {
+        let routes = RouteDefs::<_>::new_with_base(
+            (
+                NestedRoute::new((ParamSegment("id"),), || ()),
+                NestedRoute::new((WildcardSegment("rest"),), || ()),
+            ),
+            "/app",
+        );
+        assert!(routes.match_route("/appéa").is_none());
+        assert!(routes.match_route("/applesauce").is_none());
+        let matched = routes.match_route("/app/éa").expect("param");
+        assert_eq!(matched.to_params(), vec![("id".into(), "éa".into())]);
+        let matched = routes.match_route("/app/é/a").expect("wildcard");
+        assert_eq!(matched.to_params(), vec![("rest".into(), "é/a".into())]);
+    }
+
+    /// Odd paths against a realistic route table: never a panic, and only full matches.
+    #[test]
+    pub fn odd_paths_match_or_fall_back() {
+        let routes = RouteDefs::<_>::new_with_base(
+            (
+                NestedRoute::new(StaticSegment("/"), || ()),
+                NestedRoute::new(
+                    (StaticSegment("reports"), ParamSegment("id")),
+                    || (),
+                ),
+                NestedRoute::new(
+                    (StaticSegment("c"), OptionalParamSegment("tab")),
+                    || (),
+                ),
+                NestedRoute::new(
+                    (StaticSegment("files"), WildcardSegment("path")),
+                    || (),
+                ),
+            ),
+            "",
+        );
+        let paths = [
+            "",
+            "/",
+            "//",
+            "///",
+            "/reports",
+            "/reports/",
+            "/reports//",
+            "/reports/1",
+            "/reports/1/",
+            "/reports/1/2",
+            "reports/1",
+            "/c",
+            "/c/",
+            "/c/x",
+            "/c/x/y",
+            "/files",
+            "/files/",
+            "/files/a//b/",
+            "/é",
+            "é",
+            "éa",
+            "/reports/é",
+            "/🦀/🦀",
+            "/reports/\u{301}",
+            "?q=1",
+            "#x",
+            "/%E9",
+            "/reports/%2F",
+        ];
+        for path in paths {
+            // must not panic; a match must consume the whole path
+            _ = routes.match_route(path);
+        }
+        let id = |path: &str| routes.match_route(path).map(|m| m.to_params());
+        assert_eq!(id("/reports/é"), Some(vec![("id".into(), "é".into())]));
+        assert_eq!(id("/reports/1/"), Some(vec![("id".into(), "1".into())]));
+        assert_eq!(id("/reports/1/2"), None);
+        assert_eq!(id("/reports"), None);
+        assert_eq!(id("/c"), Some(vec![]));
+        assert_eq!(
+            id("/files/a//b/"),
+            Some(vec![("path".into(), "a//b/".into())])
+        );
     }
 }
 

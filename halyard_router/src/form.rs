@@ -1,12 +1,13 @@
 use crate::{
     components::ToHref,
+    error::{js_reason, report, RouterError},
     hooks::{has_router, use_navigate, use_resolved_path},
     location::{BrowserUrl, LocationProvider},
     NavigateOptions,
 };
 use halyard::{ev, html::form, logging::*, prelude::*, task::spawn_local};
 use std::{error::Error, sync::Arc};
-use wasm_bindgen::{JsCast, UnwrapThrowExt};
+use wasm_bindgen::JsCast;
 use web_sys::{FormData, RequestRedirect, Response};
 
 type OnFormData = Arc<dyn Fn(&FormData)>;
@@ -118,16 +119,22 @@ where
                     return;
                 };
 
-                let form_data =
-                    web_sys::FormData::new_with_form(&form).unwrap_throw();
+                // until `prevent_default` below, returning leaves the submission to the
+                // browser: a full page load
+                let form_data = match web_sys::FormData::new_with_form(&form) {
+                    Ok(form_data) => form_data,
+                    Err(error) => {
+                        report(&RouterError::Browser {
+                            action: "reading the submitted <Form/>",
+                            reason: js_reason(&error),
+                            instead: "the browser submits it",
+                        });
+                        return;
+                    }
+                };
                 if let Some(on_form_data) = on_form_data.clone() {
                     on_form_data(&form_data);
                 }
-                let params =
-                    web_sys::UrlSearchParams::new_with_str_sequence_sequence(
-                        &form_data,
-                    )
-                    .unwrap_throw();
                 // multipart POST (setting Context-Type breaks the request)
                 if method == "post" && enctype == "multipart/form-data" {
                     ev.prevent_default();
@@ -149,9 +156,7 @@ where
                             }
                             Ok(resp) => {
                                 let resp = web_sys::Response::from(resp);
-                                if let Some(version) = action_version {
-                                    version.update(|n| *n += 1);
-                                }
+                                bump_version(action_version);
                                 if let Some(error) = error {
                                     error.try_set(None);
                                 }
@@ -161,44 +166,11 @@ where
                                 // Check all the logical 3xx responses that might
                                 // get returned from a server function
                                 if resp.redirected() {
-                                    let resp_url = &resp.url();
-                                    match BrowserUrl::parse(resp_url.as_str()) {
-                                        Ok(url) => {
-                                            if url.origin()
-                                                != current_window_origin()
-                                                || navigate.is_none()
-                                            {
-                                                _ = window()
-                                                    .location()
-                                                    .set_href(
-                                                        resp_url.as_str(),
-                                                    );
-                                            } else {
-                                                #[allow(
-                                                    clippy::unnecessary_unwrap
-                                                )]
-                                                let navigate =
-                                                    navigate.unwrap();
-                                                navigate(
-                                                    &format!(
-                                                        "{}{}{}",
-                                                        url.path(),
-                                                        if url
-                                                            .search()
-                                                            .is_empty()
-                                                        {
-                                                            ""
-                                                        } else {
-                                                            "?"
-                                                        },
-                                                        url.search(),
-                                                    ),
-                                                    navigate_options,
-                                                )
-                                            }
-                                        }
-                                        Err(e) => warn!("{:?}", e),
-                                    }
+                                    follow_redirect(
+                                        &resp.url(),
+                                        navigate.as_ref(),
+                                        navigate_options,
+                                    );
                                 }
                             }
                         }
@@ -206,6 +178,9 @@ where
                 }
                 // POST
                 else if method == "post" {
+                    let Some(params) = form_params(&form_data) else {
+                        return;
+                    };
                     ev.prevent_default();
                     ev.stop_propagation();
 
@@ -225,9 +200,7 @@ where
                             }
                             Ok(resp) => {
                                 let resp = web_sys::Response::from(resp);
-                                if let Some(version) = action_version {
-                                    version.update(|n| *n += 1);
-                                }
+                                bump_version(action_version);
                                 if let Some(error) = error {
                                     error.try_set(None);
                                 }
@@ -237,44 +210,11 @@ where
                                 // Check all the logical 3xx responses that might
                                 // get returned from a server function
                                 if resp.redirected() {
-                                    let resp_url = &resp.url();
-                                    match BrowserUrl::parse(resp_url.as_str()) {
-                                        Ok(url) => {
-                                            if url.origin()
-                                                != current_window_origin()
-                                                || navigate.is_none()
-                                            {
-                                                _ = window()
-                                                    .location()
-                                                    .set_href(
-                                                        resp_url.as_str(),
-                                                    );
-                                            } else {
-                                                #[allow(
-                                                    clippy::unnecessary_unwrap
-                                                )]
-                                                let navigate =
-                                                    navigate.unwrap();
-                                                navigate(
-                                                    &format!(
-                                                        "{}{}{}",
-                                                        url.path(),
-                                                        if url
-                                                            .search()
-                                                            .is_empty()
-                                                        {
-                                                            ""
-                                                        } else {
-                                                            "?"
-                                                        },
-                                                        url.search(),
-                                                    ),
-                                                    navigate_options,
-                                                )
-                                            }
-                                        }
-                                        Err(e) => warn!("{:?}", e),
-                                    }
+                                    follow_redirect(
+                                        &resp.url(),
+                                        navigate.as_ref(),
+                                        navigate_options,
+                                    );
                                 }
                             }
                         }
@@ -282,6 +222,9 @@ where
                 }
                 // otherwise, GET
                 else {
+                    let Some(params) = form_params(&form_data) else {
+                        return;
+                    };
                     let params =
                         params.to_string().as_string().unwrap_or_default();
                     if let Some(navigate) = navigate {
@@ -332,6 +275,55 @@ where
     )
 }
 
+/// Counts a submission in `version`, if it was given one and it still exists (the form may
+/// be gone by the time the response arrives). The count only has to change, so it wraps.
+fn bump_version(version: Option<RwSignal<usize>>) {
+    if let Some(version) = version {
+        version.try_update(|n| *n = n.wrapping_add(1));
+    }
+}
+
+/// Follows a redirected response to `resp_url`: with client-side navigation on this
+/// origin when there is a router, otherwise by loading the page.
+fn follow_redirect(
+    resp_url: &str,
+    navigate: Option<&impl Fn(&str, NavigateOptions)>,
+    navigate_options: NavigateOptions,
+) {
+    match BrowserUrl::parse(resp_url) {
+        Ok(url) => match navigate {
+            Some(navigate) if url.origin() == current_window_origin() => {
+                navigate(
+                    &format!(
+                        "{}{}{}",
+                        url.path(),
+                        if url.search().is_empty() { "" } else { "?" },
+                        url.search(),
+                    ),
+                    navigate_options,
+                )
+            }
+            _ => {
+                _ = window().location().set_href(resp_url);
+            }
+        },
+        Err(e) => warn!("{:?}", e),
+    }
+}
+
+/// The submitted form's fields as URL search params, for a urlencoded POST or a GET.
+fn form_params(form_data: &FormData) -> Option<web_sys::UrlSearchParams> {
+    web_sys::UrlSearchParams::new_with_str_sequence_sequence(form_data)
+        .inspect_err(|error| {
+            report(&RouterError::Browser {
+                action: "reading the submitted <Form/>'s fields",
+                reason: js_reason(error),
+                instead: "the browser submits it",
+            });
+        })
+        .ok()
+}
+
 fn current_window_origin() -> String {
     let location = window().location();
     let protocol = location.protocol().unwrap_or_default();
@@ -344,6 +336,18 @@ fn current_window_origin() -> String {
         if port.is_empty() { "" } else { ":" },
         port
     )
+}
+
+/// The form that a submit event was fired on (its target). Without one, the handler leaves
+/// the submission to the browser.
+fn submitted_form(ev: &web_sys::Event) -> Option<web_sys::HtmlFormElement> {
+    let Some(target) = ev.target() else {
+        halyard::logging::debug_warn!(
+            "<Form/> SubmitEvent fired without a target."
+        );
+        return None;
+    };
+    Some(target.unchecked_into())
 }
 
 fn extract_form_attributes(
@@ -370,10 +374,7 @@ fn extract_form_attributes(
             } else if let Some(input) =
                 el.dyn_ref::<web_sys::HtmlInputElement>()
             {
-                let form = ev
-                    .target()
-                    .unwrap()
-                    .unchecked_into::<web_sys::HtmlFormElement>();
+                let form = submitted_form(ev)?;
                 Some((
                     form.clone(),
                     input.get_attribute("method").unwrap_or_else(|| {
@@ -397,10 +398,7 @@ fn extract_form_attributes(
             } else if let Some(button) =
                 el.dyn_ref::<web_sys::HtmlButtonElement>()
             {
-                let form = ev
-                    .target()
-                    .unwrap()
-                    .unchecked_into::<web_sys::HtmlFormElement>();
+                let form = submitted_form(ev)?;
                 Some((
                     form.clone(),
                     button.get_attribute("method").unwrap_or_else(|| {
@@ -429,25 +427,17 @@ fn extract_form_attributes(
                 None
             }
         }
-        None => match ev.target() {
-            None => {
-                halyard::logging::debug_warn!(
-                    "<Form/> SubmitEvent fired without a target."
-                );
-                None
-            }
-            Some(form) => {
-                let form = form.unchecked_into::<web_sys::HtmlFormElement>();
-                Some((
-                    form.clone(),
-                    form.get_attribute("method")
-                        .unwrap_or_else(|| "get".to_string()),
-                    form.get_attribute("action").unwrap_or_default(),
-                    form.get_attribute("enctype").unwrap_or_else(|| {
-                        "application/x-www-form-urlencoded".to_string()
-                    }),
-                ))
-            }
-        },
+        None => {
+            let form = submitted_form(ev)?;
+            Some((
+                form.clone(),
+                form.get_attribute("method")
+                    .unwrap_or_else(|| "get".to_string()),
+                form.get_attribute("action").unwrap_or_default(),
+                form.get_attribute("enctype").unwrap_or_else(|| {
+                    "application/x-www-form-urlencoded".to_string()
+                }),
+            ))
+        }
     }
 }

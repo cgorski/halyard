@@ -34,6 +34,14 @@ pub struct Url {
 }
 
 impl Url {
+    /// The URL `/`, where the router renders when there is no real URL to read.
+    pub(crate) fn root() -> Self {
+        Self {
+            path: "/".to_string(),
+            ..Self::default()
+        }
+    }
+
     pub fn origin(&self) -> &str {
         &self.origin
     }
@@ -124,7 +132,13 @@ impl Url {
     pub fn escape(s: &str) -> String {
         #[cfg(not(feature = "ssr"))]
         {
-            js_sys::encode_uri_component(s).as_string().unwrap()
+            // `encodeURIComponent` returns ASCII, so this is always a string; were it
+            // not, the form encoding is a close equivalent
+            js_sys::encode_uri_component(s)
+                .as_string()
+                .unwrap_or_else(|| {
+                    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+                })
         }
         #[cfg(feature = "ssr")]
         {

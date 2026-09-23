@@ -124,6 +124,7 @@
 
 /// Components for route definition and for enhanced links and forms.
 pub mod components;
+mod error;
 /// An optimized "flat" router without nested routes.
 pub mod flat_router;
 mod form;
@@ -153,6 +154,7 @@ pub use navigate::*;
 pub use ssr_mode::*;
 
 pub(crate) mod view_transition {
+    use crate::error::{js_reason, report, RouterError};
     use halyard::halyard_dom::helpers::document;
     use js_sys::{Function, Promise, Reflect};
     use wasm_bindgen::{closure::Closure, intern, JsCast, JsValue};
@@ -163,7 +165,15 @@ pub(crate) mod view_transition {
         fun: impl FnOnce() + 'static,
     ) {
         let document = document();
-        let document_element = document.document_element().unwrap();
+        let Some(document_element) = document.document_element() else {
+            report(&RouterError::Browser {
+                action: "starting a view transition",
+                reason: "the document has no root element".to_string(),
+                instead: "navigating without a transition",
+            });
+            fun();
+            return;
+        };
         let class_list = document_element.class_list();
         let svt = Reflect::get(
             &document,
@@ -185,23 +195,47 @@ pub(crate) mod view_transition {
                 ) {
                     Ok(view_transition) => {
                         let class_list = document_element.class_list();
+                        // a polyfill may return no `ViewTransition`, or one without a
+                        // `finished` promise
                         let finished = Reflect::get(
                             &view_transition,
                             &JsValue::from_str("finished"),
                         )
-                        .expect("no `finished` property on ViewTransition")
-                        .unchecked_into::<Promise>();
-                        let cb = Closure::new(Box::new(move |_| {
-                            if is_back_navigation {
-                                class_list.remove_1("router-back").unwrap();
+                        .and_then(|finished| finished.dyn_into::<Promise>());
+                        match finished {
+                            Ok(finished) => {
+                                let cb = Closure::new(Box::new(move |_| {
+                                    let mut removed = Ok(());
+                                    if is_back_navigation {
+                                        removed =
+                                            class_list.remove_1("router-back");
+                                    }
+                                    let removed = removed.and_then(|()| {
+                                        class_list.remove_1(&format!(
+                                            "router-outlet-{level}"
+                                        ))
+                                    });
+                                    if let Err(error) = removed {
+                                        report(&RouterError::Browser {
+                                            action: "ending a view transition",
+                                            reason: js_reason(&error),
+                                            instead: "its classes stay on the \
+                                                      document element",
+                                        });
+                                    }
+                                })
+                                    as Box<dyn FnMut(JsValue)>);
+                                _ = finished.then(&cb);
+                                cb.into_js_value();
                             }
-                            class_list
-                                .remove_1(&format!("router-outlet-{level}"))
-                                .unwrap();
-                        })
-                            as Box<dyn FnMut(JsValue)>);
-                        _ = finished.then(&cb);
-                        cb.into_js_value();
+                            Err(error) => report(&RouterError::Browser {
+                                action:
+                                    "waiting for a view transition to finish",
+                                reason: js_reason(&error),
+                                instead: "its classes stay on the document \
+                                          element",
+                            }),
+                        }
                     }
                     Err(e) => {
                         web_sys::console::log_1(&e);
