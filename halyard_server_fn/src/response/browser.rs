@@ -57,29 +57,38 @@ impl<E: FromServerFnError> ClientRes<E> for BrowserResponse {
         })
     }
 
+    /// Fails if the response has no body (`fetch` gives none for a `204`, for example).
     fn try_into_stream(
         self,
     ) -> Result<impl Stream<Item = Result<Bytes, Bytes>> + Send + 'static, E>
     {
-        let stream = ReadableStream::from_raw(self.0.body().unwrap())
-            .into_stream()
-            .map(|data| match data {
-                Err(e) => {
-                    web_sys::console::error_1(&e);
-                    Err(E::from_server_fn_error(ServerFnErrorErr::Request(
-                        format!("{e:?}"),
-                    ))
-                    .ser())
-                }
-                Ok(data) => {
-                    let data = data.unchecked_into::<Uint8Array>();
-                    let mut buf = Vec::new();
-                    let length = data.length();
-                    buf.resize(length as usize, 0);
-                    data.copy_to(&mut buf);
-                    Ok(Bytes::from(buf))
-                }
-            });
+        let body = self.0.body().ok_or_else(|| {
+            E::from_server_fn_error(ServerFnErrorErr::Deserialization(format!(
+                "expected a streaming response, but the response (status \
+                 {}) has no body",
+                self.0.status()
+            )))
+        })?;
+        let stream =
+            ReadableStream::from_raw(body).into_stream().map(
+                |data| match data {
+                    Err(e) => {
+                        web_sys::console::error_1(&e);
+                        Err(E::from_server_fn_error(ServerFnErrorErr::Request(
+                            format!("{e:?}"),
+                        ))
+                        .ser())
+                    }
+                    Ok(data) => {
+                        let data = data.unchecked_into::<Uint8Array>();
+                        let mut buf = Vec::new();
+                        let length = data.length();
+                        buf.resize(length as usize, 0);
+                        data.copy_to(&mut buf);
+                        Ok(Bytes::from(buf))
+                    }
+                },
+            );
         Ok(SendWrapper::new(stream))
     }
 

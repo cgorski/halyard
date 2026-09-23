@@ -14,6 +14,12 @@ use url::Url;
 /// A custom header that can be used to indicate a server function returned an error.
 pub const SERVER_FN_ERROR_HEADER: &str = "serverfnerror";
 
+/// [`SERVER_FN_ERROR_HEADER`] as a header name, checked when compiling (inserting the
+/// `&str` into a `HeaderMap` would check it, and panic if invalid, at run time).
+#[cfg(feature = "generic")]
+pub(crate) const SERVER_FN_ERROR_HEADER_NAME: http::HeaderName =
+    http::HeaderName::from_static(SERVER_FN_ERROR_HEADER);
+
 impl From<ServerFnError> for Error {
     fn from(e: ServerFnError) -> Self {
         Error::from(ServerFnErrorWrapper(e))
@@ -143,17 +149,30 @@ impl<E: Display + Clone> ViaError<E> for &WrapError<E> {
 }
 
 // This is what happens if someone tries to pass in something that does
-// not meet the above criteria
+// not meet the above criteria: the value cannot be carried, so the error says so
 impl<E> ViaError<E> for WrapError<E> {
     #[track_caller]
     fn to_server_error(&self) -> ServerFnError<E> {
-        panic!(
-            "At {}, you call `to_server_error()` or use  `server_fn_error!` \
-             with a value that does not implement `Clone` and either `Error` \
-             or `Display`.",
-            std::panic::Location::caller()
-        );
+        ServerFnError::ServerError(
+            UncarriableError {
+                type_name: std::any::type_name::<E>(),
+                location: std::panic::Location::caller(),
+            }
+            .to_string(),
+        )
     }
+}
+
+/// `server_fn_error!` or `to_server_error()` was given a value that it cannot carry.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "at {location}, `server_fn_error!` or `to_server_error()` was given a value \
+     of type `{type_name}`, which does not implement `Clone` and either `Error` \
+     or `Display`, so the value itself is not part of this error"
+)]
+struct UncarriableError {
+    type_name: &'static str,
+    location: &'static std::panic::Location<'static>,
 }
 
 /// A type that can be used as the return type of the server function for easy error conversion with `?` operator.
@@ -569,15 +588,26 @@ pub trait FromServerFnError: std::fmt::Debug + Sized + 'static {
     fn from_server_fn_error(value: ServerFnErrorErr) -> Self;
 
     /// Serializes the custom error type to bytes, according to the encoding given by `Self::Encoding`.
+    ///
+    /// If the error cannot be encoded, this encodes a [`ServerFnErrorErr::Serialization`]
+    /// error instead. If that cannot be encoded either, it returns a plain-text
+    /// description of both failures (which the other side most likely fails to decode,
+    /// and receives as a deserialization error) and logs it.
     fn ser(&self) -> Bytes {
-        Self::Encoder::encode(self).unwrap_or_else(|e| {
-            Self::Encoder::encode(&Self::from_server_fn_error(
-                ServerFnErrorErr::Serialization(e.to_string()),
-            ))
-            .expect(
-                "error serializing should success at least with the \
-                 Serialization error",
-            )
+        Self::Encoder::encode(self).unwrap_or_else(|error| {
+            let error = error.to_string();
+            let replacement = Self::from_server_fn_error(
+                ServerFnErrorErr::Serialization(error.clone()),
+            );
+            Self::Encoder::encode(&replacement).unwrap_or_else(|replacement| {
+                let unencodable = UnencodableError {
+                    error,
+                    replacement: replacement.to_string(),
+                }
+                .to_string();
+                crate::warn(&format!("[halyard] {unencodable}"));
+                Bytes::from(unencodable)
+            })
         })
     }
 
@@ -587,6 +617,18 @@ pub trait FromServerFnError: std::fmt::Debug + Sized + 'static {
             ServerFnErrorErr::Deserialization(e.to_string()).into_app_error()
         })
     }
+}
+
+/// A server function error whose encoding could not encode it, nor the
+/// [`ServerFnErrorErr::Serialization`] error that replaced it.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "a server function error could not be encoded ({error}), nor could the \
+     serialization error that replaced it ({replacement})"
+)]
+struct UnencodableError {
+    error: String,
+    replacement: String,
 }
 
 /// A helper trait for converting a [`ServerFnErrorErr`] into an application-specific custom error type that implements [`FromServerFnError`].
@@ -634,4 +676,82 @@ fn assert_from_server_fn_error_impl() {
     fn assert_impl<T: FromServerFnError>() {}
 
     assert_impl::<ServerFnError>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Neither `Clone` nor `Display`: `server_fn_error!` cannot carry it.
+    #[derive(Debug)]
+    struct Opaque;
+
+    /// This used to panic at run time, from the last-resort `ViaError` impl.
+    #[test]
+    fn server_fn_error_macro_with_an_unsupported_value_is_a_server_error() {
+        let error: ServerFnError<Opaque> = crate::server_fn_error!(Opaque);
+
+        match error {
+            ServerFnError::ServerError(message) => {
+                assert!(message.contains("Opaque"), "{message}");
+                assert!(message.contains("Clone"), "{message}");
+            }
+            other => panic!("expected a server error, got {other:?}"),
+        }
+    }
+
+    #[derive(Debug)]
+    struct Unencodable;
+
+    /// An encoding that cannot encode anything, not even its own serialization error.
+    struct FailingEncoding;
+
+    impl ContentType for FailingEncoding {
+        const CONTENT_TYPE: &'static str = "text/plain";
+    }
+
+    impl FormatType for FailingEncoding {
+        const FORMAT_TYPE: Format = Format::Text;
+    }
+
+    impl Encodes<Unencodable> for FailingEncoding {
+        type Error = &'static str;
+
+        fn encode(_: &Unencodable) -> Result<Bytes, Self::Error> {
+            Err("this encoding never succeeds")
+        }
+    }
+
+    impl Decodes<Unencodable> for FailingEncoding {
+        type Error = &'static str;
+
+        fn decode(_: Bytes) -> Result<Unencodable, Self::Error> {
+            Ok(Unencodable)
+        }
+    }
+
+    impl FromServerFnError for Unencodable {
+        type Encoder = FailingEncoding;
+
+        fn from_server_fn_error(_: ServerFnErrorErr) -> Self {
+            Unencodable
+        }
+    }
+
+    /// `ser` used to `expect` that the replacement error could be encoded.
+    #[test]
+    fn ser_describes_an_error_that_cannot_be_encoded() {
+        let bytes = Unencodable.ser();
+
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("this encoding never succeeds"), "{text}");
+    }
+
+    #[test]
+    fn ser_encodes_an_encodable_error() {
+        let bytes =
+            ServerFnError::<NoCustomError>::ServerError("boom".into()).ser();
+
+        assert_eq!(bytes, "ServerError|boom");
+    }
 }

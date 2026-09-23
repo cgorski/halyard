@@ -13,6 +13,7 @@ pub mod http;
 #[cfg(feature = "reqwest")]
 pub mod reqwest;
 
+use crate::{error::FromServerFnError, mock::NoServer};
 use bytes::Bytes;
 use futures::Stream;
 use std::future::Future;
@@ -81,38 +82,76 @@ pub trait ClientRes<E> {
 /// A mocked response type that can be used in place of the actual server response,
 /// when compiling for the browser.
 ///
-/// ## Panics
-/// This always panics if its methods are called. It is used solely to stub out the
-/// server response type when compiling for the client.
+/// It carries nothing. Building one from a server function's output returns an error
+/// (this build has no server to send it); an error response is an empty
+/// `BrowserMockRes`, on which setting headers does nothing.
 pub struct BrowserMockRes;
 
-impl<E> TryRes<E> for BrowserMockRes {
+impl<E: FromServerFnError> TryRes<E> for BrowserMockRes {
     fn try_from_string(_content_type: &str, _data: String) -> Result<Self, E> {
-        unreachable!()
+        Err(NoServer::Response.into_app_error())
     }
 
     fn try_from_bytes(_content_type: &str, _data: Bytes) -> Result<Self, E> {
-        unreachable!()
+        Err(NoServer::Response.into_app_error())
     }
 
     fn try_from_stream(
         _content_type: &str,
         _data: impl Stream<Item = Result<Bytes, Bytes>>,
     ) -> Result<Self, E> {
-        unreachable!()
+        Err(NoServer::Response.into_app_error())
     }
 }
 
 impl Res for BrowserMockRes {
     fn error_response(_path: &str, _err: Bytes) -> Self {
-        unreachable!()
+        BrowserMockRes
     }
 
-    fn content_type(&mut self, _content_type: &str) {
-        unreachable!()
+    fn content_type(&mut self, _content_type: &str) {}
+
+    fn redirect(&mut self, _path: &str) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ServerFnError;
+
+    fn is_response_error<T>(result: Result<T, ServerFnError>) -> bool {
+        matches!(result, Err(ServerFnError::Response(_)))
     }
 
-    fn redirect(&mut self, _path: &str) {
-        unreachable!()
+    /// These used to be `unreachable!()`: a panic in a build without a server.
+    #[test]
+    fn browser_mock_response_cannot_carry_a_server_function_response() {
+        assert!(is_response_error(<BrowserMockRes as TryRes<
+            ServerFnError,
+        >>::try_from_string(
+            "text/plain", "output".into()
+        )));
+        assert!(is_response_error(<BrowserMockRes as TryRes<
+            ServerFnError,
+        >>::try_from_bytes(
+            "application/octet-stream",
+            Bytes::from_static(b"output"),
+        )));
+        assert!(is_response_error(<BrowserMockRes as TryRes<
+            ServerFnError,
+        >>::try_from_stream(
+            "application/octet-stream",
+            futures::stream::empty(),
+        )));
+    }
+
+    #[test]
+    fn browser_mock_error_response_has_nothing_to_set() {
+        let mut response = BrowserMockRes::error_response(
+            "/api/f",
+            Bytes::from_static(b"err"),
+        );
+        response.content_type("text/plain");
+        response.redirect("/");
     }
 }

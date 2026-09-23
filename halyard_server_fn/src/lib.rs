@@ -138,7 +138,7 @@ pub use bitcode;
 // re-exported to make it possible to implement a custom Client without adding a separate
 // dependency on `bytes`
 pub use bytes::Bytes;
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use client::Client;
 use codec::{Encoding, FromReq, FromRes, IntoReq, IntoRes};
 #[doc(hidden)]
@@ -185,6 +185,15 @@ type ServerFnServerResponse<Fn> = <<Fn as ServerFn>::Server as crate::Server<
     <Fn as ServerFn>::InputStreamError,
     <Fn as ServerFn>::OutputStreamError,
 >>::Response;
+
+/// Reports a failure that was recovered from: on the console in the browser, on standard
+/// error elsewhere.
+pub(crate) fn warn(message: &str) {
+    #[cfg(all(feature = "browser", target_arch = "wasm32"))]
+    web_sys::console::warn_1(&wasm_bindgen::JsValue::from_str(message));
+    #[cfg(not(all(feature = "browser", target_arch = "wasm32")))]
+    eprintln!("{message}");
+}
 
 /// Defines a function that runs only on the server, but can be called from the server or the client.
 ///
@@ -756,48 +765,57 @@ where
     }
 }
 
+/// The tag of a websocket message that carries a value (see [`serialize_result`]).
+const OK_TAG: u8 = 0;
+/// The tag of a websocket message that carries an encoded error.
+const ERR_TAG: u8 = 1;
+
+/// A websocket message that is not a tagged result (see [`serialize_result`]). The peer
+/// receives it as a [`ServerFnErrorErr::Deserialization`] item in its stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+enum WebsocketMessageError {
+    #[error(
+        "the websocket message is empty: expected a tag byte ({OK_TAG} for a \
+         value, {ERR_TAG} for an error)"
+    )]
+    Empty,
+    #[error(
+        "the websocket message has tag {0}: expected {OK_TAG} for a value or \
+         {ERR_TAG} for an error"
+    )]
+    UnknownTag(u8),
+}
+
 // Serializes a Result<Bytes, Bytes> into a single Bytes instance.
-// Format: [tag: u8][content: Bytes]
-// - Tag 0: Ok variant
-// - Tag 1: Err variant
+// Format: [tag: u8][content: Bytes], with OK_TAG or ERR_TAG.
 fn serialize_result(result: Result<Bytes, Bytes>) -> Bytes {
-    match result {
-        Ok(bytes) => {
-            let mut buf = BytesMut::with_capacity(1 + bytes.len());
-            buf.put_u8(0); // Tag for Ok variant
-            buf.extend_from_slice(&bytes);
-            buf.freeze()
-        }
-        Err(bytes) => {
-            let mut buf = BytesMut::with_capacity(1 + bytes.len());
-            buf.put_u8(1); // Tag for Err variant
-            buf.extend_from_slice(&bytes);
-            buf.freeze()
-        }
-    }
+    let (tag, content) = match result {
+        Ok(bytes) => (OK_TAG, bytes),
+        Err(bytes) => (ERR_TAG, bytes),
+    };
+    // only a hint: `extend_from_slice` grows the buffer if needed
+    let mut buf = BytesMut::with_capacity(content.len().saturating_add(1));
+    buf.put_u8(tag);
+    buf.extend_from_slice(&content);
+    buf.freeze()
 }
 
 // Deserializes a Bytes instance back into a Result<Bytes, Bytes>.
 fn deserialize_result<E: FromServerFnError>(
     bytes: Bytes,
 ) -> Result<Bytes, Bytes> {
-    if bytes.is_empty() {
-        return Err(E::from_server_fn_error(
-            ServerFnErrorErr::Deserialization("Data is empty".into()),
-        )
-        .ser());
-    }
-
-    let tag = bytes[0];
-    let content = bytes.slice(1..);
-
-    match tag {
-        0 => Ok(content),
-        1 => Err(content),
-        _ => Err(E::from_server_fn_error(ServerFnErrorErr::Deserialization(
-            "Invalid data tag".into(),
+    let invalid = |error: WebsocketMessageError| {
+        E::from_server_fn_error(ServerFnErrorErr::Deserialization(
+            error.to_string(),
         ))
-        .ser()), // Invalid tag
+        .ser()
+    };
+    let mut content = bytes;
+    match content.try_get_u8() {
+        Err(_) => Err(invalid(WebsocketMessageError::Empty)),
+        Ok(OK_TAG) => Ok(content),
+        Ok(ERR_TAG) => Err(content),
+        Ok(tag) => Err(invalid(WebsocketMessageError::UnknownTag(tag))),
     }
 }
 
@@ -820,11 +838,23 @@ pub trait FormatType {
     const FORMAT_TYPE: Format;
 
     /// Encodes data into a string.
+    ///
+    /// A [`Format::Text`] encoding should produce UTF-8. If it does not, the invalid
+    /// sequences are replaced with U+FFFD (and a warning is logged), so decoding the
+    /// string will most likely fail with a deserialization error.
     fn into_encoded_string(bytes: Bytes) -> String {
         match Self::FORMAT_TYPE {
             Format::Binary => STANDARD_NO_PAD.encode(bytes),
-            Format::Text => String::from_utf8(bytes.into())
-                .expect("Valid text format type with utf-8 comptabile string"),
+            Format::Text => {
+                String::from_utf8(bytes.into()).unwrap_or_else(|error| {
+                    warn(&format!(
+                        "[halyard] a text encoding produced invalid UTF-8 \
+                         ({}); the invalid bytes were replaced with U+FFFD",
+                        error.utf8_error()
+                    ));
+                    String::from_utf8_lossy(error.as_bytes()).into_owned()
+                })
+            }
         }
     }
 
@@ -1079,7 +1109,7 @@ pub mod axum {
     pub fn server_fn_paths() -> impl Iterator<Item = (&'static str, Method)> {
         let paths: Vec<_> = REGISTERED_SERVER_FUNCTIONS
             .read()
-            .unwrap()
+            .or_poisoned()
             .values()
             .map(|item| (item.path(), item.method()))
             .collect();
@@ -1096,19 +1126,18 @@ pub mod axum {
         {
             service.run(req).await
         } else {
-            Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from(format!(
-                    "Could not find a server function at the route {path}. \
-                     \n\nIt's likely that either\n 1. The API prefix you \
-                     specify in the `#[server]` macro doesn't match the \
-                     prefix at which your server function handler is mounted, \
-                     or \n2. You are on a platform that doesn't support \
-                     automatic server function registration and you need to \
-                     call ServerFn::register_explicit() on the server \
-                     function type, somewhere in your `main` function.",
-                )))
-                .unwrap()
+            let mut response = Response::new(Body::from(format!(
+                "Could not find a server function at the route {path}. \
+                 \n\nIt's likely that either\n 1. The API prefix you specify \
+                 in the `#[server]` macro doesn't match the prefix at which \
+                 your server function handler is mounted, or \n2. You are on \
+                 a platform that doesn't support automatic server function \
+                 registration and you need to call \
+                 ServerFn::register_explicit() on the server function type, \
+                 somewhere in your `main` function.",
+            )));
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            response
         }
     }
 
@@ -1130,6 +1159,37 @@ pub mod axum {
                 }
                 service
             })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A panic elsewhere while the registry was being written used to make every
+        /// later `server_fn_paths()` panic too.
+        #[test]
+        fn server_fn_paths_survive_a_poisoned_registry() {
+            let poisoner = std::thread::spawn(|| {
+                let _guard = REGISTERED_SERVER_FUNCTIONS.write();
+                panic!("poisoning the registry on purpose");
+            });
+            assert!(poisoner.join().is_err());
+            assert!(REGISTERED_SERVER_FUNCTIONS.is_poisoned());
+
+            let _paths: Vec<_> = server_fn_paths().collect();
+        }
+
+        #[test]
+        fn a_path_without_a_server_fn_is_a_bad_request() {
+            let req = Request::builder()
+                .uri("/api/no_such_server_fn")
+                .body(Body::empty())
+                .unwrap();
+
+            let res = futures::executor::block_on(handle_server_fn(req));
+
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        }
     }
 }
 
@@ -1200,7 +1260,7 @@ pub mod actix {
     pub fn server_fn_paths() -> impl Iterator<Item = (&'static str, Method)> {
         let paths: Vec<_> = REGISTERED_SERVER_FUNCTIONS
             .read()
-            .unwrap()
+            .or_poisoned()
             .values()
             .map(|item| (item.path(), item.method()))
             .collect();
@@ -1236,24 +1296,15 @@ pub mod actix {
     }
 
     /// Returns the server function at the given path as a service that can be modified.
+    ///
+    /// Any method is looked up by name, extension methods (`PROPFIND`, ...) included.
     pub fn get_server_fn_service(
         path: &str,
         method: &actix_web::http::Method,
     ) -> Option<BoxedService<ActixRequest, ActixResponse>> {
-        use actix_web::http::Method as ActixMethod;
-
-        let method = match *method {
-            ActixMethod::GET => Method::GET,
-            ActixMethod::POST => Method::POST,
-            ActixMethod::PUT => Method::PUT,
-            ActixMethod::PATCH => Method::PATCH,
-            ActixMethod::DELETE => Method::DELETE,
-            ActixMethod::HEAD => Method::HEAD,
-            ActixMethod::TRACE => Method::TRACE,
-            ActixMethod::OPTIONS => Method::OPTIONS,
-            ActixMethod::CONNECT => Method::CONNECT,
-            _ => unreachable!(),
-        };
+        // actix-web has its own `http` version: convert by name (always a valid token,
+        // since actix parsed it)
+        let method = Method::from_bytes(method.as_str().as_bytes()).ok()?;
         REGISTERED_SERVER_FUNCTIONS
             .read()
             .or_poisoned()
@@ -1267,35 +1318,95 @@ pub mod actix {
                 service
             })
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Any client can send a request with an extension method; looking one up
+        /// used to hit `unreachable!()`.
+        #[test]
+        fn an_extension_method_finds_no_server_fn() {
+            let method =
+                actix_web::http::Method::from_bytes(b"PROPFIND").unwrap();
+
+            assert!(get_server_fn_service("/api/anything", &method).is_none());
+        }
+
+        #[test]
+        fn server_fn_paths_survive_a_poisoned_registry() {
+            let poisoner = std::thread::spawn(|| {
+                let _guard = REGISTERED_SERVER_FUNCTIONS.write();
+                panic!("poisoning the registry on purpose");
+            });
+            assert!(poisoner.join().is_err());
+            assert!(REGISTERED_SERVER_FUNCTIONS.is_poisoned());
+
+            let _paths: Vec<_> = server_fn_paths().collect();
+        }
+    }
 }
 
 /// Mocks for the server function backend types when compiling for the client.
 pub mod mock {
+    use crate::error::{FromServerFnError, ServerFnErrorErr};
     use std::future::Future;
+
+    /// A server-side operation asked of the mocks, in a build without a server.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+    pub(crate) enum NoServer {
+        /// [`BrowserMockServer`] was asked to spawn a task.
+        #[error(
+            "cannot spawn a server task: this build has no server (server \
+             functions run only where the `ssr` feature is enabled)"
+        )]
+        Spawn,
+        /// [`BrowserMockRes`](crate::response::BrowserMockRes) was asked to carry a
+        /// server function's output.
+        #[error(
+            "cannot build a server function response: this build has no \
+             server (server functions run only where the `ssr` feature is \
+             enabled)"
+        )]
+        Response,
+    }
+
+    impl NoServer {
+        /// This error as the application's error type.
+        pub(crate) fn into_app_error<E: FromServerFnError>(self) -> E {
+            let message = self.to_string();
+            E::from_server_fn_error(match self {
+                NoServer::Spawn => ServerFnErrorErr::ServerError(message),
+                NoServer::Response => ServerFnErrorErr::Response(message),
+            })
+        }
+    }
 
     /// A mocked server type that can be used in place of the actual server,
     /// when compiling for the browser.
     ///
-    /// ## Panics
-    /// This always panics if its methods are called. It is used solely to stub out the
-    /// server type when compiling for the client.
+    /// No request reaches it: its request type,
+    /// [`BrowserMockReq`](crate::request::BrowserMockReq), has no values. What can
+    /// still be called returns an error (or, for an error response, an empty
+    /// [`BrowserMockRes`](crate::response::BrowserMockRes)).
     pub struct BrowserMockServer;
 
     impl<Error, InputStreamError, OutputStreamError>
         crate::server::Server<Error, InputStreamError, OutputStreamError>
         for BrowserMockServer
     where
-        Error: Send + 'static,
+        Error: FromServerFnError + Send + 'static,
         InputStreamError: Send + 'static,
         OutputStreamError: Send + 'static,
     {
         type Request = crate::request::BrowserMockReq;
         type Response = crate::response::BrowserMockRes;
 
+        /// There is no server to spawn on: returns an error and drops `future`.
         fn spawn(
             _: impl Future<Output = ()> + Send + 'static,
         ) -> Result<(), Error> {
-            unreachable!()
+            Err(NoServer::Spawn.into_app_error())
         }
     }
 }
@@ -1339,5 +1450,73 @@ mod tests {
             deserialized.unwrap_err(),
             Bytes::from_static(b"error details")
         );
+    }
+
+    fn deserialization_message(bytes: Bytes) -> String {
+        match <ServerFnError>::de(bytes) {
+            ServerFnError::Deserialization(message) => message,
+            other => panic!("expected a deserialization error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_websocket_message_is_a_deserialization_error() {
+        let message = deserialize_result::<ServerFnError>(Bytes::new())
+            .expect_err("an empty message carries no result");
+
+        assert!(
+            deserialization_message(message).contains("empty"),
+            "the error says what was wrong"
+        );
+    }
+
+    #[test]
+    fn websocket_message_with_an_unknown_tag_names_the_tag() {
+        let message =
+            deserialize_result::<ServerFnError>(Bytes::from_static(&[7, b'x']))
+                .expect_err("7 is neither the Ok nor the Err tag");
+
+        let message = deserialization_message(message);
+        assert!(message.contains("tag 7"), "{message}");
+    }
+
+    struct InvalidText;
+
+    impl FormatType for InvalidText {
+        const FORMAT_TYPE: Format = Format::Text;
+    }
+
+    /// A text encoding that emits bytes that are not UTF-8 used to panic here.
+    #[test]
+    fn text_format_that_is_not_utf8_is_encoded_lossily() {
+        let encoded = InvalidText::into_encoded_string(Bytes::from_static(
+            b"not utf-8: \xff",
+        ));
+
+        assert_eq!(encoded, "not utf-8: \u{FFFD}");
+    }
+
+    #[test]
+    fn text_format_keeps_valid_utf8_as_is() {
+        let encoded = InvalidText::into_encoded_string(Bytes::from_static(
+            "é|ok".as_bytes(),
+        ));
+
+        assert_eq!(encoded, "é|ok");
+    }
+
+    /// The mock server stands in for the server in builds without one; it used to
+    /// panic when asked to spawn a task.
+    #[test]
+    fn browser_mock_server_refuses_to_spawn() {
+        let spawned =
+            <mock::BrowserMockServer as Server<ServerFnError>>::spawn(async {});
+
+        match spawned {
+            Err(ServerFnError::ServerError(message)) => {
+                assert!(message.contains("ssr"), "{message}")
+            }
+            other => panic!("expected a server error, got {other:?}"),
+        }
     }
 }

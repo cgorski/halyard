@@ -88,6 +88,12 @@ impl From<FormData> for BrowserFormData {
     }
 }
 
+/// The URL of the server function at `path`, on the server set with
+/// [`set_server_url`](crate::client::set_server_url) (by default, the page's origin).
+fn server_fn_url(path: &str) -> String {
+    [get_server_url(), path].concat()
+}
+
 fn abort_signal() -> (Option<AbortOnDrop>, Option<AbortSignal>) {
     let ctrl = AbortController::new().ok();
     let signal = ctrl.as_ref().map(|ctrl| ctrl.signal());
@@ -108,14 +114,7 @@ where
         method: http::Method,
     ) -> Result<Self, E> {
         let (abort_ctrl, abort_signal) = abort_signal();
-        let server_url = get_server_url();
-        let mut url = String::with_capacity(
-            server_url.len() + path.len() + 1 + query.len(),
-        );
-        url.push_str(server_url);
-        url.push_str(path);
-        url.push('?');
-        url.push_str(query);
+        let url = [get_server_url(), path, "?", query].concat();
         Ok(Self(SendWrapper::new(RequestInner {
             request: match method {
                 Method::GET => Request::get(&url),
@@ -152,10 +151,7 @@ where
         method: Method,
     ) -> Result<Self, E> {
         let (abort_ctrl, abort_signal) = abort_signal();
-        let server_url = get_server_url();
-        let mut url = String::with_capacity(server_url.len() + path.len());
-        url.push_str(server_url);
-        url.push_str(path);
+        let url = server_fn_url(path);
         Ok(Self(SendWrapper::new(RequestInner {
             request: match method {
                 Method::POST => Request::post(&url),
@@ -190,10 +186,7 @@ where
         method: Method,
     ) -> Result<Self, E> {
         let (abort_ctrl, abort_signal) = abort_signal();
-        let server_url = get_server_url();
-        let mut url = String::with_capacity(server_url.len() + path.len());
-        url.push_str(server_url);
-        url.push_str(path);
+        let url = server_fn_url(path);
         let body: &[u8] = &body;
         let body = Uint8Array::from(body).buffer();
         Ok(Self(SendWrapper::new(RequestInner {
@@ -229,10 +222,7 @@ where
         method: Method,
     ) -> Result<Self, E> {
         let (abort_ctrl, abort_signal) = abort_signal();
-        let server_url = get_server_url();
-        let mut url = String::with_capacity(server_url.len() + path.len());
-        url.push_str(server_url);
-        url.push_str(path);
+        let url = server_fn_url(path);
         Ok(Self(SendWrapper::new(RequestInner {
             request: match method {
                 Method::POST => Request::post(&url),

@@ -370,7 +370,17 @@ where
 
 /// A mocked request type that can be used in place of the actual server request,
 /// when compiling for the browser.
-pub struct BrowserMockReq;
+///
+/// It has no values: in a build without a server no request reaches a server function,
+/// and the compiler knows that none of these methods can be called.
+pub enum BrowserMockReq {}
+
+impl BrowserMockReq {
+    /// Whatever `T` is asked for: there is no `BrowserMockReq` to call this on.
+    fn absurd<T>(self) -> T {
+        match self {}
+    }
+}
 
 impl<Error, InputStreamError, OutputStreamError>
     Req<Error, InputStreamError, OutputStreamError> for BrowserMockReq
@@ -382,32 +392,33 @@ where
     type WebsocketResponse = crate::response::BrowserMockRes;
 
     fn as_query(&self) -> Option<&str> {
-        unreachable!()
+        match *self {}
     }
 
     fn to_content_type(&self) -> Option<Cow<'_, str>> {
-        unreachable!()
+        match *self {}
     }
 
     fn accepts(&self) -> Option<Cow<'_, str>> {
-        unreachable!()
+        match *self {}
     }
 
     fn referer(&self) -> Option<Cow<'_, str>> {
-        unreachable!()
+        match *self {}
     }
+
     async fn try_into_bytes(self) -> Result<Bytes, Error> {
-        unreachable!()
+        match self {}
     }
 
     async fn try_into_string(self) -> Result<String, Error> {
-        unreachable!()
+        match self {}
     }
 
     fn try_into_stream(
         self,
     ) -> Result<impl Stream<Item = Result<Bytes, Bytes>> + Send, Error> {
-        Ok(futures::stream::once(async { unreachable!() }))
+        Ok(self.absurd::<futures::stream::Empty<Result<Bytes, Bytes>>>())
     }
 
     async fn try_into_websocket(
@@ -420,14 +431,10 @@ where
         ),
         Error,
     > {
-        #[allow(unreachable_code)]
-        Err::<
-            (
-                futures::stream::Once<std::future::Ready<Result<Bytes, Bytes>>>,
-                futures::sink::Drain<Bytes>,
-                Self::WebsocketResponse,
-            ),
-            _,
-        >(unreachable!())
+        Ok(self.absurd::<(
+            futures::stream::Empty<Result<Bytes, Bytes>>,
+            futures::sink::Drain<Bytes>,
+            Self::WebsocketResponse,
+        )>())
     }
 }

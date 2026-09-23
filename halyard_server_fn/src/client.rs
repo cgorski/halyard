@@ -9,20 +9,23 @@ static ROOT_URL: OnceLock<&'static str> = OnceLock::new();
 ///
 /// If this is not set, it defaults to the origin.
 ///
-/// # Panics
-///
-/// Panics if the server URL has already been set. Setting it twice is almost
-/// always a bug: requests would otherwise be silently sent to a different URL
-/// than intended. If you need to handle the already-set case gracefully, use
-/// [`try_set_server_url`] instead.
+/// The URL can be set once. Setting it again is almost always a bug, so a later call
+/// keeps the URL that requests already go to and logs a warning naming both URLs. To
+/// handle the already-set case yourself, use [`try_set_server_url`].
 pub fn set_server_url(url: &'static str) {
-    ROOT_URL.set(url).unwrap();
+    if let Err(ignored) = ROOT_URL.set(url) {
+        crate::warn(&format!(
+            "[halyard] the server function URL is already set to {:?}; \
+             ignoring the new URL {ignored:?}",
+            get_server_url()
+        ));
+    }
 }
 
 /// Attempts to set the root server URL that all server function paths are
 /// relative to for the client.
 ///
-/// Unlike [`set_server_url`], this does not panic if the URL has already been
+/// Unlike [`set_server_url`], this does not log if the URL has already been
 /// set. Instead it returns `Err` containing the `url` that could not be set,
 /// leaving the previously set value unchanged.
 ///
@@ -326,5 +329,24 @@ pub mod reqwest {
         fn spawn(future: impl Future<Output = ()> + Send + 'static) {
             tokio::spawn(future);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // the only test that sets the (process-wide) server URL
+    #[test]
+    fn setting_the_server_url_twice_keeps_the_first() {
+        set_server_url("https://first.example");
+        set_server_url("https://second.example");
+
+        assert_eq!(get_server_url(), "https://first.example");
+        assert_eq!(
+            try_set_server_url("https://third.example"),
+            Err("https://third.example")
+        );
+        assert_eq!(get_server_url(), "https://first.example");
     }
 }
