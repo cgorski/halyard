@@ -42,6 +42,7 @@
 //!
 //! **Important Note:** If you’re using server-side rendering, you should enable `ssr`.
 
+use error::MetaError;
 use futures::{Stream, StreamExt};
 use halyard::{
     attr::{any_attribute::AnyAttribute, NextAttribute},
@@ -64,10 +65,12 @@ use halyard::{
     },
     IntoView,
 };
+use inject::HeadPlacement;
 use send_wrapper::SendWrapper;
 use std::{
     fmt::Debug,
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{channel, Receiver, Sender},
         Arc, LazyLock,
     },
@@ -76,7 +79,9 @@ use wasm_bindgen::JsCast;
 use web_sys::HtmlHeadElement;
 
 mod body;
+mod error;
 mod html;
+mod inject;
 mod link;
 mod meta_tags;
 mod script;
@@ -101,7 +106,10 @@ pub struct MetaContext {
     /// Metadata associated with the `<title>` element.
     pub(crate) title: TitleContext,
     /// The hydration cursor for the location in the `<head>` for arbitrary tags will be rendered.
-    pub(crate) cursor: Arc<LazyLock<SendWrapper<Cursor>>>,
+    ///
+    /// `None` if the document has no `<head>`, or no `<!--HEAD-->` marker in it (logged
+    /// when first needed): the tags are then not hydrated (see [`RegisteredMetaTag`]).
+    pub(crate) cursor: Arc<LazyLock<Option<SendWrapper<Cursor>>>>,
 }
 
 impl MetaContext {
@@ -112,35 +120,36 @@ impl MetaContext {
 }
 
 pub(crate) const HEAD_MARKER_COMMENT: &str = "HEAD";
+/// What happens to a server-rendered tag that cannot be hydrated (see
+/// [`RegisteredMetaTag`]'s `hydrate`).
+const NOT_HYDRATED: &str =
+    "The tags that halyard_meta rendered on the server stay as they are, but are \
+     not updated.";
 /// Return value of [`Node::node_type`] for a comment.
 /// https://developer.mozilla.org/en-US/docs/Web/API/Node/nodeType#node.comment_node
 const COMMENT_NODE: u16 = 8;
 
 impl Default for MetaContext {
     fn default() -> Self {
-        let build_cursor: fn() -> SendWrapper<Cursor> = || {
-            let head = document().head().expect("missing <head> element");
-            let mut cursor = None;
+        let build_cursor: fn() -> Option<SendWrapper<Cursor>> = || {
+            let Some(head) = document().head() else {
+                MetaError::NoElement("head").warn(NOT_HYDRATED);
+                return None;
+            };
             let mut child = head.first_child();
             while let Some(this_child) = child {
                 if this_child.node_type() == COMMENT_NODE
                     && this_child.text_content().as_deref()
                         == Some(HEAD_MARKER_COMMENT)
                 {
-                    cursor = Some(this_child);
-                    break;
+                    return Some(SendWrapper::new(Cursor::new(
+                        this_child.unchecked_into(),
+                    )));
                 }
                 child = this_child.next_sibling();
             }
-            SendWrapper::new(Cursor::new(
-                cursor
-                    .expect(
-                        "no halyard_meta HEAD marker comment found. Did you \
-                         include the <MetaTags/> component in the <head> of \
-                         your server-rendered app?",
-                    )
-                    .unchecked_into(),
-            ))
+            MetaError::NoHeadMarker.warn(NOT_HYDRATED);
+            None
         };
 
         let cursor = Arc::new(LazyLock::new(build_cursor));
@@ -212,6 +221,13 @@ impl ServerMetaContextOutput {
     ///
     /// This means that only meta tags rendered during the first chunk of the stream will be
     /// included.
+    ///
+    /// The title and meta tags go after the `<!--HEAD-->` marker that [`MetaTags`]
+    /// renders, or else before `</head>`. A first chunk with neither (a shell without a
+    /// `<head>`, or a first chunk that ends inside it) gets them before `<body>`, or else at
+    /// the start of the document, after its doctype; the browser puts them in the head from
+    /// there too. That is logged, as are `<Html>`/`<Body>` attributes without an
+    /// `<html>`/`<body>` tag in the first chunk, which are left out.
     pub async fn inject_meta_context(
         self,
         mut stream: impl Stream<Item = String> + Send + Unpin,
@@ -224,67 +240,69 @@ impl ServerMetaContextOutput {
         halyard::task::tick().await;
 
         // wait for the first chunk of the stream, to ensure our components hve run
-        let mut first_chunk = stream.next().await.unwrap_or_default();
-
-        // create <title> tag
-        let title = self.title.as_string();
-        let title_len = title
-            .as_ref()
-            .map(|n| "<title>".len() + n.len() + "</title>".len())
-            .unwrap_or(0);
-
-        // collect all registered meta tags
-        let meta_buf = self.elements.try_iter().collect::<String>();
-
-        // get HTML strings for `<html>` and `<body>`
-        let html_attrs = self.html.try_iter().collect::<String>();
-        let body_attrs = self.body.try_iter().collect::<String>();
-
-        let mut modified_chunk = if title_len == 0 && meta_buf.is_empty() {
-            first_chunk
-        } else {
-            let mut buf = String::with_capacity(
-                first_chunk.len() + title_len + meta_buf.len(),
-            );
-            let head_loc = first_chunk
-                .find("</head>")
-                .expect("you are using halyard_meta without a </head> tag");
-            let marker_loc = first_chunk
-                .find("<!--HEAD-->")
-                .map(|pos| pos + "<!--HEAD-->".len())
-                .unwrap_or_else(|| {
-                    first_chunk.find("</head>").unwrap_or(head_loc)
-                });
-            let (before_marker, after_marker) =
-                first_chunk.split_at_mut(marker_loc);
-            buf.push_str(before_marker);
-            buf.push_str(&meta_buf);
-            if let Some(title) = title {
-                buf.push_str("<title>");
-                buf.push_str(&title);
-                buf.push_str("</title>");
-            }
-            buf.push_str(after_marker);
-            buf
-        };
-
-        if !html_attrs.is_empty() {
-            if let Some(index) = modified_chunk.find("<html") {
-                // Calculate the position where the new string should be inserted
-                let insert_pos = index + "<html".len();
-                modified_chunk.insert_str(insert_pos, &html_attrs);
-            }
-        }
-
-        if !body_attrs.is_empty() {
-            if let Some(index) = modified_chunk.find("<body") {
-                // Calculate the position where the new string should be inserted
-                let insert_pos = index + "<body".len();
-                modified_chunk.insert_str(insert_pos, &body_attrs);
-            }
-        }
+        let first_chunk = stream.next().await.unwrap_or_default();
+        let modified_chunk = self.inject_into_first_chunk(first_chunk);
 
         futures::stream::once(async move { modified_chunk }).chain(stream)
+    }
+
+    /// Puts the meta tags, title and `<html>`/`<body>` attributes registered so far into
+    /// `first_chunk`, the start of the page (see [`Self::inject_meta_context`]).
+    fn inject_into_first_chunk(self, first_chunk: String) -> String {
+        // all registered meta tags, then the <title>
+        let mut head = self.elements.try_iter().collect::<String>();
+        if let Some(title) = self.title.as_string() {
+            head.push_str("<title>");
+            head.push_str(&title);
+            head.push_str("</title>");
+        }
+
+        let mut page = first_chunk;
+        if !head.is_empty() {
+            let (with_head, placement) =
+                inject::insert_head_content(&page, &head);
+            let recovery = match placement {
+                HeadPlacement::AfterMarker | HeadPlacement::BeforeHeadEnd => None,
+                HeadPlacement::BeforeBody => Some(
+                    "The title and meta tags were put before <body>, where the \
+                     browser puts them in the document's head.",
+                ),
+                HeadPlacement::DocumentStart => Some(
+                    "The title and meta tags were put at the start of the \
+                     document, where the browser puts them in its head.",
+                ),
+            };
+            if let Some(recovery) = recovery {
+                MetaError::NoHeadInFirstChunk.warn(recovery);
+            }
+            page = with_head;
+        }
+
+        let html_attrs = self.html.try_iter().collect::<String>();
+        let page = with_attributes(page, "html", "Html", &html_attrs);
+        let body_attrs = self.body.try_iter().collect::<String>();
+        with_attributes(page, "body", "Body", &body_attrs)
+    }
+}
+
+/// `page` with `attributes` (from `<component/>`) on its first `<tag>`; unchanged, and
+/// logged, if the page has no such tag.
+fn with_attributes(
+    page: String,
+    tag: &'static str,
+    component: &'static str,
+    attributes: &str,
+) -> String {
+    if attributes.is_empty() {
+        return page;
+    }
+    match inject::insert_attributes(&page, tag, attributes) {
+        Some(page) => page,
+        None => {
+            MetaError::NoTagInFirstChunk { tag, component }
+                .warn("Its attributes are left out of the page.");
+            page
+        }
     }
 }
 
@@ -354,14 +372,37 @@ where
     }
 }
 
-fn document_head() -> HtmlHeadElement {
+/// The document's `<head>`, created (at the end of `<html>`) if the document has none.
+fn document_head() -> Result<HtmlHeadElement, MetaError> {
     let document = document();
-    document.head().unwrap_or_else(|| {
-        let el = document.create_element("head").unwrap();
-        let document = document.document_element().unwrap();
-        _ = document.append_child(&el);
-        el.unchecked_into()
-    })
+    if let Some(head) = document.head() {
+        return Ok(head);
+    }
+    let html = document
+        .document_element()
+        .ok_or(MetaError::NoElement("html"))?;
+    let head = document.create_element("head").map_err(|thrown| {
+        MetaError::thrown("document.createElement", &thrown)
+    })?;
+    html.append_child(&head)
+        .map_err(|thrown| MetaError::thrown("html.appendChild", &thrown))?;
+    Ok(head.unchecked_into())
+}
+
+/// The hydration cursor in the `<head>` of the current [`MetaContext`], which the server
+/// put this page's tags after. `None` if there is no context (logged once), or no cursor
+/// (logged when the context looked for it).
+fn head_cursor() -> Option<Cursor> {
+    static WARNED_NO_META_CONTEXT: AtomicBool = AtomicBool::new(false);
+
+    let Some(meta) = use_context::<MetaContext>() else {
+        if !WARNED_NO_META_CONTEXT.swap(true, Ordering::Relaxed) {
+            MetaError::NoMetaContext.warn(NOT_HYDRATED);
+        }
+        return None;
+    };
+    let cursor = LazyLock::force(&meta.cursor).as_ref()?;
+    Some(Cursor::clone(cursor))
 }
 
 impl<E, At, Ch> Render for RegisteredMetaTag<E, At, Ch>
@@ -462,12 +503,14 @@ where
         _cursor: &Cursor,
         _position: &PositionState,
     ) -> Self::State {
-        let cursor = use_context::<MetaContext>()
-            .expect(
-                "attempting to hydrate `halyard_meta` components without a \
-                 MetaContext provided",
-            )
-            .cursor;
+        let Some(cursor) = head_cursor() else {
+            // Nowhere to hydrate from: the tag is created on the client but not added, and
+            // the server's copy of it stays in the page as rendered. Adding this one would
+            // duplicate that copy (and run a `<Script>` twice). Should it be moved later,
+            // `mount` adds it to the `<head>`.
+            let state = self.el.build();
+            return RegisteredMetaTagState { state };
+        };
         let state = self.el.hydrate::<FROM_SERVER>(
             &cursor,
             &PositionState::new(Position::NextChild),
@@ -501,7 +544,10 @@ where
         // but this shouldn't warn about the parent being a regular element or being unused
         // because it will call "mount" with the parent where it is located in the component tree,
         // but actually be mounted to the <head>
-        self.state.mount(&document_head(), None);
+        match document_head() {
+            Ok(head) => self.state.mount(&head, None),
+            Err(error) => error.warn("The tag is not added to the page."),
+        }
     }
 
     fn insert_before_this(&self, _child: &mut dyn Mountable) -> bool {
@@ -600,5 +646,196 @@ impl OrDefaultNonce for Option<Oco<'static, str>> {
             Some(nonce) => Some(nonce),
             None => use_nonce().map(|n| Arc::clone(n.as_inner()).into()),
         }
+    }
+}
+
+/// Server rendering: the `<head>` content that the page's components register goes into
+/// the first chunk of the page. The integrations call `inject_meta_context` for every page;
+/// these tests call the step after its `.await`s, which needs no async executor.
+///
+/// The title comes from rendering `<Title>`. Rendering elements to HTML needs
+/// `halyard/ssr`, which this crate's test build does not enable, so the first chunks are
+/// written out, and `<Meta>`, `<Html>` and `<Body>` content is sent to the context as those
+/// components send it.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use halyard::{prelude::*, reactive::owner::Owner};
+
+    /// Renders `<Title text=text/>` with a [`ServerMetaContext`], as the integrations do,
+    /// and returns the context (to register more `<head>` content with) and the output
+    /// that injects it.
+    fn render_title(
+        text: &'static str,
+    ) -> (ServerMetaContext, ServerMetaContextOutput) {
+        let (meta_context, output) = ServerMetaContext::new();
+        let html = Owner::new().with(|| {
+            provide_context(meta_context.clone());
+            provide_meta_context();
+            view! { <Title text=text /> }.to_html()
+        });
+        assert_eq!(html, "", "<Title> renders into the context, not in place");
+        (meta_context, output)
+    }
+
+    fn inject_title(text: &'static str, first_chunk: &str) -> String {
+        render_title(text)
+            .1
+            .inject_into_first_chunk(first_chunk.to_owned())
+    }
+
+    /// A shell without `<head>`, which is valid HTML: `.expect("you are using halyard_meta
+    /// without a </head> tag")` failed the request. The title goes before `<body>`, where
+    /// the browser's parser puts it in the document's head.
+    #[test]
+    fn a_shell_without_head_gets_its_title_before_body() {
+        let page = inject_title(
+            "Reports",
+            "<!DOCTYPE html><html lang=\"en\"><body><main>content</main>\
+             </body></html>",
+        );
+
+        assert_eq!(
+            page,
+            "<!DOCTYPE html><html lang=\"en\"><title>Reports</title><body>\
+             <main>content</main></body></html>"
+        );
+    }
+
+    /// `<Meta>` (like `<Link>`, `<Script>`, `<Style>` and `<Stylesheet>`) goes where the
+    /// title goes, just before it.
+    #[test]
+    fn a_shell_without_head_gets_its_meta_tags_before_body() {
+        let (meta_context, output) = render_title("Reports");
+        _ = meta_context
+            .elements
+            .send("<meta name=\"description\" content=\"FEC\">".to_owned());
+
+        let page = output.inject_into_first_chunk(
+            "<html><body><main>content</main></body></html>".to_owned(),
+        );
+
+        assert_eq!(
+            page,
+            "<html><meta name=\"description\" content=\"FEC\"><title>Reports\
+             </title><body><main>content</main></body></html>"
+        );
+    }
+
+    /// The first chunk ends inside the `<head>` (something async in the head), after the
+    /// `<!--HEAD-->` marker of `<MetaTags/>` but before `</head>`. The marker is where the
+    /// content goes, but a `</head>` was required as well, and failed the request.
+    #[test]
+    fn a_first_chunk_that_ends_inside_the_head_gets_its_title_after_the_marker()
+    {
+        let page = inject_title(
+            "Reports",
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!--HEAD-->\
+             <link rel=\"modulepreload\" href=\"/pkg/app.js\">",
+        );
+
+        assert_eq!(
+            page,
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><!--HEAD-->\
+             <title>Reports</title><link rel=\"modulepreload\" \
+             href=\"/pkg/app.js\">"
+        );
+    }
+
+    /// A page that is not a whole document (no `<head>`, no `<body>`): the title goes at
+    /// the start, after the doctype if there is one (before it, the browser would render
+    /// the page in quirks mode). The parser puts a `<title>` at the start of a document in
+    /// its head.
+    #[test]
+    fn a_page_without_head_or_body_gets_its_title_at_the_start() {
+        assert_eq!(
+            inject_title("Reports", "<!DOCTYPE html><main>content</main>"),
+            "<!DOCTYPE html><title>Reports</title><main>content</main>"
+        );
+        assert_eq!(
+            inject_title("Reports", "<!doctype html>\n<main>content</main>"),
+            "<!doctype html><title>Reports</title>\n<main>content</main>"
+        );
+        assert_eq!(
+            inject_title("Reports", "<main>content</main>"),
+            "<title>Reports</title><main>content</main>"
+        );
+    }
+
+    /// An empty first chunk (the stream ended at once) gets the title and nothing else.
+    #[test]
+    fn an_empty_first_chunk_gets_just_the_title() {
+        assert_eq!(inject_title("Reports", ""), "<title>Reports</title>");
+    }
+
+    /// A title, or a tag, containing non-ASCII text is inserted whole.
+    #[test]
+    fn non_ascii_head_content_is_inserted_whole() {
+        assert_eq!(
+            inject_title("Rapports – été", "<html><body>é</body></html>"),
+            "<html><title>Rapports – été</title><body>é</body></html>"
+        );
+    }
+
+    /// What every page of the application gets: the title after the `<!--HEAD-->` marker,
+    /// and the `<Html>` and `<Body>` attributes on their tags. Pinned exactly.
+    #[test]
+    fn a_shell_with_the_marker_gets_its_title_after_it_and_its_attributes() {
+        let (meta_context, output) = render_title("Reports");
+        _ = meta_context.html.send(" data-theme=\"dark\"".to_owned());
+        _ = meta_context.body.send(" class=\"app\"".to_owned());
+
+        let page = output.inject_into_first_chunk(
+            "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+             <!--HEAD--></head><body><main>content</main></body></html>"
+                .to_owned(),
+        );
+
+        assert_eq!(
+            page,
+            "<!DOCTYPE html><html data-theme=\"dark\" lang=\"en\"><head>\
+             <meta charset=\"utf-8\"><!--HEAD--><title>Reports</title></head>\
+             <body class=\"app\"><main>content</main></body></html>"
+        );
+    }
+
+    /// Without `<MetaTags/>`, the title goes before `</head>`.
+    #[test]
+    fn a_shell_without_the_marker_gets_its_title_before_head_end() {
+        let page = inject_title(
+            "Reports",
+            "<html><head><meta charset=\"utf-8\"></head><body></body></html>",
+        );
+
+        assert_eq!(
+            page,
+            "<html><head><meta charset=\"utf-8\"><title>Reports</title></head>\
+             <body></body></html>"
+        );
+    }
+
+    /// With nothing to inject, the first chunk is passed through unchanged, whatever it is.
+    #[test]
+    fn a_page_without_head_content_is_unchanged() {
+        let (_, output) = ServerMetaContext::new();
+
+        let page =
+            output.inject_into_first_chunk("<main>content</main>".to_owned());
+
+        assert_eq!(page, "<main>content</main>");
+    }
+
+    /// `<Html>` and `<Body>` attributes with no `<html` or `<body` tag in the first chunk
+    /// are left out (and logged); the rest of the page is unchanged.
+    #[test]
+    fn attributes_without_their_tag_are_left_out() {
+        let (meta_context, output) = ServerMetaContext::new();
+        _ = meta_context.html.send(" lang=\"fr\"".to_owned());
+        _ = meta_context.body.send(" class=\"app\"".to_owned());
+
+        let page =
+            output.inject_into_first_chunk("<main>content</main>".to_owned());
+
+        assert_eq!(page, "<main>content</main>");
     }
 }

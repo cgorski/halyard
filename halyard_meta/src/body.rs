@@ -1,4 +1,4 @@
-use crate::ServerMetaContext;
+use crate::{error::MetaError, ServerMetaContext};
 use halyard::{
     attr::{any_attribute::AnyAttribute, NextAttribute},
     component, html,
@@ -57,7 +57,18 @@ struct BodyViewState<At>
 where
     At: Attribute,
 {
-    attributes: At::State,
+    /// `None` if the document has no `<body>` element to set them on.
+    attributes: Option<At::State>,
+}
+
+/// The document's `<body>` element; `None`, logged, if it has none.
+fn body_element() -> Option<web_sys::HtmlElement> {
+    let el = document().body();
+    if el.is_none() {
+        MetaError::NoElement("body")
+            .warn("The attributes of <Body/> are not applied.");
+    }
+    el
 }
 
 impl<At> Render for BodyView<At>
@@ -67,14 +78,15 @@ where
     type State = BodyViewState<At>;
 
     fn build(self) -> Self::State {
-        let el = document().body().expect("there to be a <body> element");
-        let attributes = self.attributes.build(&el);
+        let attributes = body_element().map(|el| self.attributes.build(&el));
 
         BodyViewState { attributes }
     }
 
     fn rebuild(self, state: &mut Self::State) {
-        self.attributes.rebuild(&mut state.attributes);
+        if let Some(attributes) = &mut state.attributes {
+            self.attributes.rebuild(attributes);
+        }
     }
 }
 
@@ -142,8 +154,8 @@ where
         _cursor: &Cursor,
         _position: &PositionState,
     ) -> Self::State {
-        let el = document().body().expect("there to be a <body> element");
-        let attributes = self.attributes.hydrate::<FROM_SERVER>(&el);
+        let attributes = body_element()
+            .map(|el| self.attributes.hydrate::<FROM_SERVER>(&el));
 
         BodyViewState { attributes }
     }
@@ -173,9 +185,6 @@ where
     }
 
     fn elements(&self) -> Vec<halyard::tachys::renderer::types::Element> {
-        vec![document()
-            .body()
-            .expect("there to be a <body> element")
-            .into()]
+        document().body().map(Into::into).into_iter().collect()
     }
 }

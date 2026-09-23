@@ -1,4 +1,4 @@
-use crate::{use_head, MetaContext, ServerMetaContext};
+use crate::{error::MetaError, use_head, MetaContext, ServerMetaContext};
 use halyard::{
     attr::{any_attribute::AnyAttribute, Attribute},
     component,
@@ -21,6 +21,8 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc, Mutex, RwLock,
 };
+use wasm_bindgen::JsValue;
+use web_sys::js_sys::Reflect;
 
 /// Contains the current state of the document's `<title>`.
 #[derive(Clone, Default)]
@@ -60,7 +62,7 @@ impl TitleContext {
                 move |_| {
                     revalidate.track();
                     let text = this.as_string();
-                    document().set_title(text.as_deref().unwrap_or_default());
+                    set_document_title(text.as_deref().unwrap_or_default());
                     text
                 }
             }));
@@ -93,41 +95,10 @@ impl TitleContext {
     ) {
         let mut text_stack = self.text_stack.write().or_poisoned();
         let mut formatter_stack = self.formatter_stack.write().or_poisoned();
-        let text_pos =
-            text_stack.iter().position(|(item_id, _)| *item_id == id);
-        let formatter_pos = formatter_stack
-            .iter()
-            .position(|(item_id, _)| *item_id == id);
-
-        match (text_pos, text) {
-            (None, None) => {}
-            (Some(old), Some(new)) => {
-                text_stack[old].1 = new;
-                self.invalidate();
-            }
-            (Some(old), None) => {
-                text_stack.remove(old);
-                self.invalidate();
-            }
-            (None, Some(new)) => {
-                text_stack.push((id, new));
-                self.invalidate();
-            }
-        }
-        match (formatter_pos, formatter) {
-            (None, None) => {}
-            (Some(old), Some(new)) => {
-                formatter_stack[old].1 = new;
-                self.invalidate();
-            }
-            (Some(old), None) => {
-                formatter_stack.remove(old);
-                self.invalidate();
-            }
-            (None, Some(new)) => {
-                formatter_stack.push((id, new));
-                self.invalidate();
-            }
+        let text_changed = set_entry(&mut text_stack, id, text);
+        let formatter_changed = set_entry(&mut formatter_stack, id, formatter);
+        if text_changed || formatter_changed {
+            self.invalidate();
         }
     }
 
@@ -167,6 +138,42 @@ impl TitleContext {
                 title
             }
         })
+    }
+}
+
+/// Sets, replaces or removes (for `None`) the entry for `id` in a title or formatter stack.
+/// Returns whether the stack changed.
+fn set_entry<T>(
+    stack: &mut Vec<(TitleId, T)>,
+    id: TitleId,
+    value: Option<T>,
+) -> bool {
+    match value {
+        Some(value) => {
+            match stack.iter_mut().find(|(item_id, _)| *item_id == id) {
+                Some(entry) => entry.1 = value,
+                None => stack.push((id, value)),
+            }
+            true
+        }
+        None => {
+            let len = stack.len();
+            stack.retain(|(item_id, _)| *item_id != id);
+            stack.len() != len
+        }
+    }
+}
+
+/// Sets `document.title`. If the browser throws, that is logged and the title is unchanged.
+fn set_document_title(title: &str) {
+    // `Document::set_title` cannot report a throw; `Reflect.set` calls the same setter
+    if let Err(thrown) = Reflect::set(
+        &document(),
+        &JsValue::from_str("title"),
+        &JsValue::from_str(title),
+    ) {
+        MetaError::thrown("setting document.title", &thrown)
+            .warn("The document's title is unchanged.");
     }
 }
 
@@ -403,5 +410,43 @@ impl Mountable for TitleViewState {
 
     fn elements(&self) -> Vec<halyard::tachys::renderer::types::Element> {
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn formatter(suffix: &'static str) -> Option<Formatter> {
+        Some(Formatter::from(move |text: String| {
+            format!("{text}{suffix}")
+        }))
+    }
+
+    /// A rebuilt `<Title>` replaces its text and formatter, removes the ones it no longer
+    /// has, and adds new ones; the title is the top text with the top formatter.
+    #[test]
+    fn a_rebuilt_title_replaces_removes_or_adds_its_entries() {
+        let title = TitleContext::default();
+        let (outer, inner) = (title.next_id(), title.next_id());
+        title.push_text_and_formatter(outer, Some("Outer".into()), None);
+        title.push_text_and_formatter(
+            inner,
+            Some("Inner".into()),
+            formatter("!"),
+        );
+        assert_eq!(title.as_string().as_deref(), Some("Inner!"));
+
+        title.update_text_and_formatter(inner, Some("Changed".into()), None);
+        assert_eq!(title.as_string().as_deref(), Some("Changed"));
+
+        title.update_text_and_formatter(inner, None, formatter("?"));
+        assert_eq!(title.as_string().as_deref(), Some("Outer?"));
+
+        title.update_text_and_formatter(inner, None, None);
+        assert_eq!(title.as_string().as_deref(), Some("Outer"));
+
+        title.update_text_and_formatter(inner, None, None);
+        assert_eq!(title.as_string().as_deref(), Some("Outer"));
     }
 }

@@ -19,6 +19,7 @@ tracing = { optional = true, workspace = true, default-features = true }
 wasm-bindgen = { workspace = true, default-features = true }
 serde_json = { optional = true, workspace = true, default-features = true }
 serde = { optional = true, workspace = true, default-features = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 # Path only, no version: halyard depends on this crate, so it is published

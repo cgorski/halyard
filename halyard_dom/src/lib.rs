@@ -3,6 +3,7 @@
 
 //! DOM helpers for Halyard.
 
+mod helper_error;
 pub mod helpers;
 #[doc(hidden)]
 pub mod macro_helpers;
