@@ -3,7 +3,7 @@
 halyard 0
 halyard_actix 6
 halyard_any_spawner 12
-halyard_axum 13
+halyard_axum 0
 halyard_config 5
 halyard_const_str_slice_concat 31
 halyard_dom 3

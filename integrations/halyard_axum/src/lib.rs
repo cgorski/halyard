@@ -45,8 +45,11 @@ use axum::{
         HeaderMap, Method, Request, Response, StatusCode,
     },
     response::IntoResponse,
-    routing::{delete, get, patch, post, put},
+    routing::{on, MethodFilter, MethodRouter},
 };
+#[cfg(not(feature = "default"))]
+use error::RouteError;
+use error::{error_response, report, request_id, RequestError};
 use futures::{stream::once, Future, Stream, StreamExt};
 use halyard::{
     config::HalyardOptions,
@@ -69,6 +72,7 @@ use halyard_router::{
     RouteListing, SsrMode,
 };
 use halyard_server_fn::{error::ServerFnErrorErr, redirect::REDIRECT_HEADER};
+use route_path::RouteRegistry;
 #[cfg(feature = "default")]
 use std::sync::LazyLock;
 #[cfg(feature = "default")]
@@ -76,6 +80,7 @@ use std::{collections::HashMap, path::Path};
 use std::{
     collections::HashSet,
     fmt::Debug,
+    future::ready,
     io,
     pin::Pin,
     sync::{Arc, RwLock},
@@ -86,10 +91,14 @@ use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
 // use tracing::Instrument; // TODO check tracing span -- was this used in 0.6 for a missing link?
 
+mod error;
+mod route_path;
 #[cfg(feature = "default")]
 mod service;
 #[cfg(feature = "default")]
 pub use service::ErrorHandler;
+#[cfg(test)]
+mod tests;
 
 /// This struct lets you define headers and override the status of the Response from an Element or a Server Function
 /// Typically contained inside of a ResponseOptions. Setting this is useful for cookies and custom responses.
@@ -189,10 +198,17 @@ impl ExtendResponse for AxumResponse {
         if !headers.contains_key(header::CONTENT_TYPE) {
             // Set the Content Type headers on all responses. This makes Firefox show the page source
             // without complaining
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_str(content_type).unwrap(),
-            );
+            match HeaderValue::from_str(content_type) {
+                Ok(value) => {
+                    headers.insert(header::CONTENT_TYPE, value);
+                }
+                Err(_) => report(
+                    &RequestError::InvalidContentType {
+                        content_type: content_type.to_owned(),
+                    },
+                    None,
+                ),
+            }
         }
     }
 }
@@ -224,16 +240,26 @@ impl ExtendResponse for AxumResponse {
 /// without actually setting the status code. This means that the client will not follow the
 /// redirect, and can therefore return the value of the server function and then handle
 /// the redirect with client-side routing.
+///
+/// A `path` that cannot be a header value (it contains a control character such as CR or
+/// LF, which would start another header) is refused: the response gets no `Location` and
+/// the status 500, and the refusal is logged with the request's `x-request-id`.
 pub fn redirect(path: &str) {
     if let (Some(req), Some(res)) =
         (use_context::<Parts>(), use_context::<ResponseOptions>())
     {
+        let Ok(location) = HeaderValue::from_str(path) else {
+            report(
+                &RequestError::InvalidRedirect {
+                    location: path.to_owned(),
+                },
+                request_id(&req.headers),
+            );
+            res.set_status(StatusCode::INTERNAL_SERVER_ERROR);
+            return;
+        };
         // insert the Location header in any case
-        res.insert_header(
-            header::LOCATION,
-            header::HeaderValue::from_str(path)
-                .expect("Failed to create HeaderValue"),
-        );
+        res.insert_header(header::LOCATION, location);
 
         let accepts_html = req
             .headers
@@ -250,8 +276,8 @@ pub fn redirect(path: &str) {
             // to set a real redirect, as this will break the ability to return data
             // instead, set the REDIRECT_HEADER to indicate that the client should redirect
             res.insert_header(
-                HeaderName::from_static(REDIRECT_HEADER),
-                HeaderValue::from_str("").unwrap(),
+                const { HeaderName::from_static(REDIRECT_HEADER) },
+                const { HeaderValue::from_static("") },
             );
         }
     } else {
@@ -378,7 +404,7 @@ pub async fn handle_server_fns_with_context(
 async fn handle_server_fns_inner(
     additional_context: impl Fn() + 'static + Clone + Send,
     req: Request<Body>,
-) -> impl IntoResponse {
+) -> Response<Body> {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let (req, parts) = generate_request_and_parts(req);
@@ -422,15 +448,13 @@ async fn handle_server_fns_inner(
 
                     // apply status code and headers if user changed them
                     res.extend_response(&res_options);
-                    Ok(res.0)
+                    res.0
                 })
             })
             .await
     } else {
-        Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from(format!(
-                "Could not find a server function at the route {path}. \
+        let mut res = Response::new(Body::from(format!(
+            "Could not find a server function at the route {path}. \
                  \n\nIt's likely that either
                          1. The API prefix you specify in the `#[server]` \
                  macro doesn't match the prefix at which your server function \
@@ -438,9 +462,10 @@ async fn handle_server_fns_inner(
                  doesn't support automatic server function registration and \
                  you need to call ServerFn::register_explicit() on the server \
                  function type, somewhere in your `main` function.",
-            )))
+        )));
+        *res.status_mut() = StatusCode::BAD_REQUEST;
+        res
     }
-    .expect("could not build Response")
 }
 
 /// A stream of bytes of HTML.
@@ -699,23 +724,16 @@ where
     );
 
     move |state, req| {
-        // 1. Process route to match the values in routeListing
-        let path = req
-            .extensions()
-            .get::<MatchedPath>()
-            .expect("Failed to get Axum router rule")
-            .as_str();
-        // 2. Find RouteListing in paths. This should probably be optimized, we probably don't want to
-        // search for this every time
-        let listing: &AxumRouteListing =
-            paths.iter().find(|r| r.path() == path).unwrap_or_else(|| {
-                panic!(
-                    "Failed to find the route {path} requested by the user. \
-                     This suggests that the routing rules in the Router that \
-                     call this handler needs to be edited!"
-                )
-            });
-        // 3. Match listing mode against known, and choose function
+        // 1. Find the RouteListing of the route axum matched
+        let listing = match matched_listing(&paths, &req) {
+            Ok(listing) => listing,
+            Err(error) => {
+                let response: PinnedFuture<Response<Body>> =
+                    Box::pin(ready(error_response(&error, req.headers())));
+                return response;
+            }
+        };
+        // 2. Match listing mode against known, and choose function
         match listing.mode() {
             SsrMode::OutOfOrder => ooo(req),
             SsrMode::PartiallyBlocked => pb(req),
@@ -734,14 +752,32 @@ where
                 #[cfg(not(feature = "default"))]
                 {
                     _ = state;
-                    panic!(
-                        "Static routes are not currently supported on WASM32 \
-                         server targets."
-                    );
+                    Box::pin(ready(error_response(
+                        &RequestError::StaticRoutesUnsupported,
+                        req.headers(),
+                    )))
                 }
             }
         }
     }
+}
+
+/// The listing of the route that axum matched for `req`. This should probably be optimized,
+/// we probably don't want to search for this every time.
+fn matched_listing<'a>(
+    paths: &'a [AxumRouteListing],
+    req: &Request<Body>,
+) -> Result<&'a AxumRouteListing, RequestError> {
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .ok_or(RequestError::NoMatchedPath)?
+        .as_str();
+    paths.iter().find(|r| r.path() == path).ok_or_else(|| {
+        RequestError::UnknownRoute {
+            path: path.to_owned(),
+        }
+    })
 }
 
 /// Returns an Axum [Handler](axum::handler::Handler) that listens for a `GET` request and tries
@@ -889,6 +925,9 @@ where
 }
 
 /// Can be used in conjunction with a custom [file_and_error_handler_with_context] to process an Axum [Request](axum::extract::Request) into an Axum [Response](axum::response::Response)
+///
+/// A request whose target has no path (the authority form of `CONNECT host:port`) is
+/// answered with 400 Bad Request, as there is no page to render.
 pub fn handle_response_inner<IV>(
     additional_context: impl Fn() + 'static + Clone + Send,
     app_fn: impl FnOnce() -> IV + Send + 'static,
@@ -903,6 +942,15 @@ where
     IV: IntoView + 'static,
 {
     Box::pin(async move {
+        // Need to get the path and query string of the Request
+        // For reasons that escape me, if the incoming URI protocol is https, it provides the absolute URI
+        let Some(path) = req.uri().path_and_query().cloned() else {
+            let error = RequestError::NoPath {
+                target: req.uri().to_string(),
+            };
+            return error_response(&error, req.headers());
+        };
+
         let is_island_router_navigation = cfg!(feature = "islands-router")
             && req.headers().get("Islands-Router").is_some();
 
@@ -914,10 +962,6 @@ where
             let meta_context = meta_context.clone();
             let res_options = res_options.clone();
             move || {
-                // Need to get the path and query string of the Request
-                // For reasons that escape me, if the incoming URI protocol is https, it provides the absolute URI
-                let path = req.uri().path_and_query().unwrap().as_str();
-
                 let full_path = format!("https://leptos.dev{path}");
                 let (_, req_parts) = generate_request_and_parts(req);
                 provide_contexts(
@@ -1415,11 +1459,12 @@ impl StaticRouteGenerator {
             let add_context = additional_context.clone();
             move || {
                 let full_path = format!("https://leptos.dev{path}");
-                let mock_req = Request::builder()
-                    .method(Method::GET)
-                    .header("Accept", "text/html")
-                    .body(Body::empty())
-                    .unwrap();
+                let mut mock_req = Request::new(Body::empty());
+                *mock_req.method_mut() = Method::GET;
+                mock_req.headers_mut().insert(
+                    ACCEPT,
+                    const { HeaderValue::from_static("text/html") },
+                );
                 let (mock_parts, _) = mock_req.into_parts();
                 let res_options = ResponseOptions::default();
                 provide_contexts(
@@ -1439,13 +1484,9 @@ impl StaticRouteGenerator {
             false,
         );
 
-        let sc = owner.shared_context().unwrap();
-
         async move {
             let stream = stream.await;
-            while let Some(pending) = sc.await_deferred() {
-                pending.await;
-            }
+            await_deferred(&owner).await;
 
             let html = meta_output
                 .inject_meta_context(stream)
@@ -1515,10 +1556,8 @@ impl StaticRouteGenerator {
             Self(
                 Owner::new(),
                 Box::new(|_| {
-                    panic!(
-                        "Static routes are not currently supported on WASM32 \
-                         server targets."
-                    );
+                    report(&RouteError::StaticGenerationUnsupported, None);
+                    Box::pin(ready(())) as PinnedFuture<()>
                 }),
             )
         }
@@ -1535,16 +1574,26 @@ static STATIC_HEADERS: LazyLock<
     std::sync::RwLock<HashMap<String, ResponseOptions>>,
 > = LazyLock::new(Default::default);
 
+/// Waits for the data that the render under `owner` deferred. Without a shared context
+/// nothing can have been deferred.
+#[cfg(feature = "default")]
+async fn await_deferred(owner: &Owner) {
+    if let Some(sc) = owner.shared_context() {
+        while let Some(pending) = sc.await_deferred() {
+            pending.await;
+        }
+    }
+}
+
 #[cfg(feature = "default")]
 fn was_404(owner: &Owner) -> bool {
-    let resp = owner.with(|| expect_context::<ResponseOptions>());
+    // without `ResponseOptions`, nothing can have set the status
+    let Some(resp) = owner.with(use_context::<ResponseOptions>) else {
+        return false;
+    };
     let status = resp.0.read().or_poisoned().status;
 
-    if let Some(status) = status {
-        return status == StatusCode::NOT_FOUND;
-    }
-
-    false
+    status == Some(StatusCode::NOT_FOUND)
 }
 
 #[cfg(feature = "default")]
@@ -1681,6 +1730,12 @@ where
 
 /// This trait allows one to pass a list of routes and a render function to Axum's router, letting us avoid
 /// having to use wildcards or manually define all routes in multiple places.
+///
+/// A route that axum cannot route is logged and left out, where `axum::Router::route` would
+/// panic: a path that is not valid axum syntax, a method that axum cannot filter, a second
+/// handler for the same path and method (the first is kept), or a path that axum cannot tell
+/// apart from one added before it (`/users/{id}` and `/users/{name}`). Only the routes these
+/// methods add are checked; a route already on the router can still conflict.
 pub trait HalyardRoutes<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -1740,7 +1795,11 @@ impl AxumPath for Vec<PathSegment> {
                 path.push('/');
             }
             match segment {
-                PathSegment::Static(s) => path.push_str(s),
+                // A static segment is literal. axum reads `{` and `}` as the braces of a
+                // parameter (and panics on a lone one), and a doubled brace as a literal one.
+                PathSegment::Static(s) => {
+                    path.push_str(&s.replace('{', "{{").replace('}', "}}"))
+                }
                 PathSegment::Param(s) => {
                     path.push('{');
                     path.push_str(s);
@@ -1815,6 +1874,7 @@ where
         };
 
         let mut router = self;
+        let mut routes = RouteRegistry::default();
 
         let excluded = paths
             .iter()
@@ -1830,22 +1890,10 @@ where
             };
 
             if !excluded.contains(path) {
-                router = router.route(
-                    path,
-                    match method {
-                        Method::GET => get(handler),
-                        Method::POST => post(handler),
-                        Method::PUT => put(handler),
-                        Method::DELETE => delete(handler),
-                        Method::PATCH => patch(handler),
-                        _ => {
-                            panic!(
-                                "Unsupported server function HTTP method: \
-                                 {method:?}"
-                            );
-                        }
-                    },
-                );
+                router =
+                    add_route(router, &mut routes, path, &method, |filter| {
+                        on(filter, handler)
+                    });
             }
         }
 
@@ -1855,89 +1903,89 @@ where
 
             for method in listing.methods() {
                 let cx_with_state = cx_with_state.clone();
-                let cx_with_state_and_method = move || {
+                let cx = move || {
                     provide_context(method);
                     cx_with_state();
                 };
-                router = if matches!(listing.mode(), SsrMode::Static(_)) {
-                    #[cfg(feature = "default")]
-                    {
-                        router.route(
-                            path,
-                            get(handle_static_route(
-                                cx_with_state_and_method.clone(),
-                                app_fn.clone(),
-                                listing.regenerate.clone(),
-                            )),
-                        )
-                    }
-                    #[cfg(not(feature = "default"))]
-                    {
-                        panic!(
-                            "Static routes are not currently supported on \
-                             WASM32 server targets."
-                        );
-                    }
-                } else {
-                    router.route(
+                let app_fn = app_fn.clone();
+                let http_method = http_method(method);
+                router = match listing.mode() {
+                    SsrMode::OutOfOrder => add_route(
+                        router,
+                        &mut routes,
                         path,
-                        match listing.mode() {
-                            SsrMode::OutOfOrder => {
-                                let s = render_app_to_stream_with_context(
-                                    cx_with_state_and_method.clone(),
-                                    app_fn.clone(),
-                                );
-                                match method {
-                                    halyard_router::Method::Get => get(s),
-                                    halyard_router::Method::Post => post(s),
-                                    halyard_router::Method::Put => put(s),
-                                    halyard_router::Method::Delete => delete(s),
-                                    halyard_router::Method::Patch => patch(s),
-                                }
-                            }
-                            SsrMode::PartiallyBlocked => {
-                                let s = render_app_to_stream_with_context_and_replace_blocks(
-                                    cx_with_state_and_method.clone(),
-                                    app_fn.clone(),
-                                    true
-                                );
-                                match method {
-                                    halyard_router::Method::Get => get(s),
-                                    halyard_router::Method::Post => post(s),
-                                    halyard_router::Method::Put => put(s),
-                                    halyard_router::Method::Delete => delete(s),
-                                    halyard_router::Method::Patch => patch(s),
-                                }
-                            }
-                            SsrMode::InOrder => {
-                                let s = render_app_to_stream_in_order_with_context(
-                                    cx_with_state_and_method.clone(),
-                                    app_fn.clone(),
-                                );
-                                match method {
-                                    halyard_router::Method::Get => get(s),
-                                    halyard_router::Method::Post => post(s),
-                                    halyard_router::Method::Put => put(s),
-                                    halyard_router::Method::Delete => delete(s),
-                                    halyard_router::Method::Patch => patch(s),
-                                }
-                            }
-                            SsrMode::Async => {
-                                let s = render_app_async_with_context(
-                                    cx_with_state_and_method.clone(),
-                                    app_fn.clone(),
-                                );
-                                match method {
-                                    halyard_router::Method::Get => get(s),
-                                    halyard_router::Method::Post => post(s),
-                                    halyard_router::Method::Put => put(s),
-                                    halyard_router::Method::Delete => delete(s),
-                                    halyard_router::Method::Patch => patch(s),
-                                }
-                            }
-                            _ => unreachable!()
+                        &http_method,
+                        |f| {
+                            on(f, render_app_to_stream_with_context(cx, app_fn))
                         },
-                    )
+                    ),
+                    SsrMode::PartiallyBlocked => add_route(
+                        router,
+                        &mut routes,
+                        path,
+                        &http_method,
+                        |f| {
+                            on(
+                                f,
+                                render_app_to_stream_with_context_and_replace_blocks(
+                                    cx, app_fn, true,
+                                ),
+                            )
+                        },
+                    ),
+                    SsrMode::InOrder => add_route(
+                        router,
+                        &mut routes,
+                        path,
+                        &http_method,
+                        |f| {
+                            on(
+                                f,
+                                render_app_to_stream_in_order_with_context(
+                                    cx, app_fn,
+                                ),
+                            )
+                        },
+                    ),
+                    SsrMode::Async => add_route(
+                        router,
+                        &mut routes,
+                        path,
+                        &http_method,
+                        |f| on(f, render_app_async_with_context(cx, app_fn)),
+                    ),
+                    // a static page is always served for GET
+                    SsrMode::Static(_) => {
+                        #[cfg(feature = "default")]
+                        {
+                            let regenerate = listing.regenerate.clone();
+                            add_route(
+                                router,
+                                &mut routes,
+                                path,
+                                &Method::GET,
+                                |f| {
+                                    on(
+                                        f,
+                                        handle_static_route(
+                                            cx, app_fn, regenerate,
+                                        ),
+                                    )
+                                },
+                            )
+                        }
+                        #[cfg(not(feature = "default"))]
+                        {
+                            _ = (cx, app_fn);
+                            report(
+                                &RouteError::StaticRoutesUnsupported {
+                                    path: path.to_owned(),
+                                },
+                                None,
+                            );
+                            router
+                        }
+                    }
                 };
             }
         }
@@ -1959,23 +2007,51 @@ where
         T: 'static,
     {
         let mut router = self;
+        let mut routes = RouteRegistry::default();
         for listing in paths.iter().filter(|p| !p.exclude) {
             for method in listing.methods() {
-                router = router.route(
+                router = add_route(
+                    router,
+                    &mut routes,
                     listing.path(),
-                    match method {
-                        halyard_router::Method::Get => get(handler.clone()),
-                        halyard_router::Method::Post => post(handler.clone()),
-                        halyard_router::Method::Put => put(handler.clone()),
-                        halyard_router::Method::Delete => {
-                            delete(handler.clone())
-                        }
-                        halyard_router::Method::Patch => patch(handler.clone()),
-                    },
+                    &http_method(method),
+                    |filter| on(filter, handler.clone()),
                 );
             }
         }
         router
+    }
+}
+
+/// Routes `method` at `path` with the method router that `method_router` builds, unless
+/// axum would panic on it (see [`RouteRegistry::admit`]): then logs why and leaves the
+/// router as it is.
+fn add_route<S>(
+    router: axum::Router<S>,
+    routes: &mut RouteRegistry,
+    path: &str,
+    method: &Method,
+    method_router: impl FnOnce(MethodFilter) -> MethodRouter<S>,
+) -> axum::Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    match routes.admit(path, method) {
+        Ok(filter) => router.route(path, method_router(filter)),
+        Err(error) => {
+            report(&error, None);
+            router
+        }
+    }
+}
+
+fn http_method(method: halyard_router::Method) -> Method {
+    match method {
+        halyard_router::Method::Get => Method::GET,
+        halyard_router::Method::Post => Method::POST,
+        halyard_router::Method::Put => Method::PUT,
+        halyard_router::Method::Delete => Method::DELETE,
+        halyard_router::Method::Patch => Method::PATCH,
     }
 }
 
@@ -2064,8 +2140,8 @@ where
             async move {
                 let options = HalyardOptions::from_ref(&state);
                 let res =
-                    get_static_file(uri, &options.site_root, req.headers());
-                let res = res.await.unwrap();
+                    get_static_file(uri, &options.site_root, req.headers())
+                        .await;
 
                 if res.status() == StatusCode::OK {
                     let owner = Owner::new();
@@ -2153,17 +2229,15 @@ async fn get_static_file(
     uri: Uri,
     root: &str,
     headers: &HeaderMap<HeaderValue>,
-) -> Result<Response<Body>, (StatusCode, String)> {
+) -> Response<Body> {
     use axum::http::header::ACCEPT_ENCODING;
 
-    let req = Request::builder().uri(uri);
+    let mut req = Request::new(Body::empty());
+    *req.uri_mut() = uri;
+    if let Some(value) = headers.get(ACCEPT_ENCODING) {
+        req.headers_mut().insert(ACCEPT_ENCODING, value.clone());
+    }
 
-    let req = match headers.get(ACCEPT_ENCODING) {
-        Some(value) => req.header(ACCEPT_ENCODING, value),
-        None => req,
-    };
-
-    let req = req.body(Body::empty()).unwrap();
     // `ServeDir` implements `tower::Service` so we can call it with `tower::ServiceExt::oneshot`
     // This path is relative to the cargo root
     match ServeDir::new(root)
@@ -2172,11 +2246,9 @@ async fn get_static_file(
         .oneshot(req)
         .await
     {
-        Ok(res) => Ok(res.into_response()),
-        Err(err) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Something went wrong: {err}"),
-        )),
+        Ok(res) => res.into_response(),
+        // `ServeDir` answers every request, with an error status if need be
+        Err(never) => match never {},
     }
 }
 
