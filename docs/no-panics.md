@@ -79,8 +79,9 @@ ratchet.
    `task::spawn_local` becomes owner-scoped and cancelled on the owner's cleanup;
    `spawn_local_detached` is the explicit opt-out. Timers, intervals, animation frames
    and window listeners in `halyard_dom` register their cancellation with the current
-   owner too (`debounce` already does). Until this is released, the FECfile+ app uses
-   `spawn_local_scoped_with_cancellation` and forbids the unscoped spawns by lint.
+   owner too (`debounce` already does). Until this is released, applications should use
+   `spawn_local_scoped_with_cancellation` and can forbid the unscoped spawns with
+   clippy's `disallowed-methods`.
 2. **No user code under a guard.** `Callback`, `StoredValue::with_value`, `debounce`,
    memo and effect runners: take what is needed out of the lock, release it, then call.
 3. **The DOM layer returns typed errors.** `Renderer`/`Mountable` operations return
@@ -148,7 +149,8 @@ they can be swapped later.
 
 - [x] Ratchet in CI (`scripts/panic-ratchet.sh`, `panic-baseline.txt`)
 - [x] `or_poisoned` recovers instead of panicking (removes the panic at 228 call sites)
-- [x] FECfile+ app: every spawned task is owner-scoped (lint enforced); a disposed read
-      after an `await` in the contact dialog uses `try_with_value`
+- [x] Interim guidance for applications: owner-scoped spawns
+      (`spawn_local_scoped_with_cancellation`, the unscoped ones forbidden by lint), and
+      `try_with_value` for a read after an `await`
 - [x] Decision: A then B (all-Rust, hardened)
 - [ ] Changes 1 to 7 above, and B
