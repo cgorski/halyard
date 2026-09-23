@@ -5,6 +5,7 @@ use crate::{
     },
     renderer::{CastFrom, RemoveEventHandler, Rndr},
     view::{Position, ToTemplate},
+    view_error::{report_once, ViewError},
 };
 use send_wrapper::SendWrapper;
 use std::{
@@ -14,6 +15,7 @@ use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
     rc::Rc,
+    sync::atomic::AtomicBool,
 };
 use wasm_bindgen::convert::FromWasmAbi;
 
@@ -188,7 +190,10 @@ where
             }
         }
 
-        let mut cb = self.cb.expect(super::FEATURE_CONFLICT_DIAGNOSTIC).take();
+        let Some(cb) = self.cb else {
+            return missing_handler();
+        };
+        let mut cb = cb.take();
 
         #[cfg(feature = "tracing")]
         let span = tracing::Span::current();
@@ -231,7 +236,10 @@ where
             Rndr::add_event_listener_use_capture(el, &name, cb)
         }
 
-        let mut cb = self.cb.expect(super::FEATURE_CONFLICT_DIAGNOSTIC).take();
+        let Some(cb) = self.cb else {
+            return missing_handler();
+        };
+        let mut cb = cb.take();
 
         #[cfg(feature = "tracing")]
         let span = tracing::Span::current();
@@ -253,6 +261,21 @@ where
 
         attach_inner(el, cb, self.event.name())
     }
+}
+
+/// An event handler is not created when `ssr` is active (see
+/// [`FEATURE_CONFLICT_DIAGNOSTIC`](super::FEATURE_CONFLICT_DIAGNOSTIC)). Without one, no
+/// listener is attached (logged once), and removing it does nothing.
+fn missing_handler() -> RemoveEventHandler<crate::renderer::types::Element> {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    report_once(
+        &REPORTED,
+        &ViewError::ClientValueMissing {
+            what: "an event handler",
+            instead: "is not attached",
+        },
+    );
+    RemoveEventHandler::new(|| {})
 }
 
 impl<E, F> Debug for On<E, F>

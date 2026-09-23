@@ -1,4 +1,7 @@
-use super::{ReactiveFunction, SharedReactiveFunction};
+use super::{
+    detached_element, take_effect_value, ReactiveFunction,
+    SharedReactiveFunction,
+};
 use crate::{html::property::IntoProperty, renderer::Rndr};
 use halyard_reactive_graph::effect::RenderEffect;
 
@@ -54,7 +57,10 @@ where
     }
 
     fn rebuild(mut self, state: &mut Self::State, key: &str) {
-        let prev_value = state.take_value();
+        const WHAT: &str = "a reactive property";
+        let Some(prev_value) = take_effect_value(state, WHAT) else {
+            return;
+        };
         let key = key.to_owned();
         *state = RenderEffect::new_with_value(
             move |prev| {
@@ -63,10 +69,10 @@ where
                     value.rebuild(&mut state, &key);
                     state
                 } else {
-                    unreachable!()
+                    value.build(&detached_element(WHAT), &key)
                 }
             },
-            prev_value,
+            Some(prev_value),
         );
     }
 

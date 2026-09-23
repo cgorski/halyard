@@ -1,4 +1,7 @@
-use super::{ReactiveFunction, SharedReactiveFunction};
+use super::{
+    detached_element, take_effect_value, update_effect_value, ReactiveFunction,
+    SharedReactiveFunction,
+};
 use crate::{
     html::style::{IntoStyle, IntoStyleValue},
     renderer::Rndr,
@@ -160,7 +163,10 @@ where
     }
 
     fn rebuild(mut self, state: &mut Self::State) {
-        let prev_value = state.take_value();
+        const WHAT: &str = "a reactive style";
+        let Some(prev_value) = take_effect_value(state, WHAT) else {
+            return;
+        };
         *state = RenderEffect::new_with_value(
             move |prev| {
                 let value = self.invoke();
@@ -168,10 +174,10 @@ where
                     value.rebuild(&mut state);
                     state
                 } else {
-                    unreachable!()
+                    value.build(&detached_element(WHAT))
                 }
             },
-            prev_value,
+            Some(prev_value),
         );
     }
 
@@ -191,18 +197,10 @@ where
         self.invoke().resolve().await
     }
 
+    // in place: a reset state is dropped right after (`Option::rebuild` to `None`), so its
+    // function does not run again
     fn reset(state: &mut Self::State) {
-        *state = RenderEffect::new_with_value(
-            move |prev| {
-                if let Some(mut state) = prev {
-                    C::reset(&mut state);
-                    state
-                } else {
-                    unreachable!()
-                }
-            },
-            state.take_value(),
-        );
+        update_effect_value(state, "a reactive style", C::reset);
     }
 }
 

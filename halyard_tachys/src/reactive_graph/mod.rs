@@ -7,12 +7,14 @@ use crate::{
         add_attr::AddAnyAttr, Mountable, Position, PositionState, Render,
         RenderHtml, ToTemplate,
     },
+    view_error::{report_once, ViewError},
 };
+use halyard_or_poisoned::OrPoisoned;
 use halyard_reactive_graph::effect::RenderEffect;
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 /// Types for two way data binding.
@@ -28,6 +30,69 @@ mod suspense;
 
 pub use owned::*;
 pub use suspense::*;
+
+// A render effect holds its value between runs, and calls its function with `None` only on
+// its first run. A reactive attribute or view that is rebuilt replaces its effect with one
+// for the new function, seeded with the old effect's value, so that function never sees
+// `None`. The helpers below cover an effect that holds no value all the same (a re-entrant
+// update while it runs): logged once, and the page keeps working.
+
+/// Takes the value of the effect behind `what`, which is about to be replaced by an effect
+/// for a new function. `None` (logged once) if it holds none: the caller keeps the effect it
+/// has, which puts its value back when its run ends.
+pub(crate) fn take_effect_value<T>(
+    effect: &RenderEffect<T>,
+    what: &'static str,
+) -> Option<T> {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    let value = effect.take_value();
+    if value.is_none() {
+        report_once(
+            &REPORTED,
+            &ViewError::EffectWithoutValue {
+                what,
+                instead: "it keeps its previous effect",
+            },
+        );
+    }
+    value
+}
+
+/// Updates the value of the effect behind `what` in place (a reset). Does nothing (logged
+/// once) if it holds none.
+pub(crate) fn update_effect_value<T>(
+    effect: &RenderEffect<T>,
+    what: &'static str,
+    update: impl FnOnce(&mut T),
+) {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    if effect.with_value_mut(update).is_none() {
+        report_once(
+            &REPORTED,
+            &ViewError::EffectWithoutValue {
+                what,
+                instead: "it is not reset",
+            },
+        );
+    }
+}
+
+/// An element, not in the page, for the effect behind `what` to create its value on when its
+/// function is called without one (logged once): the effect keeps a consistent state, and
+/// its updates no longer reach the page.
+pub(crate) fn detached_element(
+    what: &'static str,
+) -> crate::renderer::types::Element {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    report_once(
+        &REPORTED,
+        &ViewError::EffectWithoutValue {
+            what,
+            instead: "it is created again outside the page",
+        },
+    );
+    Rndr::create_element("div", None)
+}
 
 impl<F, V> ToTemplate for F
 where
@@ -274,7 +339,18 @@ where
                         value.rebuild(&mut state);
                         state
                     } else {
-                        unreachable!()
+                        // seeded by the hydrated value, so never without one; if it is,
+                        // the view is created again, outside the page
+                        static REPORTED: AtomicBool = AtomicBool::new(false);
+                        report_once(
+                            &REPORTED,
+                            &ViewError::EffectWithoutValue {
+                                what: "a reactive view",
+                                instead:
+                                    "it is created again, outside the page",
+                            },
+                        );
+                        value.build()
                     }
                 }
             },
@@ -446,9 +522,12 @@ where
     }
 
     fn rebuild(mut self, key: &str, state: &mut Self::State) {
+        const WHAT: &str = "a reactive attribute";
         let key = Rndr::intern(key);
         let key = key.to_owned();
-        let prev_value = state.take_value();
+        let Some(prev_value) = take_effect_value(state, WHAT) else {
+            return;
+        };
 
         *state = RenderEffect::new_with_value(
             move |prev| {
@@ -457,10 +536,10 @@ where
                     value.rebuild(&key, &mut state);
                     state
                 } else {
-                    unreachable!()
+                    value.build(&detached_element(WHAT), &key)
                 }
             },
-            prev_value,
+            Some(prev_value),
         );
     }
 
@@ -592,7 +671,8 @@ impl<T: 'static> ReactiveFunction for Arc<Mutex<dyn FnMut() -> T + Send>> {
     type Output = T;
 
     fn invoke(&mut self) -> Self::Output {
-        let mut fun = self.lock().expect("lock poisoned");
+        // a panic in an earlier call poisons the lock; the function is still callable
+        let mut fun = self.lock().or_poisoned();
         fun()
     }
 
@@ -992,6 +1072,34 @@ mod reactive_stores {
     );
     reactive_impl!(ArcStore, <V>, V, false, ArcStore<V>: Get<Value = V>);
     reactive_impl!(ArcField, <V>, V, false, ArcField<V>: Get<Value = V>);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReactiveFunction, SharedReactiveFunction};
+    use std::{
+        panic,
+        sync::{Arc, Mutex},
+        thread,
+    };
+
+    /// A shared reactive function whose lock was poisoned (a panic while it ran, on another
+    /// thread of the server) panicked on every later call ("lock poisoned"). It runs.
+    #[test]
+    fn shared_reactive_function_runs_after_its_lock_was_poisoned() {
+        let shared: SharedReactiveFunction<i32> = Arc::new(Mutex::new(|| 42));
+        let poisoner = Arc::clone(&shared);
+        let poisoned = thread::spawn(move || {
+            let _guard = poisoner.lock();
+            panic::panic_any("poisoning the lock");
+        })
+        .join();
+        assert!(poisoned.is_err());
+        assert!(shared.is_poisoned());
+
+        let mut fun = shared;
+        assert_eq!(fun.invoke(), 42);
+    }
 }
 
 /*

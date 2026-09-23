@@ -8,9 +8,13 @@ use crate::{
     },
     renderer::Rndr,
     view::{Position, ToTemplate},
+    view_error::{report_once, ViewError},
 };
 use send_wrapper::SendWrapper;
-use std::{borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    sync::{atomic::AtomicBool, Arc},
+};
 use wasm_bindgen::JsValue;
 
 /// Creates an [`Attribute`] that will set a DOM property on an element.
@@ -91,10 +95,18 @@ where
     }
 
     fn rebuild(self, state: &mut Self::State) {
-        self.value
-            .expect(super::FEATURE_CONFLICT_DIAGNOSTIC)
-            .take()
-            .rebuild(state, self.key.as_ref())
+        // the value is not created when `ssr` is active; the property keeps its value
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        match self.value {
+            Some(value) => value.take().rebuild(state, self.key.as_ref()),
+            None => report_once(
+                &REPORTED,
+                &ViewError::ClientValueMissing {
+                    what: "a property's value",
+                    instead: "is not updated",
+                },
+            ),
+        }
     }
 
     fn into_cloneable(self) -> Self::Cloneable {

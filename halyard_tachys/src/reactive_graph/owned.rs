@@ -4,9 +4,10 @@ use crate::{
     prelude::Mountable,
     ssr::StreamBuilder,
     view::{add_attr::AddAnyAttr, Position, PositionState, Render, RenderHtml},
+    view_error::{report_once, ViewError},
 };
 use halyard_reactive_graph::{computed::ScopedFuture, owner::Owner};
-use std::mem;
+use std::{mem, sync::atomic::AtomicBool};
 
 /// A view wrapper that sets the reactive [`Owner`] to a particular owner whenever it is rendered.
 #[derive(Debug, Clone)]
@@ -17,8 +18,14 @@ pub struct OwnedView<T> {
 
 impl<T> OwnedView<T> {
     /// Wraps a view with the current owner.
+    ///
+    /// Outside any owner the view gets a new root owner (logged once).
     pub fn new(view: T) -> Self {
-        let owner = Owner::current().expect("no reactive owner");
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        let owner = Owner::current().unwrap_or_else(|| {
+            report_once(&REPORTED, &ViewError::NoOwner);
+            Owner::new()
+        });
         Self { owner, view }
     }
 
@@ -228,5 +235,28 @@ where
 
     fn elements(&self) -> Vec<crate::renderer::types::Element> {
         self.state.elements()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OwnedView;
+    use crate::view::RenderHtml;
+    use halyard_reactive_graph::owner::Owner;
+
+    /// `OwnedView::new` outside any reactive owner (a view built in a plain function, a
+    /// test, a spawned task) panicked, on the server too. The view gets a new owner.
+    #[test]
+    fn owned_view_outside_an_owner_gets_a_new_owner() {
+        assert!(Owner::current().is_none());
+        assert_eq!(OwnedView::new("owned").to_html(), "owned");
+    }
+
+    #[test]
+    fn owned_view_takes_the_current_owner() {
+        let owner = Owner::new();
+        let view = owner.with(|| OwnedView::new("owned"));
+        assert_eq!(view.owner, owner);
+        assert_eq!(view.to_html(), "owned");
     }
 }

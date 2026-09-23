@@ -11,12 +11,13 @@ use crate::{
         add_attr::AddAnyAttr, IntoRender, Mountable, Position, PositionState,
         Render, RenderHtml, ToTemplate,
     },
+    view_error::{report_once, ViewError},
 };
 use futures::future::join;
 use halyard_const_str_slice_concat::{
     const_concat, const_concat_with_prefix, str_from_buffer,
 };
-use std::ops::Deref;
+use std::{ops::Deref, sync::atomic::AtomicBool};
 
 mod custom;
 mod element_ext;
@@ -407,17 +408,17 @@ where
     }
 
     fn html_len(&self) -> usize {
+        let tag_and_attributes =
+            E::TAG.len().saturating_add(self.attributes.html_len());
         if E::SELF_CLOSING {
-            3 // < ... />
-        + E::TAG.len()
-        + self.attributes.html_len()
+            // < ... />
+            tag_and_attributes.saturating_add(3)
         } else {
-            2 // < ... >
-        + E::TAG.len()
-        + self.attributes.html_len()
-        + self.children.html_len()
-        + 3 // </ ... >
-        + E::TAG.len()
+            // < ... > and </ ... >
+            tag_and_attributes
+                .saturating_add(self.children.html_len())
+                .saturating_add(E::TAG.len())
+                .saturating_add(5)
         }
     }
 
@@ -498,7 +499,7 @@ where
             }
 
             // closing tag
-            let mut buf = String::with_capacity(3 + E::TAG.len());
+            let mut buf = String::with_capacity(E::TAG.len().saturating_add(3));
             buf.push_str("</");
             buf.push_str(self.tag.tag());
             buf.push('>');
@@ -513,9 +514,18 @@ where
         position: &PositionState,
     ) -> Self::State {
         // non-Static custom elements need special support in templates
-        // because they haven't been inserted type-wise
+        // because they haven't been inserted type-wise: the template has no markup for
+        // one, so it is created on the client (in the template's place, if it is the
+        // template's root)
         if E::TAG.is_empty() && !FROM_SERVER {
-            panic!("Custom elements are not supported in ViewTemplate.");
+            static REPORTED: AtomicBool = AtomicBool::new(false);
+            report_once(
+                &REPORTED,
+                &ViewError::NotInTemplate {
+                    what: "a custom element",
+                },
+            );
+            return Render::build(self);
         }
 
         // codegen optimisation:
@@ -915,3 +925,36 @@ mod tests {
     }
 }
  */
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        html::{
+            attribute::{custom::custom_attribute, id},
+            element::{br, p, ElementChild},
+        },
+        view::{add_attr::AddAnyAttr, RenderHtml},
+        view_error::test_support::{HugeValue, HugeView},
+    };
+    use futures::{executor::block_on, StreamExt};
+
+    /// The length estimate added the markup around the children's and the attributes'
+    /// estimates, and overflowed for a child or an attribute that estimates `usize::MAX`.
+    #[test]
+    fn element_length_estimate_saturates() {
+        assert_eq!(p().child(HugeView).html_len(), usize::MAX);
+        assert_eq!(p().add_any_attr(id(HugeValue)).html_len(), usize::MAX);
+        assert_eq!(br().add_any_attr(id(HugeValue)).html_len(), usize::MAX);
+        assert_eq!(p().child("hi").to_html(), "<p>hi</p>");
+    }
+
+    #[test]
+    fn element_streams_its_closing_tag() {
+        let el = p()
+            .add_any_attr(custom_attribute("data-x", "1"))
+            .child("hi");
+        let html =
+            block_on(el.to_html_stream_in_order().collect::<Vec<_>>()).concat();
+        assert_eq!(html, "<p data-x=\"1\">hi</p>");
+    }
+}

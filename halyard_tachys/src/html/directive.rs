@@ -8,9 +8,13 @@ use crate::{
     },
     prelude::AddAnyAttr,
     view::{Position, ToTemplate},
+    view_error::{report_once, ViewError},
 };
 use send_wrapper::SendWrapper;
-use std::{marker::PhantomData, sync::Arc};
+use std::{
+    marker::PhantomData,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 /// Adds a directive to the element, which runs some custom logic in the browser when the element
 /// is created or hydrated.
@@ -70,6 +74,31 @@ where
     }
 }
 
+impl<T, D, P> Directive<T, D, P>
+where
+    D: IntoDirective<T, P>,
+{
+    /// Runs the directive on `el`. Its handler is not created when `ssr` is active (see
+    /// [`FEATURE_CONFLICT_DIAGNOSTIC`](super::FEATURE_CONFLICT_DIAGNOSTIC)); without it,
+    /// nothing runs (logged once).
+    fn run(self, el: &crate::renderer::types::Element) {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        match self.0 {
+            Some(inner) => {
+                let inner = inner.take();
+                inner.handler.run(el.clone(), inner.param);
+            }
+            None => report_once(
+                &REPORTED,
+                &ViewError::ClientValueMissing {
+                    what: "a directive's handler",
+                    instead: "does not run",
+                },
+            ),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct DirectiveInner<T, D, P> {
     handler: D,
@@ -121,20 +150,17 @@ where
         self,
         el: &crate::renderer::types::Element,
     ) -> Self::State {
-        let inner = self.0.expect(super::FEATURE_CONFLICT_DIAGNOSTIC).take();
-        inner.handler.run(el.clone(), inner.param);
+        self.run(el);
         el.clone()
     }
 
     fn build(self, el: &crate::renderer::types::Element) -> Self::State {
-        let inner = self.0.expect(super::FEATURE_CONFLICT_DIAGNOSTIC).take();
-        inner.handler.run(el.clone(), inner.param);
+        self.run(el);
         el.clone()
     }
 
     fn rebuild(self, state: &mut Self::State) {
-        let inner = self.0.expect(super::FEATURE_CONFLICT_DIAGNOSTIC).take();
-        inner.handler.run(state.clone(), inner.param);
+        self.run(state);
     }
 
     fn into_cloneable(self) -> Self::Cloneable {

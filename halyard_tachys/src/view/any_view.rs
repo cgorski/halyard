@@ -14,9 +14,10 @@ use crate::{
     hydration::Cursor,
     renderer::Rndr,
     ssr::StreamBuilder,
+    view_error::{report_once, ViewError},
 };
 use futures::future::{join, join_all};
-use std::{any::TypeId, fmt::Debug};
+use std::{any::TypeId, fmt::Debug, sync::atomic::AtomicBool};
 #[cfg(any(feature = "ssr", feature = "hydrate"))]
 use std::{future::Future, pin::Pin};
 
@@ -418,32 +419,50 @@ impl AddAnyAttr for AnyView {
     }
 }
 
+/// Without `ssr`, an `AnyView` keeps no HTML renderer (so that the browser bundle does not
+/// carry one): rendering it to HTML renders nothing, logged once.
+#[cfg(not(feature = "ssr"))]
+fn rendered_without_ssr() {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    report_once(
+        &REPORTED,
+        &ViewError::RenderedWithoutSsr { what: "an AnyView" },
+    );
+}
+
+/// Hydrating an `AnyView` it cannot hydrate creates it on the client instead (logged once):
+/// the view works, detached from the server's HTML.
+fn build_instead_of_hydrating(
+    view: AnyView,
+    error: &ViewError,
+) -> AnyViewState {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    report_once(&REPORTED, error);
+    view.build()
+}
+
 impl RenderHtml for AnyView {
     type AsyncOutput = Self;
     type Owned = Self;
 
     fn dry_resolve(&mut self) {
+        // without `ssr` there is nothing to resolve; rendering logs
         #[cfg(feature = "ssr")]
         {
             (self.dry_resolve)(&mut self.value)
         }
-        #[cfg(not(feature = "ssr"))]
-        panic!(
-            "You are rendering AnyView to HTML without the `ssr` feature \
-             enabled."
-        );
     }
 
     async fn resolve(self) -> Self::AsyncOutput {
+        // without `ssr` the view resolves to itself; rendering logs
         #[cfg(feature = "ssr")]
         {
             (self.resolve)(self.value).await
         }
         #[cfg(not(feature = "ssr"))]
-        panic!(
-            "You are rendering AnyView to HTML without the `ssr` feature \
-             enabled."
-        );
+        {
+            self
+        }
     }
 
     const MIN_LENGTH: usize = 0;
@@ -488,10 +507,7 @@ impl RenderHtml for AnyView {
             _ = position;
             _ = escape;
             _ = extra_attrs;
-            panic!(
-                "You are rendering AnyView to HTML without the `ssr` feature \
-                 enabled."
-            );
+            rendered_without_ssr();
         }
     }
 
@@ -560,10 +576,7 @@ impl RenderHtml for AnyView {
             _ = escape;
             _ = mark_branches;
             _ = extra_attrs;
-            panic!(
-                "You are rendering AnyView to HTML without the `ssr` feature \
-                 enabled."
-            );
+            rendered_without_ssr();
         }
     }
 
@@ -577,20 +590,22 @@ impl RenderHtml for AnyView {
             if FROM_SERVER {
                 (self.hydrate_from_server)(self.value, cursor, position)
             } else {
-                panic!(
-                    "hydrating AnyView from inside a ViewTemplate is not \
-                     supported."
-                );
+                // `AnyView` is not `ToTemplate`, so a template has no markup for it; only
+                // a hand-written `ToTemplate` type can hydrate one from a template
+                build_instead_of_hydrating(
+                    self,
+                    &ViewError::NotInTemplate { what: "an AnyView" },
+                )
             }
         }
         #[cfg(not(feature = "hydrate"))]
         {
             _ = cursor;
             _ = position;
-            panic!(
-                "You are trying to hydrate AnyView without the `hydrate` \
-                 feature enabled."
-            );
+            build_instead_of_hydrating(
+                self,
+                &ViewError::HydratedWithoutHydrate { what: "an AnyView" },
+            )
         }
     }
 
@@ -609,10 +624,10 @@ impl RenderHtml for AnyView {
         {
             _ = cursor;
             _ = position;
-            panic!(
-                "You are trying to hydrate AnyView without the `hydrate` \
-                 feature enabled."
-            );
+            build_instead_of_hydrating(
+                self,
+                &ViewError::HydratedWithoutHydrate { what: "an AnyView" },
+            )
         }
     }
 
@@ -681,12 +696,13 @@ impl Render for AnyViewWithAttrs {
     fn build(self) -> Self::State {
         let view = self.view.build();
         let elements = view.elements();
-        let mut attrs = Vec::with_capacity(elements.len() * self.attrs.len());
-        for attr in self.attrs {
-            for el in &elements {
-                attrs.push(attr.clone().build(el))
-            }
-        }
+        let attrs = self
+            .attrs
+            .into_iter()
+            .flat_map(|attr| {
+                elements.iter().map(move |el| attr.clone().build(el))
+            })
+            .collect();
         AnyViewWithAttrsState { view, attrs }
     }
 
@@ -776,12 +792,15 @@ impl RenderHtml for AnyViewWithAttrs {
     ) -> Self::State {
         let view = self.view.hydrate::<FROM_SERVER>(cursor, position);
         let elements = view.elements();
-        let mut attrs = Vec::with_capacity(elements.len() * self.attrs.len());
-        for attr in self.attrs {
-            for el in &elements {
-                attrs.push(attr.clone().hydrate::<FROM_SERVER>(el));
-            }
-        }
+        let attrs = self
+            .attrs
+            .into_iter()
+            .flat_map(|attr| {
+                elements
+                    .iter()
+                    .map(move |el| attr.clone().hydrate::<FROM_SERVER>(el))
+            })
+            .collect();
         AnyViewWithAttrsState { view, attrs }
     }
 
@@ -792,18 +811,23 @@ impl RenderHtml for AnyViewWithAttrs {
     ) -> Self::State {
         let view = self.view.hydrate_async(cursor, position).await;
         let elements = view.elements();
-        let mut attrs = Vec::with_capacity(elements.len() * self.attrs.len());
-        for attr in self.attrs {
-            for el in &elements {
-                attrs.push(attr.clone().hydrate::<true>(el));
-            }
-        }
+        let attrs = self
+            .attrs
+            .into_iter()
+            .flat_map(|attr| {
+                elements
+                    .iter()
+                    .map(move |el| attr.clone().hydrate::<true>(el))
+            })
+            .collect();
         AnyViewWithAttrsState { view, attrs }
     }
 
     fn html_len(&self) -> usize {
-        self.view.html_len()
-            + self.attrs.iter().map(|attr| attr.html_len()).sum::<usize>()
+        self.attrs
+            .iter()
+            .map(|attr| attr.html_len())
+            .fold(self.view.html_len(), usize::saturating_add)
     }
 
     fn into_owned(self) -> Self::Owned {
@@ -852,6 +876,71 @@ impl Mountable for AnyViewWithAttrsState {
 
     fn elements(&self) -> Vec<crate::renderer::types::Element> {
         self.view.elements()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IntoAny;
+    use crate::view::RenderHtml;
+    use futures::{executor::block_on, StreamExt};
+
+    /// Without the `ssr` feature an `AnyView` has no HTML renderer. Rendering it to HTML
+    /// panicked; it renders nothing.
+    #[cfg(not(feature = "ssr"))]
+    #[test]
+    fn any_view_renders_nothing_without_the_ssr_feature() {
+        assert_eq!("hello".into_any().to_html(), "");
+        assert_eq!("hello".into_any().to_html_branching(), "");
+    }
+
+    #[cfg(not(feature = "ssr"))]
+    #[test]
+    fn any_view_streams_nothing_without_the_ssr_feature() {
+        let in_order = "hello".into_any().to_html_stream_in_order();
+        assert_eq!(block_on(in_order.collect::<Vec<_>>()).concat(), "");
+        let out_of_order = "hello".into_any().to_html_stream_out_of_order();
+        assert_eq!(block_on(out_of_order.collect::<Vec<_>>()).concat(), "");
+    }
+
+    /// Resolving (waiting for async data before rendering) panicked without `ssr`; it
+    /// returns the view as it is.
+    #[cfg(not(feature = "ssr"))]
+    #[test]
+    fn any_view_resolves_to_itself_without_the_ssr_feature() {
+        let mut view = "hello".into_any();
+        let type_id = view.as_type_id();
+        view.dry_resolve();
+        let resolved = block_on(view.resolve());
+        assert_eq!(resolved.as_type_id(), type_id);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn any_view_renders_its_view() {
+        assert_eq!("hello".into_any().to_html(), "hello");
+        let mut view = "hello".into_any();
+        view.dry_resolve();
+        assert_eq!(block_on(view.resolve()).to_html(), "hello");
+        let stream = "hello".into_any().to_html_stream_in_order();
+        assert_eq!(block_on(stream.collect::<Vec<_>>()).concat(), "hello");
+    }
+
+    /// The length estimate of a view with spread attributes added the view's estimate to
+    /// the attributes' and overflowed for a view that estimates `usize::MAX`.
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn any_view_with_attrs_length_estimate_saturates() {
+        use crate::{
+            html::attribute::custom::custom_attribute,
+            view::add_attr::AddAnyAttr, view_error::test_support::HugeView,
+        };
+
+        let view = HugeView
+            .into_any()
+            .add_any_attr(custom_attribute("data-x", "1"));
+        assert_eq!(view.html_len(), usize::MAX);
+        assert_eq!(view.to_html(), "huge");
     }
 }
 

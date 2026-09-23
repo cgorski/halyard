@@ -3,15 +3,16 @@ use crate::{
         attribute::{any_attribute::AnyAttribute, Attribute},
         element::{ElementType, ElementWithChildren, HtmlElement},
     },
-    hydration::Cursor,
+    hydration::{failed_to_cast_element, Cursor},
     prelude::{AddAnyAttr, Mountable},
     renderer::{
         dom::{Element, Node},
         CastFrom, Rndr,
     },
     view::{Position, PositionState, Render, RenderHtml},
+    view_error::{report_once, ViewError},
 };
-use std::{borrow::Cow, fmt::Debug};
+use std::{borrow::Cow, fmt::Debug, sync::atomic::AtomicBool};
 
 macro_rules! svg_elements {
 	($($tag:ident  [$($attr:ty),*]),* $(,)?) => {
@@ -249,6 +250,8 @@ impl Render for InertElement {
 impl AddAnyAttr for InertElement {
     type Output<SomeNewAttr: Attribute> = Self;
 
+    // an inert element should only be used as a child, not returned at the top level of a
+    // component that attributes can be spread onto
     fn add_any_attr<NewAttr: Attribute>(
         self,
         _attr: NewAttr,
@@ -256,10 +259,14 @@ impl AddAnyAttr for InertElement {
     where
         Self::Output<NewAttr>: RenderHtml,
     {
-        panic!(
-            "InertElement does not support adding attributes. It should only \
-             be used as a child, and not returned at the top level."
-        )
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_once(
+            &REPORTED,
+            &ViewError::AttributesIgnored {
+                what: "an SVG InertElement",
+            },
+        );
+        self
     }
 }
 
@@ -303,12 +310,34 @@ impl RenderHtml for InertElement {
             cursor.sibling();
         }
         let el = crate::renderer::types::Element::cast_from(cursor.current())
-            .unwrap();
+            .unwrap_or_else(|| {
+                failed_to_cast_element(
+                    crate::html::first_tag_name(&self.html),
+                    cursor.current(),
+                )
+            });
         position.set(Position::NextChild);
         InertElementState(self.html, el)
     }
 
     fn into_owned(self) -> Self::Owned {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InertElement;
+    use crate::{
+        html::attribute::id,
+        view::{add_attr::AddAnyAttr, RenderHtml},
+    };
+
+    /// Spreading attributes onto an SVG `InertElement` panicked, on the server too. They
+    /// are ignored.
+    #[test]
+    fn inert_svg_element_ignores_spread_attributes() {
+        let el = InertElement::new("<circle r=\"1\"/>").add_any_attr(id("dot"));
+        assert_eq!(el.to_html(), "<circle r=\"1\"/>");
     }
 }

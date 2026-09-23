@@ -6,7 +6,9 @@ use crate::{
     html::attribute::{any_attribute::AnyAttribute, Attribute},
     hydration::Cursor,
     renderer::Rndr,
+    view_error::{report_once, ViewError},
 };
+use std::sync::atomic::AtomicBool;
 
 /// A view wrapper that uses a `<template>` node to optimize DOM node creation.
 ///
@@ -59,11 +61,19 @@ where
 {
     type Output<SomeNewAttr: Attribute> = ViewTemplate<V>;
 
+    // the template's markup is fixed at compile time, and `Output` is this type
     fn add_any_attr<NewAttr: Attribute>(
         self,
         _attr: NewAttr,
     ) -> Self::Output<NewAttr> {
-        panic!("AddAnyAttr not supported on ViewTemplate");
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_once(
+            &REPORTED,
+            &ViewError::AttributesIgnored {
+                what: "a ViewTemplate",
+            },
+        );
+        self
     }
 }
 
@@ -130,5 +140,22 @@ where
         position: &mut Position,
     ) {
         V::to_template(buf, class, style, inner_html, position);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ViewTemplate;
+    use crate::{
+        html::attribute::id,
+        view::{add_attr::AddAnyAttr, RenderHtml},
+    };
+
+    /// Spreading attributes onto a `ViewTemplate` (as onto a component that returns
+    /// `template! { ... }`) panicked, on the server too. They are ignored.
+    #[test]
+    fn view_template_ignores_spread_attributes() {
+        let view = ViewTemplate::new("hello").add_any_attr(id("main"));
+        assert_eq!(view.to_html(), "hello");
     }
 }

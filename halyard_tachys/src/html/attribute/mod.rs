@@ -229,7 +229,11 @@ where
     type CloneableOwned = Attr<K, V::CloneableOwned>;
 
     fn html_len(&self) -> usize {
-        K::KEY.len() + 3 + self.1.html_len()
+        // ` key=""`
+        K::KEY
+            .len()
+            .saturating_add(3)
+            .saturating_add(self.1.html_len())
     }
 
     fn to_html(
@@ -641,3 +645,17 @@ impl_attr_for_tuples_truncate_additional!(
     A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y,
     Z
 );
+
+#[cfg(test)]
+mod tests {
+    use super::{id, Attribute};
+    use crate::view_error::test_support::HugeValue;
+
+    /// The length estimate added the key's length and the value's, and overflowed for a
+    /// value that estimates `usize::MAX`.
+    #[test]
+    fn attr_length_estimate_saturates() {
+        assert_eq!(id(HugeValue).html_len(), usize::MAX);
+        assert_eq!(id("main").html_len(), "id".len() + 3 + "main".len());
+    }
+}

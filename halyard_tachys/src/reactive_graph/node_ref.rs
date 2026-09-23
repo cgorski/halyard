@@ -45,12 +45,15 @@ where
     {
         let f = Cell::new(Some(f));
 
+        // the effect runs again whenever the node reference is loaded again (its element
+        // re-rendered); `f` runs on the first load only
         Effect::new(move |_| {
             if let Some(node_ref) = self.get() {
-                let f = f.take().unwrap();
-                untrack(move || {
-                    f(node_ref);
-                });
+                if let Some(f) = f.take() {
+                    untrack(move || {
+                        f(node_ref);
+                    });
+                }
             }
         });
     }

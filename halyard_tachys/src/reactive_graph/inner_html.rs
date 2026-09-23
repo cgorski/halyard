@@ -1,4 +1,7 @@
-use super::{ReactiveFunction, SharedReactiveFunction};
+use super::{
+    detached_element, take_effect_value, ReactiveFunction,
+    SharedReactiveFunction,
+};
 use crate::html::element::InnerHtmlValue;
 use halyard_reactive_graph::effect::RenderEffect;
 
@@ -54,7 +57,10 @@ where
     }
 
     fn rebuild(mut self, state: &mut Self::State) {
-        let prev_value = state.take_value();
+        const WHAT: &str = "a reactive inner_html";
+        let Some(prev_value) = take_effect_value(state, WHAT) else {
+            return;
+        };
         *state = RenderEffect::new_with_value(
             move |prev| {
                 let value = self.invoke();
@@ -62,10 +68,10 @@ where
                     value.rebuild(&mut state);
                     state
                 } else {
-                    unreachable!()
+                    value.build(&detached_element(WHAT))
                 }
             },
-            prev_value,
+            Some(prev_value),
         );
     }
 

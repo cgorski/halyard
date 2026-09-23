@@ -63,6 +63,7 @@ pub mod ssr;
 pub mod svg;
 /// Core logic for manipulating views.
 pub mod view;
+mod view_error;
 
 pub use halyard_either_of as either;
 #[cfg(feature = "islands")]

@@ -56,7 +56,12 @@ where
     type CloneableOwned = CustomAttr<K, V::CloneableOwned>;
 
     fn html_len(&self) -> usize {
-        self.key.as_ref().len() + 3 + self.value.html_len()
+        // ` key=""`
+        self.key
+            .as_ref()
+            .len()
+            .saturating_add(3)
+            .saturating_add(self.value.html_len())
     }
 
     fn to_html(
@@ -207,4 +212,26 @@ where
     K: CustomAttributeKey,
     V: AttributeValue,
 {
+}
+
+#[cfg(test)]
+mod tests {
+    use super::custom_attribute;
+    use crate::{
+        html::attribute::Attribute, view_error::test_support::HugeValue,
+    };
+
+    /// The length estimate added the key's length and the value's, and overflowed for a
+    /// value that estimates `usize::MAX`.
+    #[test]
+    fn custom_attr_length_estimate_saturates() {
+        assert_eq!(
+            custom_attribute("data-x", HugeValue).html_len(),
+            usize::MAX
+        );
+        assert_eq!(
+            custom_attribute("data-x", "1").html_len(),
+            "data-x".len() + 3 + 1
+        );
+    }
 }

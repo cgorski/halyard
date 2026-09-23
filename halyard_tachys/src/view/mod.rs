@@ -136,7 +136,9 @@ where
     where
         Self: Sized,
     {
-        let mut buf = String::with_capacity(self.html_len());
+        // the estimate is a hint: if it cannot be allocated, the buffer grows as written
+        let mut buf = String::new();
+        _ = buf.try_reserve(self.html_len());
         self.to_html_with_buf(
             &mut buf,
             &mut Position::FirstChild,
@@ -154,7 +156,9 @@ where
     where
         Self: Sized,
     {
-        let mut buf = String::with_capacity(self.html_len());
+        // the estimate is a hint: if it cannot be allocated, the buffer grows as written
+        let mut buf = String::new();
+        _ = buf.try_reserve(self.html_len());
         self.to_html_with_buf(
             &mut buf,
             &mut Position::FirstChild,

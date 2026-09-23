@@ -47,7 +47,7 @@ where
     type CloneableOwned = Class<C::CloneableOwned>;
 
     fn html_len(&self) -> usize {
-        self.class.html_len() + 1
+        self.class.html_len().saturating_add(1)
     }
 
     fn to_html(
@@ -706,3 +706,19 @@ mod tests {
         assert_eq!(html, r#"<p class="foo bar baz"></p>"#);
     }
 } */
+
+#[cfg(test)]
+mod tests {
+    use super::class;
+    use crate::{
+        html::attribute::Attribute, view_error::test_support::HugeClass,
+    };
+
+    /// The length estimate added one to the class's, and overflowed for a class that
+    /// estimates `usize::MAX`.
+    #[test]
+    fn class_length_estimate_saturates() {
+        assert_eq!(class(HugeClass).html_len(), usize::MAX);
+        assert_eq!(class("a b").html_len(), 4);
+    }
+}

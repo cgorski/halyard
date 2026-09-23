@@ -1,4 +1,7 @@
-use super::{ReactiveFunction, SharedReactiveFunction};
+use super::{
+    detached_element, take_effect_value, update_effect_value, ReactiveFunction,
+    SharedReactiveFunction,
+};
 use crate::{html::class::IntoClass, renderer::Rndr};
 use halyard_reactive_graph::effect::RenderEffect;
 use std::borrow::Borrow;
@@ -71,7 +74,10 @@ where
     }
 
     fn rebuild(mut self, state: &mut Self::State) {
-        let prev_value = state.take_value();
+        const WHAT: &str = "a reactive class";
+        let Some(prev_value) = take_effect_value(state, WHAT) else {
+            return;
+        };
         *state = RenderEffect::new_with_value(
             move |prev| {
                 let value = self.invoke();
@@ -79,10 +85,10 @@ where
                     value.rebuild(&mut state);
                     state
                 } else {
-                    unreachable!()
+                    value.build(&detached_element(WHAT))
                 }
             },
-            prev_value,
+            Some(prev_value),
         );
     }
 
@@ -102,18 +108,10 @@ where
         self.invoke().resolve().await
     }
 
+    // in place: a reset state is dropped right after (`Option::rebuild` to `None`), so its
+    // function does not run again
     fn reset(state: &mut Self::State) {
-        *state = RenderEffect::new_with_value(
-            move |prev| {
-                if let Some(mut state) = prev {
-                    C::reset(&mut state);
-                    state
-                } else {
-                    unreachable!()
-                }
-            },
-            state.take_value(),
-        );
+        update_effect_value(state, "a reactive class", C::reset);
     }
 }
 
@@ -211,16 +209,21 @@ where
         let (name, mut f) = self;
 
         let prev_name = state.name;
-        let prev_state = state.effect.take_value();
-        if let Some((list, prev_include)) = &prev_state {
-            if prev_name != name && *prev_include {
-                Rndr::remove_class(list, prev_name);
-            }
+        let Some((list, prev_include)) =
+            take_effect_value(&state.effect, "a reactive class")
+        else {
+            return;
+        };
+        if prev_name != name && prev_include {
+            Rndr::remove_class(&list, prev_name);
         }
 
         // Name might've updated:
         state.name = name;
         let mut first_run = true;
+        // the element's class list does not change; an effect without its value (see
+        // `take_effect_value`) goes on with it, as `build` does
+        let element_list = list.clone();
         state.effect = RenderEffect::new_with_value(
             move |prev| {
                 let include = *f.invoke().borrow();
@@ -237,11 +240,15 @@ where
                         (class_list.clone(), include)
                     }
                     None => {
-                        unreachable!()
+                        if include {
+                            Rndr::add_class(&element_list, name);
+                        }
+                        first_run = false;
+                        (element_list.clone(), include)
                     }
                 }
             },
-            prev_state,
+            Some((list, prev_include)),
         );
     }
 
@@ -261,20 +268,17 @@ where
         (self.0, *self.1.invoke().borrow())
     }
 
+    // in place: a reset state is dropped right after (`Option::rebuild` to `None`), so its
+    // function does not run again
     fn reset(state: &mut Self::State) {
         let name = state.name;
-        state.effect = RenderEffect::new_with_value(
-            move |prev| {
-                if let Some(mut state) = prev {
-                    let (class_list, prev) = &mut state;
-                    Rndr::remove_class(class_list, name);
-                    *prev = false;
-                    state
-                } else {
-                    unreachable!()
-                }
+        update_effect_value(
+            &state.effect,
+            "a reactive class",
+            |(class_list, prev)| {
+                Rndr::remove_class(class_list, name);
+                *prev = false;
             },
-            state.effect.take_value(),
         );
     }
 }

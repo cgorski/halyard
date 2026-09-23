@@ -22,4 +22,4 @@ halyard_rstml 17
 halyard_server 0
 halyard_server_fn 0
 halyard_server_fn_macro 15
-halyard_tachys 130
+halyard_tachys 57

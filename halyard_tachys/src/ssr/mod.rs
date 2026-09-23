@@ -1,6 +1,7 @@
 use crate::{
     html::attribute::any_attribute::AnyAttribute,
     view::{Position, RenderHtml},
+    view_error::{report, report_once, ViewError},
 };
 use futures::Stream;
 use std::{
@@ -9,7 +10,7 @@ use std::{
     future::Future,
     mem,
     pin::Pin,
-    sync::Arc,
+    sync::{atomic::AtomicBool, Arc},
     task::{Context, Poll},
 };
 
@@ -33,17 +34,23 @@ impl StreamBuilder {
     }
 
     /// Creates a new stream with a given capacity in the synchronous buffer and an identifier.
+    ///
+    /// The capacity is a hint (a view's length estimate): if it cannot be allocated, the
+    /// buffer starts empty and grows as it is written.
     pub fn with_capacity(capacity: usize, id: Option<Vec<u16>>) -> Self {
-        Self {
+        let mut builder = Self {
             id,
-            sync_buf: String::with_capacity(capacity),
             ..Default::default()
-        }
+        };
+        builder.reserve(capacity);
+        builder
     }
 
     /// Reserves additional space in the synchronous buffer.
+    ///
+    /// A hint: if it cannot be allocated, the buffer grows as it is written instead.
     pub fn reserve(&mut self, additional: usize) {
-        self.sync_buf.reserve(additional);
+        _ = self.sync_buf.try_reserve(additional);
     }
 
     /// Pushes text into the synchronous buffer.
@@ -127,9 +134,17 @@ impl StreamBuilder {
     }
 
     /// Increments the chunk ID.
+    ///
+    /// After the largest id (65535) it wraps around to 0, logged once: ids only have to
+    /// differ between chunks that are pending at the same time, and a chunk that has been
+    /// streamed has removed its markers.
     pub fn next_id(&mut self) {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
         if let Some(last) = self.id.as_mut().and_then(|ids| ids.last_mut()) {
-            *last += 1;
+            *last = last.checked_add(1).unwrap_or_else(|| {
+                report_once(&REPORTED, &ViewError::ChunkIdWrapped);
+                0
+            });
         }
     }
 
@@ -150,11 +165,11 @@ impl StreamBuilder {
     /// Inserts a marker for the current out-of-order chunk.
     pub fn write_chunk_marker(&mut self, opening: bool) {
         if let Some(id) = &self.id {
-            self.sync_buf.reserve(11 + (id.len() * 2));
+            _ = self
+                .sync_buf
+                .try_reserve(id.len().saturating_mul(2).saturating_add(11));
             self.sync_buf.push_str("<!--s-");
-            for piece in id {
-                write!(&mut self.sync_buf, "{piece}-").unwrap();
-            }
+            push_chunk_id(&mut self.sync_buf, id);
             if opening {
                 self.sync_buf.push_str("o-->");
             } else {
@@ -205,9 +220,7 @@ impl StreamBuilder {
                 let mut subbuilder = StreamBuilder::new(id);
                 let mut id = String::new();
                 if let Some(ids) = &subbuilder.id {
-                    for piece in ids {
-                        write!(&mut id, "{piece}-").unwrap();
-                    }
+                    push_chunk_id(&mut id, ids);
                 }
                 if let Some(id) = subbuilder.id.as_mut() {
                     id.push(0);
@@ -240,6 +253,36 @@ impl StreamBuilder {
                 }
             }),
         });
+    }
+}
+
+/// Writes an out-of-order chunk id as the markers and the replacement script spell it:
+/// `{piece}-` for each piece.
+fn push_chunk_id(buf: &mut String, id: &[u16]) {
+    for piece in id {
+        // writing to a `String` cannot fail
+        _ = write!(buf, "{piece}-");
+    }
+}
+
+/// Splits `buf` around the fallback of the out-of-order chunk `id`: what comes before its
+/// opening marker, and what comes after the closing marker that follows it.
+///
+/// `None` if the opening marker is not in `buf` (it was streamed already), or if no closing
+/// marker follows it (logged: the markers are malformed).
+fn split_around_placeholder<'a>(
+    buf: &'a str,
+    id: &str,
+) -> Option<(&'a str, &'a str)> {
+    let opening = format!("<!--s-{id}o-->");
+    let closing = format!("<!--s-{id}c-->");
+    let (before, from_opening) = buf.split_once(&opening)?;
+    match from_opening.split_once(&closing) {
+        Some((_fallback, after)) => Some((before, after)),
+        None => {
+            report(&ViewError::UnclosedChunkMarker { id: id.to_string() });
+            None
+        }
     }
 }
 
@@ -394,24 +437,16 @@ impl Stream for StreamBuilder {
                                     replace,
                                     nonce,
                                 }) => {
-                                    let opening = format!("<!--s-{id}o-->");
-                                    let placeholder_at =
-                                        this.sync_buf.find(&opening);
-                                    if let Some(start) = placeholder_at {
-                                        let closing = format!("<!--s-{id}c-->");
-                                        let end = this
-                                            .sync_buf
-                                            .find(&closing)
-                                            .unwrap();
+                                    if let Some((before, after)) =
+                                        split_around_placeholder(
+                                            &this.sync_buf,
+                                            &id,
+                                        )
+                                    {
                                         let chunks_iter =
                                             chunks.into_iter().rev();
 
                                         // TODO can probably make this more efficient
-                                        let (before, replaced) =
-                                            this.sync_buf.split_at(start);
-                                        let (_, after) = replaced.split_at(
-                                            end - start + closing.len(),
-                                        );
                                         let mut buf = String::new();
                                         buf.push_str(before);
 
@@ -507,6 +542,122 @@ impl Stream for StreamBuilder {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamBuilder;
+    use crate::view::Position;
+    use futures::{executor::block_on, StreamExt};
+
+    /// Streams what `before` writes, then an out-of-order chunk (for id `0-`) that resolves
+    /// to `resolved`, as a `<Suspense>` does after writing its fallback.
+    fn stream(before: impl FnOnce(&mut StreamBuilder)) -> String {
+        let mut builder = StreamBuilder::new(Some(vec![0]));
+        before(&mut builder);
+        builder.push_async_out_of_order(
+            async { Some("resolved") },
+            &mut Position::NextChild,
+            false,
+            vec![],
+        );
+        block_on(builder.finish().collect::<Vec<_>>()).concat()
+    }
+
+    #[test]
+    fn an_out_of_order_chunk_replaces_its_fallback_in_the_buffer() {
+        let html = stream(|builder| {
+            builder.push_sync("<p>");
+            builder.push_fallback(
+                "loading",
+                &mut Position::NextChild,
+                false,
+                vec![],
+            );
+            builder.push_sync("</p>");
+        });
+        assert_eq!(html, "<p>resolved</p>");
+    }
+
+    /// Raw HTML (`inner_html`) can hold a comment that looks like a chunk's opening marker.
+    /// With no closing marker after it, the stream unwrapped `None` and failed the request.
+    #[test]
+    fn an_opening_marker_without_a_closing_marker_streams_the_chunk_as_a_template(
+    ) {
+        let html =
+            stream(|builder| builder.push_sync("<div><!--s-0-o--></div>"));
+        assert!(html.starts_with("<div><!--s-0-o--></div>"), "{html}");
+        assert!(html.contains("<template id=\"0-f\">resolved"), "{html}");
+    }
+
+    /// A look-alike closing marker in front of the opening marker made the replaced range
+    /// negative: an overflow (a panic in debug builds, a slice out of bounds in release).
+    #[test]
+    fn a_closing_marker_before_the_opening_marker_does_not_confuse_the_replacement(
+    ) {
+        let html = stream(|builder| {
+            builder.push_sync("<!--s-0-c-->");
+            builder.push_fallback(
+                "loading",
+                &mut Position::NextChild,
+                false,
+                vec![],
+            );
+        });
+        assert_eq!(html, "<!--s-0-c-->resolved");
+    }
+
+    /// The 65536th out-of-order chunk at one level overflowed the `u16` id.
+    #[test]
+    fn next_id_wraps_at_the_largest_id_instead_of_overflowing() {
+        let mut builder = StreamBuilder::new(Some(vec![3, u16::MAX]));
+        builder.next_id();
+        assert_eq!(builder.clone_id(), Some(vec![3, 0]));
+    }
+
+    #[test]
+    fn next_id_increments_the_last_piece() {
+        let mut builder = StreamBuilder::new(Some(vec![3, 7]));
+        builder.next_id();
+        assert_eq!(builder.clone_id(), Some(vec![3, 8]));
+        assert_eq!(builder.child_id(), Some(vec![3, 8, 0]));
+
+        let mut no_id = StreamBuilder::new(None);
+        no_id.next_id();
+        assert_eq!(no_id.clone_id(), None);
+    }
+
+    /// A view's length estimate is used as the initial capacity of the stream's buffer; an
+    /// estimate that cannot be allocated panicked ("capacity overflow").
+    #[test]
+    fn a_capacity_that_cannot_be_allocated_leaves_the_buffer_empty() {
+        let mut builder = StreamBuilder::with_capacity(usize::MAX, None);
+        builder.reserve(usize::MAX);
+        builder.push_sync("fits");
+        assert_eq!(builder.sync_buf, "fits");
+    }
+
+    /// A view's length estimate is the initial capacity of the HTML buffer; an estimate
+    /// that cannot be allocated panicked ("capacity overflow").
+    #[test]
+    fn a_view_that_estimates_usize_max_renders_and_streams() {
+        use crate::{view::RenderHtml, view_error::test_support::HugeView};
+
+        assert_eq!(HugeView.to_html(), "huge");
+        assert_eq!(HugeView.to_html_branching(), "huge");
+        let in_order = HugeView.to_html_stream_in_order();
+        assert_eq!(block_on(in_order.collect::<Vec<_>>()).concat(), "huge");
+        let out_of_order = HugeView.to_html_stream_out_of_order();
+        assert_eq!(block_on(out_of_order.collect::<Vec<_>>()).concat(), "huge");
+    }
+
+    #[test]
+    fn chunk_markers_spell_every_id_piece() {
+        let mut builder = StreamBuilder::new(Some(vec![1, 22]));
+        builder.write_chunk_marker(true);
+        builder.write_chunk_marker(false);
+        assert_eq!(builder.sync_buf, "<!--s-1-22-o--><!--s-1-22-c-->");
     }
 }
 

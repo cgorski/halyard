@@ -1,6 +1,6 @@
 use self::attribute::Attribute;
 use crate::{
-    hydration::Cursor,
+    hydration::{failed_to_cast_element, Cursor},
     no_attrs,
     prelude::{AddAnyAttr, Mountable},
     renderer::{
@@ -8,17 +8,19 @@ use crate::{
         CastFrom, Rndr,
     },
     view::{Position, PositionState, Render, RenderHtml},
+    view_error::{report_once, ViewError},
 };
 use attribute::any_attribute::AnyAttribute;
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::atomic::AtomicBool};
 
-/// Diagnostic message shared by event, directive, and property `.expect()` calls.
+/// Diagnostic for a client-side value (event handler, directive, property) that was not
+/// created.
 ///
 /// When the `ssr` feature is active, tachys skips creating client-side values
 /// (event handlers, directives, properties) to avoid `SendWrapper` cross-thread
-/// panics on multithreaded servers. If these `.expect()` calls fire, it means
-/// the `ssr` feature was activated unintentionally via Cargo feature
-/// unification in a client-side (CSR or hydrate) build.
+/// panics on multithreaded servers. If one is missing in the browser, the `ssr`
+/// feature was activated unintentionally via Cargo feature unification in a
+/// client-side (CSR or hydrate) build.
 pub(crate) const FEATURE_CONFLICT_DIAGNOSTIC: &str =
     "Value is None because the `ssr` feature is active. When `ssr` is \
      enabled, tachys skips creating client-side values (event handlers, \
@@ -160,6 +162,8 @@ impl Render for InertElement {
 impl AddAnyAttr for InertElement {
     type Output<SomeNewAttr: Attribute> = Self;
 
+    // an inert element should only be used as a child, not returned at the top level of a
+    // component that attributes can be spread onto
     fn add_any_attr<NewAttr: Attribute>(
         self,
         _attr: NewAttr,
@@ -167,10 +171,14 @@ impl AddAnyAttr for InertElement {
     where
         Self::Output<NewAttr>: RenderHtml,
     {
-        panic!(
-            "InertElement does not support adding attributes. It should only \
-             be used as a child, and not returned at the top level."
-        )
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_once(
+            &REPORTED,
+            &ViewError::AttributesIgnored {
+                what: "an InertElement",
+            },
+        );
+        self
     }
 }
 
@@ -214,12 +222,61 @@ impl RenderHtml for InertElement {
             cursor.sibling();
         }
         let el = crate::renderer::types::Element::cast_from(cursor.current())
-            .unwrap();
+            .unwrap_or_else(|| {
+                failed_to_cast_element(
+                    first_tag_name(&self.html),
+                    cursor.current(),
+                )
+            });
         position.set(Position::NextChild);
         InertElementState(self.html, el)
     }
 
     fn into_owned(self) -> Self::Owned {
         self
+    }
+}
+
+/// The tag name of the first element in an inert element's `html`, for the hydration
+/// mismatch report and the element created in its place; `template` if `html` does not
+/// start with a tag.
+pub(crate) fn first_tag_name(html: &str) -> &str {
+    let after_bracket = html.trim_start().strip_prefix('<').unwrap_or_default();
+    let name = after_bracket
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .next()
+        .unwrap_or_default();
+    if name.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        name
+    } else {
+        "template"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{first_tag_name, InertElement};
+    use crate::{
+        html::attribute::id,
+        view::{add_attr::AddAnyAttr, RenderHtml},
+    };
+
+    /// Spreading attributes onto an `InertElement` (as onto a component that returns one)
+    /// panicked, on the server too. They are ignored.
+    #[test]
+    fn inert_element_ignores_spread_attributes() {
+        let el = InertElement::new("<p>inert</p>").add_any_attr(id("main"));
+        assert_eq!(el.to_html(), "<p>inert</p>");
+    }
+
+    #[test]
+    fn first_tag_name_is_the_name_of_the_first_tag() {
+        assert_eq!(first_tag_name("<p class=\"x\">inert</p>"), "p");
+        assert_eq!(first_tag_name("\n  <my-element/>"), "my-element");
+        assert_eq!(first_tag_name("<circle r=\"1\"/>"), "circle");
+        assert_eq!(first_tag_name("text"), "template");
+        assert_eq!(first_tag_name("<>"), "template");
+        assert_eq!(first_tag_name("<!-- comment -->"), "template");
+        assert_eq!(first_tag_name(""), "template");
     }
 }

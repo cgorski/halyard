@@ -9,9 +9,11 @@ use crate::{
     },
     hydration::Cursor,
     ssr::StreamBuilder,
+    view_error::{report_once, ViewError},
 };
 use futures::future::join;
 use halyard_either_of::*;
+use std::sync::atomic::AtomicBool;
 
 impl<A, B> Render for Either<A, B>
 where
@@ -115,13 +117,12 @@ where
 
 const fn max_usize(vals: &[usize]) -> usize {
     let mut max = 0;
-    let len = vals.len();
-    let mut i = 0;
-    while i < len {
-        if vals[i] > max {
-            max = vals[i];
+    let mut rest = vals;
+    while let [first, tail @ ..] = rest {
+        if *first > max {
+            max = *first;
         }
-        i += 1;
+        rest = tail;
     }
     max
 }
@@ -470,6 +471,7 @@ where
 
     fn build(self) -> Self::State {
         let showing_b = self.show_b;
+        check_shown_side(showing_b, self.a.is_some(), self.b.is_some());
         let a = self.a.map(Render::build);
         let b = self.b.map(Render::build);
         EitherKeepAliveState { a, b, showing_b }
@@ -490,26 +492,60 @@ where
             _ => {}
         }
 
+        // a switch needs both sides: the new one is inserted before the old one. If either
+        // was never given a view, it keeps showing the side it shows (nothing, if that is the
+        // missing one), and switches on a later rebuild once both are there
+        static REPORTED: AtomicBool = AtomicBool::new(false);
         match (self.show_b, state.showing_b) {
             // transition from A to B
             (true, false) => match (&mut state.a, &mut state.b) {
                 (Some(a), Some(b)) => {
                     a.insert_before_this(b);
                     a.unmount();
+                    state.showing_b = true;
                 }
-                _ => unreachable!(),
+                _ => report_once(
+                    &REPORTED,
+                    &ViewError::KeepAliveCannotSwitch { from: "a", to: "b" },
+                ),
             },
             // transition from B to A
             (false, true) => match (&mut state.a, &mut state.b) {
                 (Some(a), Some(b)) => {
                     b.insert_before_this(a);
                     b.unmount();
+                    state.showing_b = false;
                 }
-                _ => unreachable!(),
+                _ => report_once(
+                    &REPORTED,
+                    &ViewError::KeepAliveCannotSwitch { from: "b", to: "a" },
+                ),
             },
             _ => {}
         }
-        state.showing_b = self.show_b;
+    }
+}
+
+impl<A, B> EitherKeepAlive<A, B> {
+    /// The view of the side this shows. `None` (logged once) if that side was never given a
+    /// view: it renders nothing.
+    fn into_shown(self) -> Option<Either<A, B>> {
+        check_shown_side(self.show_b, self.a.is_some(), self.b.is_some());
+        if self.show_b {
+            self.b.map(Either::Right)
+        } else {
+            self.a.map(Either::Left)
+        }
+    }
+}
+
+/// Logs once if the side an `EitherKeepAlive` shows was never given a view: it renders
+/// nothing, and its state is an empty view.
+fn check_shown_side(show_b: bool, has_a: bool, has_b: bool) {
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    let (side, present) = if show_b { ("b", has_b) } else { ("a", has_a) };
+    if !present {
+        report_once(&REPORTED, &ViewError::KeepAliveSideMissing { side });
     }
 }
 
@@ -587,26 +623,22 @@ where
         mark_branches: bool,
         extra_attrs: Vec<AnyAttribute>,
     ) {
-        if self.show_b {
-            self.b
-                .expect("rendering B to HTML without filling it")
-                .to_html_with_buf(
-                    buf,
-                    position,
-                    escape,
-                    mark_branches,
-                    extra_attrs,
-                );
-        } else {
-            self.a
-                .expect("rendering A to HTML without filling it")
-                .to_html_with_buf(
-                    buf,
-                    position,
-                    escape,
-                    mark_branches,
-                    extra_attrs,
-                );
+        match self.into_shown() {
+            Some(Either::Left(a)) => a.to_html_with_buf(
+                buf,
+                position,
+                escape,
+                mark_branches,
+                extra_attrs,
+            ),
+            Some(Either::Right(b)) => b.to_html_with_buf(
+                buf,
+                position,
+                escape,
+                mark_branches,
+                extra_attrs,
+            ),
+            None => {}
         }
     }
 
@@ -620,26 +652,22 @@ where
     ) where
         Self: Sized,
     {
-        if self.show_b {
-            self.b
-                .expect("rendering B to HTML without filling it")
-                .to_html_async_with_buf::<OUT_OF_ORDER>(
-                    buf,
-                    position,
-                    escape,
-                    mark_branches,
-                    extra_attrs,
-                );
-        } else {
-            self.a
-                .expect("rendering A to HTML without filling it")
-                .to_html_async_with_buf::<OUT_OF_ORDER>(
-                    buf,
-                    position,
-                    escape,
-                    mark_branches,
-                    extra_attrs,
-                );
+        match self.into_shown() {
+            Some(Either::Left(a)) => a.to_html_async_with_buf::<OUT_OF_ORDER>(
+                buf,
+                position,
+                escape,
+                mark_branches,
+                extra_attrs,
+            ),
+            Some(Either::Right(b)) => b.to_html_async_with_buf::<OUT_OF_ORDER>(
+                buf,
+                position,
+                escape,
+                mark_branches,
+                extra_attrs,
+            ),
+            None => {}
         }
     }
 
@@ -649,6 +677,7 @@ where
         position: &PositionState,
     ) -> Self::State {
         let showing_b = self.show_b;
+        check_shown_side(showing_b, self.a.is_some(), self.b.is_some());
         let a = self.a.map(|a| {
             if showing_b {
                 a.build()
@@ -673,6 +702,7 @@ where
         position: &PositionState,
     ) -> Self::State {
         let showing_b = self.show_b;
+        check_shown_side(showing_b, self.a.is_some(), self.b.is_some());
         let a = if let Some(a) = self.a {
             Some(if showing_b {
                 a.build()
@@ -704,6 +734,8 @@ where
     }
 }
 
+// A side that was never given a view is an empty view, as `None` is: nothing to mount or
+// unmount, nothing to insert before, no elements.
 impl<A, B> Mountable for EitherKeepAliveState<A, B>
 where
     A: Mountable,
@@ -711,9 +743,9 @@ where
 {
     fn unmount(&mut self) {
         if self.showing_b {
-            self.b.as_mut().expect("B was not present").unmount();
+            self.b.unmount();
         } else {
-            self.a.as_mut().expect("A was not present").unmount();
+            self.a.unmount();
         }
     }
 
@@ -723,29 +755,17 @@ where
         marker: Option<&crate::renderer::types::Node>,
     ) {
         if self.showing_b {
-            self.b
-                .as_mut()
-                .expect("B was not present")
-                .mount(parent, marker);
+            self.b.mount(parent, marker);
         } else {
-            self.a
-                .as_mut()
-                .expect("A was not present")
-                .mount(parent, marker);
+            self.a.mount(parent, marker);
         }
     }
 
     fn insert_before_this(&self, child: &mut dyn Mountable) -> bool {
         if self.showing_b {
-            self.b
-                .as_ref()
-                .expect("B was not present")
-                .insert_before_this(child)
+            self.b.insert_before_this(child)
         } else {
-            self.a
-                .as_ref()
-                .expect("A was not present")
-                .insert_before_this(child)
+            self.a.insert_before_this(child)
         }
     }
 
@@ -1008,3 +1028,204 @@ tuples!(13 => A, B, C, D, E, F, G, H, I, J, K, L, M);
 tuples!(14 => A, B, C, D, E, F, G, H, I, J, K, L, M, N);
 tuples!(15 => A, B, C, D, E, F, G, H, I, J, K, L, M, N, O);
 tuples!(16 => A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
+
+#[cfg(test)]
+mod tests {
+    use super::{max_usize, EitherKeepAlive, EitherKeepAliveState};
+    use crate::view::{Mountable, Render, RenderHtml};
+    use futures::{executor::block_on, StreamExt};
+    use std::{cell::RefCell, rc::Rc};
+
+    /// What the recorded views were asked to do, in order.
+    #[derive(Clone, Default)]
+    struct Log(Rc<RefCell<Vec<String>>>);
+
+    impl Log {
+        fn push(&self, entry: String) {
+            self.0.borrow_mut().push(entry);
+        }
+
+        fn entries(&self) -> Vec<String> {
+            self.0.borrow().clone()
+        }
+    }
+
+    /// A view that records its lifecycle instead of touching a DOM.
+    struct Recorded(&'static str, Log);
+
+    struct RecordedState(&'static str, Log);
+
+    impl Render for Recorded {
+        type State = RecordedState;
+
+        fn build(self) -> Self::State {
+            self.1.push(format!("build {}", self.0));
+            RecordedState(self.0, self.1)
+        }
+
+        fn rebuild(self, _state: &mut Self::State) {
+            self.1.push(format!("rebuild {}", self.0));
+        }
+    }
+
+    impl Mountable for RecordedState {
+        fn unmount(&mut self) {
+            self.1.push(format!("unmount {}", self.0));
+        }
+
+        fn mount(
+            &mut self,
+            _parent: &crate::renderer::types::Element,
+            _marker: Option<&crate::renderer::types::Node>,
+        ) {
+            self.1.push(format!("mount {}", self.0));
+        }
+
+        fn insert_before_this(&self, _child: &mut dyn Mountable) -> bool {
+            self.1.push(format!("insert before {}", self.0));
+            true
+        }
+
+        fn elements(&self) -> Vec<crate::renderer::types::Element> {
+            vec![]
+        }
+    }
+
+    fn keep_alive(
+        a: Option<Recorded>,
+        b: Option<Recorded>,
+        show_b: bool,
+    ) -> EitherKeepAlive<Recorded, Recorded> {
+        EitherKeepAlive { a, b, show_b }
+    }
+
+    #[test]
+    fn max_usize_is_the_largest_value_or_zero() {
+        assert_eq!(max_usize(&[3, 7, 5]), 7);
+        assert_eq!(max_usize(&[]), 0);
+        assert_eq!(max_usize(&[usize::MAX, 1]), usize::MAX);
+    }
+
+    #[test]
+    fn keep_alive_renders_the_side_it_shows() {
+        let view = |show_b| EitherKeepAlive {
+            a: Some("a"),
+            b: Some("b"),
+            show_b,
+        };
+        assert_eq!(view(false).to_html(), "a");
+        assert_eq!(view(true).to_html(), "b");
+    }
+
+    /// `EitherKeepAlive`'s fields are public, so it can be told to show a side that has no
+    /// view. Rendering it to HTML unwrapped `None` and failed the request.
+    #[test]
+    fn keep_alive_showing_a_side_it_was_never_given_renders_nothing() {
+        let only_a = EitherKeepAlive::<&str, &str> {
+            a: Some("a"),
+            b: None,
+            show_b: true,
+        };
+        assert_eq!(only_a.to_html(), "");
+
+        let only_b = EitherKeepAlive::<&str, &str> {
+            a: None,
+            b: Some("b"),
+            show_b: false,
+        };
+        assert_eq!(only_b.to_html(), "");
+    }
+
+    #[test]
+    fn keep_alive_streaming_a_side_it_was_never_given_streams_nothing() {
+        let only_a = EitherKeepAlive::<&str, &str> {
+            a: Some("a"),
+            b: None,
+            show_b: true,
+        };
+        let html =
+            block_on(only_a.to_html_stream_in_order().collect::<Vec<_>>())
+                .concat();
+        assert_eq!(html, "");
+    }
+
+    /// Switching to a side that was never given a view hit `unreachable!()`. It keeps
+    /// showing the current side, and switches once the other side arrives.
+    #[test]
+    fn keep_alive_switching_to_a_side_it_was_never_given_keeps_the_current_side(
+    ) {
+        let log = Log::default();
+        let mut state =
+            keep_alive(Some(Recorded("a", log.clone())), None, false).build();
+
+        keep_alive(None, None, true).rebuild(&mut state);
+        assert!(!state.showing_b);
+        assert_eq!(log.entries(), ["build a"]);
+
+        keep_alive(None, Some(Recorded("b", log.clone())), true)
+            .rebuild(&mut state);
+        assert!(state.showing_b);
+        assert_eq!(
+            log.entries(),
+            ["build a", "build b", "insert before a", "unmount a"]
+        );
+    }
+
+    /// A keep-alive that shows a side it was never given switching away from it hit
+    /// `unreachable!()`. With nothing on the page to insert the other side before, it
+    /// keeps showing nothing.
+    #[test]
+    fn keep_alive_switching_away_from_a_side_it_was_never_given_keeps_showing_nothing(
+    ) {
+        let log = Log::default();
+        let mut state =
+            keep_alive(None, Some(Recorded("b", log.clone())), false).build();
+
+        keep_alive(None, None, true).rebuild(&mut state);
+        assert!(!state.showing_b);
+        assert_eq!(log.entries(), ["build b"]);
+    }
+
+    #[test]
+    fn keep_alive_switches_between_sides_it_was_given() {
+        let log = Log::default();
+        let mut state = keep_alive(
+            Some(Recorded("a", log.clone())),
+            Some(Recorded("b", log.clone())),
+            false,
+        )
+        .build();
+        keep_alive(None, None, true).rebuild(&mut state);
+        keep_alive(None, None, false).rebuild(&mut state);
+        assert!(!state.showing_b);
+        assert_eq!(
+            log.entries(),
+            [
+                "build a",
+                "build b",
+                "insert before a",
+                "unmount a",
+                "insert before b",
+                "unmount b"
+            ]
+        );
+    }
+
+    /// The state of a keep-alive showing a side it was never given unwrapped `None` on
+    /// every DOM operation. It is an empty view: nothing to unmount, nothing to insert
+    /// before, no elements.
+    #[test]
+    fn keep_alive_state_without_its_shown_side_is_an_empty_view() {
+        let log = Log::default();
+        let mut state = EitherKeepAliveState::<RecordedState, RecordedState> {
+            a: Some(RecordedState("a", log.clone())),
+            b: None,
+            showing_b: true,
+        };
+        state.unmount();
+        let mut other = RecordedState("other", log.clone());
+        assert!(!state.insert_before_this(&mut other));
+        assert!(state.elements().is_empty());
+        assert!(log.entries().is_empty());
+    }
+}

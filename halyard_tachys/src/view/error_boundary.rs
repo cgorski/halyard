@@ -159,7 +159,7 @@ where
 
     fn html_len(&self) -> usize {
         match self {
-            Ok(i) => i.html_len() + 3,
+            Ok(i) => i.html_len().saturating_add(3),
             Err(_) => 0,
         }
     }
@@ -265,5 +265,19 @@ where
             Ok(view) => Ok(view.into_owned()),
             Err(e) => Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{view::RenderHtml, view_error::test_support::HugeView};
+
+    /// The length estimate added three to the view's, and overflowed for a view that
+    /// estimates `usize::MAX`.
+    #[test]
+    fn result_length_estimate_saturates() {
+        assert_eq!(Ok::<_, std::fmt::Error>(HugeView).html_len(), usize::MAX);
+        assert_eq!(Ok::<_, std::fmt::Error>("hi").html_len(), 5);
+        assert_eq!(Err::<&str, _>(std::fmt::Error).html_len(), 0);
     }
 }
