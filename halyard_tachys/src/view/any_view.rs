@@ -1045,28 +1045,3 @@ mod tests {
         assert_eq!(block_on(view.resolve()).to_html(), ().into_any().to_html());
     }
 }
-
-/*
-#[cfg(test)]
-mod tests {
-    use super::IntoAny;
-    use crate::{
-        html::element::{p, span},
-        renderer::mock_dom::MockDom,
-        view::{any_view::AnyView, RenderHtml},
-    };
-
-    #[test]
-    fn should_handle_html_creation() {
-        let x = 1;
-        let mut buf = String::new();
-        let view: AnyView<MockDom> = if x == 0 {
-            p((), "foo").into_any()
-        } else {
-            span((), "bar").into_any()
-        };
-        view.to_html(&mut buf, &Default::default());
-        assert_eq!(buf, "<span>bar</span><!>");
-    }
-}
- */

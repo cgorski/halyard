@@ -32,9 +32,8 @@ pub fn AutoReload(
         };
 
         let script = format!(
-            "(function (reload_port, protocol) {{ {} {} }})({reload_port:?}, \
+            "(function (reload_port, protocol) {{ {} }})({reload_port:?}, \
              {protocol})",
-            halyard_hot_reload::HOT_RELOAD_JS,
             include_str!("reload_script.js")
         );
         view! { <script nonce=nonce>{script}</script> }

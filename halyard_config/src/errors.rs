@@ -19,7 +19,7 @@ pub enum HalyardConfigError {
          `production` (in any case)"
     )]
     InvalidEnv { value: String },
-    /// The hot-reload websocket protocol (`reload-ws-protocol`,
+    /// The live-reload websocket protocol (`reload-ws-protocol`,
     /// `HALYARD_RELOAD_WS_PROTOCOL`/`LEPTOS_RELOAD_WS_PROTOCOL`) is not `ws` or `wss`.
     #[error(
         "`{value}` is not a supported websocket protocol; use `ws` or `wss` (in any case)"

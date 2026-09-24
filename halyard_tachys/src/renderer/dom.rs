@@ -322,53 +322,11 @@ impl Dom {
     }
 
     pub fn first_child(node: &Node) -> Option<Node> {
-        #[cfg(debug_assertions)]
-        {
-            let node = node.first_child();
-            // if it's a comment node that starts with hot-reload, it's a marker that should be
-            // ignored
-            if let Some(node) = node.as_ref() {
-                if node.node_type() == 8
-                    && node
-                        .text_content()
-                        .unwrap_or_default()
-                        .starts_with("hot-reload")
-                {
-                    return Self::next_sibling(node);
-                }
-            }
-
-            node
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            node.first_child()
-        }
+        node.first_child()
     }
 
     pub fn next_sibling(node: &Node) -> Option<Node> {
-        #[cfg(debug_assertions)]
-        {
-            let node = node.next_sibling();
-            // if it's a comment node that starts with hot-reload, it's a marker that should be
-            // ignored
-            if let Some(node) = node.as_ref() {
-                if node.node_type() == 8
-                    && node
-                        .text_content()
-                        .unwrap_or_default()
-                        .starts_with("hot-reload")
-                {
-                    return Self::next_sibling(node);
-                }
-            }
-
-            node
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            node.next_sibling()
-        }
+        node.next_sibling()
     }
 
     pub fn log_node(node: &Node) {

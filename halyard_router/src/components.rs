@@ -632,11 +632,9 @@ define_protected_parent_route!(NestedRoute<Segments, Children, (), impl Fn() -> 
 /// an absolute path, prefix it with `/`).
 ///
 /// **Note**: Support for server-side redirects is provided by the server framework
-/// integrations ([`halyard_actix`] and [`halyard_axum`]. If you’re not using one of those
-/// integrations, you should manually provide a way of redirecting on the server
-/// using [`provide_server_redirect`].
+/// integration ([`halyard_axum`]). If you’re not using it, you should manually
+/// provide a way of redirecting on the server using [`provide_server_redirect`].
 ///
-/// [`halyard_actix`]: <https://docs.rs/leptos_actix/>
 /// [`halyard_axum`]: <https://docs.rs/leptos_axum/>
 #[component(transparent)]
 pub fn Redirect<P>(

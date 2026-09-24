@@ -57,11 +57,10 @@ fixed at the source than worked around in every application:
 | `leptos_router_macro` (`router_macro/`)       | `halyard_router_macro`            |
 | `leptos_meta` (`meta/`)                       | `halyard_meta`                    |
 | `leptos_axum` (`integrations/axum/`)          | `halyard_axum`                    |
-| `leptos_actix` (`integrations/actix/`)        | `halyard_actix`                   |
 | `leptos_integration_utils` (`integrations/utils/`) | `halyard_integration_utils`  |
-| `leptos_server`, `leptos_config`, `leptos_dom`, `leptos_hot_reload` | `halyard_server`, `halyard_config`, `halyard_dom`, `halyard_hot_reload` |
+| `leptos_server`, `leptos_config`, `leptos_dom` | `halyard_server`, `halyard_config`, `halyard_dom` |
 | `tachys`                                      | `halyard_tachys`                  |
-| `reactive_graph`, `reactive_stores`, `reactive_stores_macro` | `halyard_reactive_graph`, `halyard_reactive_stores`, `halyard_reactive_stores_macro` |
+| `reactive_graph`                              | `halyard_reactive_graph`          |
 | `hydration_context`                           | `halyard_hydration_context`       |
 | `server_fn`, `server_fn_macro`, `server_fn_macro_default` | `halyard_server_fn`, `halyard_server_fn_macro`, `halyard_server_fn_macro_default` |
 | `any_spawner`, `either_of`, `next_tuple`, `or_poisoned`, `const_str_slice_concat` | `halyard_any_spawner`, `halyard_either_of`, `halyard_next_tuple`, `halyard_or_poisoned`, `halyard_const_str_slice_concat` |
@@ -69,6 +68,10 @@ fixed at the source than worked around in every application:
 | `throw_error` (`any_error/`)                  | `halyard_throw_error`             |
 | — (new)                                       | `halyard_macro_diagnostics`       |
 | `rstml` 0.12.1, `syn_derive` 0.2.0 (vendored, `third_party/`) | `halyard_rstml`, `halyard_syn_derive` |
+
+Upstream's actix integration, its view-patching hot reload and its stores crates were
+removed because nothing used them. `AutoReload` still reloads the page when the build tool
+rebuilds, and swaps the stylesheet when only the CSS changed.
 
 Inside `halyard` the re-export names are unchanged: `halyard::tachys`, `halyard::server_fn`,
 `halyard::reactive`, `halyard::prelude::*`, and the `view!`, `#[component]`, `#[server]`

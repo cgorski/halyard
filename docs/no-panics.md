@@ -49,7 +49,7 @@ what clippy cannot see:
 | `RefCell` borrow conflicts | `halyard_tachys` 45, router 8, reactive graph 10 | 65 | yes (re-entrant event handlers) |
 | lock held while user code runs | `Callback::run` (`with_value(\|f\| f(input))`), `StoredValue::with_value`, `debounce` (`cb.write().unwrap()(arg)`) | several | yes: re-entry **deadlocks** natively and **aborts** in wasm (std's single-threaded lock calls `rtabort!` on a conflicting acquisition) |
 | `unwrap_throw`/`expect_throw` | `halyard_dom` 7, router 2, `halyard` 1 | 10 | yes |
-| proc-macro panics | `halyard_macro`, `halyard_rstml`, `halyard_server_fn_macro`, `halyard_hot_reload` | ~120 | compile time only: should be `compile_error!` spans |
+| proc-macro panics | `halyard_macro`, `halyard_rstml`, `halyard_server_fn_macro` | ~120 | compile time only: should be `compile_error!` spans |
 
 ## Is the poisoning a smell?
 

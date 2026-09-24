@@ -24,9 +24,6 @@ function connect() {
 					`CSS hot-reload: Could not find a <link href=/\"${msg.css}\"> element`,
 				);
 		}
-		if (msg.view) {
-			patch(msg.view);
-		}
 	};
 
 	ws.onclose = () => {

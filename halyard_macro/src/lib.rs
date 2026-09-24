@@ -326,12 +326,8 @@ fn view_macro_impl(tokens: TokenStream, template: bool) -> TokenStream {
     let parser = rstml::Parser::new(config);
     let (mut nodes, errors) = parser.parse_recoverable(tokens).split_vec();
     let errors = errors.into_iter().map(|e| e.emit_as_expr_tokens());
-    let nodes_output = view::render_view(
-        &mut nodes,
-        global_class.as_ref(),
-        normalized_call_site(proc_macro::Span::call_site()),
-        template,
-    );
+    let nodes_output =
+        view::render_view(&mut nodes, global_class.as_ref(), template);
 
     // The allow lint needs to be put here instead of at the expansion of
     // view::attribute_value(). Adding this next to the expanded expression
@@ -354,18 +350,6 @@ fn view_macro_impl(tokens: TokenStream, template: bool) -> TokenStream {
         output
     }
     .into()
-}
-
-fn normalized_call_site(site: proc_macro::Span) -> Option<String> {
-    if cfg!(debug_assertions) {
-        Some(halyard_hot_reload::span_to_stable_id(
-            site.file(),
-            site.start().line(),
-        ))
-    } else {
-        _ = site;
-        None
-    }
 }
 
 /// This behaves like the [`view`](view!) macro, but loads the view from an external file instead of
@@ -943,8 +927,7 @@ pub fn slot(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
 /// - **Context comes from the server.** Server functions are provided access to the HTTP request and other relevant
 ///   server data via the server integrations, but they do *not* have access to reactive state that exists in the client.
 /// - Your server must be ready to handle the server functions at the API prefix you list. The easiest way to do this
-///   is to use the `handle_server_fns` function from [`halyard_actix`](https://docs.rs/leptos_actix/latest/leptos_actix/fn.handle_server_fns.html)
-///   or [`halyard_axum`](https://docs.rs/leptos_axum/latest/leptos_axum/fn.handle_server_fns.html).
+///   is to use the `handle_server_fns` function from [`halyard_axum`](https://docs.rs/leptos_axum/latest/leptos_axum/fn.handle_server_fns.html).
 /// - **Server functions must have unique paths**. Unique paths are automatically generated for each
 ///   server function. If you choose to specify a path in the fourth argument, you must ensure that these
 ///   are unique. You cannot define two server functions with the same URL prefix and endpoint path,

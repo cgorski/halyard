@@ -20,10 +20,6 @@ pub(crate) fn component_to_tokens(
     global_class: Option<&TokenTree>,
     disable_inert_html: bool,
 ) -> TokenStream {
-    #[allow(unused)] // TODO this is used by hot-reloading
-    #[cfg(debug_assertions)]
-    let component_name = super::ident_from_tag_name(node.name());
-
     // an attribute that contains {..} can be used to split props from attributes
     // anything before it is a prop, unless it uses the special attribute syntaxes
     // (attr:, style:, on:, prop:, etc.)
@@ -213,23 +209,8 @@ pub(crate) fn component_to_tokens(
             TagType::Unknown,
             Some(&mut slots),
             global_class,
-            None,
             disable_inert_html,
         );
-
-        // TODO view marker for hot-reloading
-        /*
-        cfg_if::cfg_if! {
-            if #[cfg(debug_assertions)] {
-                let marker = format!("<{component_name}/>-children");
-                // For some reason spanning for `.children` breaks, unless `#view_marker`
-                // is also covered by `children.span()`.
-                let view_marker = quote_spanned!(children.span()=> .with_view_marker(#marker));
-            } else {
-                let view_marker = quote! {};
-            }
-        }
-        */
 
         if let Some(children) = children {
             let bindables =

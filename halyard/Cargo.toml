@@ -21,7 +21,6 @@ cfg-if = { workspace = true, default-features = true }
 halyard_hydration_context = { workspace = true }
 halyard_either_of = { workspace = true }
 halyard_dom = { workspace = true }
-halyard_hot_reload = { workspace = true }
 halyard_macro = { workspace = true }
 halyard_server = { workspace = true, features = ["tachys"] }
 halyard_config = { workspace = true }
@@ -35,7 +34,6 @@ halyard_reactive_graph = { workspace = true, features = ["serde"] }
 rustc-hash = { workspace = true, default-features = true }
 halyard_tachys = { workspace = true, features = [
   "reactive_graph",
-  "reactive_stores",
   "oco",
 ] }
 thiserror = { workspace = true, default-features = true }

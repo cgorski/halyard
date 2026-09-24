@@ -1,10 +1,10 @@
+use crate::view::utils::value_to_string;
 use attribute_derive::FromAttr;
 use convert_case::{
     Case::{Pascal, Snake},
     Casing,
 };
 use convert_case_extras::is_case;
-use halyard_hot_reload::parsing::value_to_string;
 use itertools::Itertools;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned, ToTokens, TokenStreamExt};

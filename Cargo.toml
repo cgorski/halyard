@@ -14,20 +14,16 @@ members = [
   "halyard",
   "halyard_dom",
   "halyard_config",
-  "halyard_hot_reload",
   "halyard_macro",
   "halyard_macro_diagnostics",
   "halyard_server",
   "halyard_reactive_graph",
-  "halyard_reactive_stores",
-  "halyard_reactive_stores_macro",
   "halyard_server_fn",
   "halyard_server_fn_macro",
   "halyard_server_fn/halyard_server_fn_macro_default",
   "halyard_tachys",
 
   # integrations
-  "integrations/halyard_actix",
   "integrations/halyard_axum",
   "integrations/halyard_integration_utils",
 
@@ -58,7 +54,6 @@ halyard_hydration_context = { path = "./halyard_hydration_context", version = "0
 halyard = { path = "./halyard", version = "0.1.0" }
 halyard_config = { path = "./halyard_config", version = "0.1.0" }
 halyard_dom = { path = "./halyard_dom", version = "0.1.0" }
-halyard_hot_reload = { path = "./halyard_hot_reload", version = "0.1.0" }
 halyard_integration_utils = { path = "./integrations/halyard_integration_utils", version = "0.1.0" }
 halyard_macro = { path = "./halyard_macro", version = "0.1.0" }
 halyard_macro_diagnostics = { path = "./halyard_macro_diagnostics", version = "0.1.0" }
@@ -70,8 +65,6 @@ halyard_next_tuple = { path = "./halyard_next_tuple", version = "0.1.0" }
 halyard_oco = { path = "./halyard_oco", version = "0.1.0" }
 halyard_or_poisoned = { path = "./halyard_or_poisoned", version = "0.1.0" }
 halyard_reactive_graph = { path = "./halyard_reactive_graph", version = "0.1.0" }
-halyard_reactive_stores = { path = "./halyard_reactive_stores", version = "0.1.0" }
-halyard_reactive_stores_macro = { path = "./halyard_reactive_stores_macro", version = "0.1.0" }
 halyard_server_fn = { path = "./halyard_server_fn", version = "0.1.0" }
 halyard_server_fn_macro = { path = "./halyard_server_fn_macro", version = "0.1.0" }
 halyard_server_fn_macro_default = { path = "./halyard_server_fn/halyard_server_fn_macro_default", version = "0.1.0" }
@@ -128,18 +121,14 @@ erased = { default-features = false, version = "0.1" }
 glib = { default-features = false, version = "0.21" }
 async-trait = { default-features = false, version = "0.1" }
 anyhow = { default-features = false, version = "1.0" }
-walkdir = { default-features = false, version = "2.5" }
 actix-ws = { default-features = false, version = "0.3" }
 tower-http = { default-features = false, version = "0.6" }
 prettyplease = { default-features = false, version = "0.2" }
 inventory = { default-features = false, version = "0.3" }
 config = { default-features = false, version = "0.15" }
-camino = { default-features = false, version = "1.2" }
 ciborium = { default-features = false, version = "0.2" }
 bitcode = { default-features = false, version = "0.6" }
 multer = { default-features = false, version = "3.1" }
-sledgehammer_utils = { default-features = false, version = "0.3" }
-sledgehammer_bindgen = { default-features = false, version = "0.6" }
 wasm-streams = { default-features = false, version = "0.5" }
 rkyv = { default-features = false, version = "0.8" }
 temp-env = { default-features = false, version = "0.3" }
@@ -162,11 +151,9 @@ tower-layer = { default-features = false, version = "0.3" }
 attribute-derive = { default-features = false, version = "0.10" }
 insta = { default-features = false, version = "1.46" }
 codee = { default-features = false, version = "0.3" }
-actix-http = { default-features = false, version = "3.12" }
 wasm-bindgen-test = { default-features = false, version = "0.3" }
 rustversion = { default-features = false, version = "1.0" }
 getrandom = { default-features = false, version = "0.4" }
-actix-files = { default-features = false, version = "0.6" }
 async-lock = { default-features = false, version = "3.4" }
 base16 = { default-features = false, version = "0.2" }
 digest = { default-features = false, version = "0.10" }

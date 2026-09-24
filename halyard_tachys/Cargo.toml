@@ -18,8 +18,6 @@ halyard_either_of = { workspace = true }
 halyard_next_tuple = { workspace = true }
 halyard_or_poisoned = { workspace = true }
 halyard_reactive_graph = { workspace = true, optional = true }
-halyard_reactive_stores = { workspace = true, optional = true }
-slotmap = { optional = true, workspace = true, default-features = true }
 halyard_oco = { workspace = true, optional = true }
 async-trait = { workspace = true, default-features = true }
 pastey = { workspace = true, default-features = true }
@@ -157,10 +155,6 @@ futures = { workspace = true, default-features = true }
 itertools = { workspace = true, default-features = true }
 send_wrapper = { workspace = true, default-features = true }
 thiserror = { workspace = true }
-sledgehammer_bindgen = { features = [
-  "web",
-], optional = true, workspace = true, default-features = true }
-sledgehammer_utils = { optional = true, workspace = true, default-features = true }
 tracing = { optional = true, workspace = true, default-features = true }
 serde = { optional = true, workspace = true, default-features = true }
 serde_json = { optional = true, workspace = true, default-features = true }
@@ -176,7 +170,6 @@ tokio = { features = [
 rustc_version = { workspace = true, default-features = true }
 
 [features]
-default = ["testing"]
 delegation = []                                                       # enables event delegation
 error-hook = []
 hydrate = []
@@ -184,10 +177,7 @@ islands = ["dep:serde", "dep:serde_json"]
 ssr = []
 oco = ["dep:halyard_oco"]
 nightly = ["halyard_reactive_graph/nightly"]
-testing = ["dep:slotmap"]
 reactive_graph = ["dep:halyard_reactive_graph", "dep:halyard_any_spawner"]
-reactive_stores = ["reactive_graph", "dep:halyard_reactive_stores"]
-sledgehammer = ["dep:sledgehammer_bindgen", "dep:sledgehammer_utils"]
 tracing = ["dep:tracing"]
 mark_branches = []
 # Restores the upstream behaviour of panicking on a hydration mismatch (after logging).
@@ -195,7 +185,7 @@ mark_branches = []
 panic-on-hydration-mismatch = []
 
 [package.metadata.cargo-all-features]
-denylist = ["tracing", "sledgehammer"]
+denylist = ["tracing"]
 skip_feature_sets = [
   [
     "ssr",

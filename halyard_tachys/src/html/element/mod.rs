@@ -865,67 +865,6 @@ where
         }
     }
 }
-/*
-#[cfg(all(test, feature = "testing"))]
-mod tests {
-    #[cfg(all(feature = "nightly", rustc_nightly))]
-    use super::RenderHtml;
-    use super::{main, p, HtmlElement};
-    use crate::{
-        html::{
-            attribute::global::GlobalAttributes,
-            element::{em, ElementChild, Main},
-        },
-        renderer::mock_dom::MockDom,
-        view::Render,
-    };
-
-    #[test]
-    fn mock_dom_creates_element() {
-        let el: HtmlElement<Main, _, _, MockDom> =
-            main().child(p().id("test").lang("en").child("Hello, world!"));
-        let el = el.build();
-        assert_eq!(
-            el.el.to_debug_html(),
-            "<main><p id=\"test\" lang=\"en\">Hello, world!</p></main>"
-        );
-    }
-
-    #[test]
-    fn mock_dom_creates_element_with_several_children() {
-        let el: HtmlElement<Main, _, _, MockDom> = main().child(p().child((
-            "Hello, ",
-            em().child("beautiful"),
-            " world!",
-        )));
-        let el = el.build();
-        assert_eq!(
-            el.el.to_debug_html(),
-            "<main><p>Hello, <em>beautiful</em> world!</p></main>"
-        );
-    }
-
-    #[cfg(all(feature = "nightly", rustc_nightly))]
-    #[test]
-    fn html_render_allocates_appropriate_buffer() {
-        use crate::view::static_types::Static;
-
-        let el: HtmlElement<Main, _, _, MockDom> = main().child(p().child((
-            Static::<"Hello, ">,
-            em().child(Static::<"beautiful">),
-            Static::<" world!">,
-        )));
-        let allocated_len = el.html_len();
-        let html = el.to_html();
-        assert_eq!(
-            html,
-            "<main><p>Hello, <em>beautiful</em> world!</p></main>"
-        );
-        assert_eq!(html.len(), allocated_len);
-    }
-}
- */
-
 #[cfg(test)]
 mod tests {
     use crate::{

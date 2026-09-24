@@ -20,29 +20,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "actix-files"
-version = "0.6.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4009a8beb4dc78a58286ac9d58969ee0a8acecb7912d5ce898b4da4335579341"
-dependencies = [
- "actix-http",
- "actix-service",
- "actix-utils",
- "actix-web",
- "bitflags",
- "bytes",
- "derive_more",
- "futures-core",
- "http-range",
- "log",
- "mime",
- "mime_guess",
- "percent-encoding",
- "pin-project-lite",
- "v_htmlescape",
-]
-
-[[package]]
 name = "actix-http"
 version = "3.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -601,12 +578,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "camino"
-version = "1.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e629a66d692cb9ff1a1c664e41771b3dcaf961985a9774c0eb0bd1b51cf60a48"
-
-[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1023,7 +994,7 @@ dependencies = [
  "futures-util",
  "generational-box",
  "longest-increasing-subsequence",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "rustversion",
  "serde",
  "slab",
@@ -1078,7 +1049,7 @@ dependencies = [
  "futures-util",
  "generational-box",
  "parking_lot",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "tracing",
  "warnings",
 ]
@@ -1561,7 +1532,6 @@ dependencies = [
  "halyard_config",
  "halyard_dom",
  "halyard_either_of",
- "halyard_hot_reload",
  "halyard_hydration_context",
  "halyard_macro",
  "halyard_meta",
@@ -1573,7 +1543,7 @@ dependencies = [
  "halyard_tachys",
  "halyard_throw_error",
  "rand 0.9.2",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "rustc_version",
  "send_wrapper",
  "serde",
@@ -1591,30 +1561,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm_split_helpers",
  "web-sys",
-]
-
-[[package]]
-name = "halyard_actix"
-version = "0.1.0"
-dependencies = [
- "actix-files",
- "actix-http",
- "actix-web",
- "futures",
- "halyard",
- "halyard_any_spawner",
- "halyard_hydration_context",
- "halyard_integration_utils",
- "halyard_macro",
- "halyard_meta",
- "halyard_or_poisoned",
- "halyard_router",
- "halyard_server_fn",
- "halyard_tachys",
- "send_wrapper",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1704,22 +1650,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "halyard_hot_reload"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "camino",
- "halyard_or_poisoned",
- "halyard_rstml",
- "indexmap",
- "proc-macro2",
- "quote",
- "serde",
- "syn",
- "walkdir",
-]
-
-[[package]]
 name = "halyard_hydration_context"
 version = "0.1.0"
 dependencies = [
@@ -1755,7 +1685,6 @@ dependencies = [
  "convert_case 0.11.0",
  "convert_case_extras",
  "halyard",
- "halyard_hot_reload",
  "halyard_macro_diagnostics",
  "halyard_router",
  "halyard_rstml",
@@ -1832,7 +1761,7 @@ dependencies = [
  "indexmap",
  "pastey",
  "pin-project-lite",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "rustc_version",
  "send_wrapper",
  "serde",
@@ -1844,39 +1773,6 @@ dependencies = [
  "tracing",
  "typed-builder",
  "web-sys",
-]
-
-[[package]]
-name = "halyard_reactive_stores"
-version = "0.1.0"
-dependencies = [
- "guardian",
- "halyard",
- "halyard_any_spawner",
- "halyard_or_poisoned",
- "halyard_reactive_graph",
- "halyard_reactive_stores_macro",
- "indexmap",
- "itertools",
- "pastey",
- "rustc-hash 2.1.1",
- "send_wrapper",
- "serde",
- "slotmap",
- "thiserror 2.0.17",
- "tokio",
- "tokio-test",
-]
-
-[[package]]
-name = "halyard_reactive_stores_macro"
-version = "0.1.0"
-dependencies = [
- "convert_case 0.11.0",
- "halyard_macro_diagnostics",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -2046,21 +1942,17 @@ dependencies = [
  "halyard_oco",
  "halyard_or_poisoned",
  "halyard_reactive_graph",
- "halyard_reactive_stores",
  "halyard_throw_error",
  "html-escape",
  "indexmap",
  "itertools",
  "js-sys",
  "pastey",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "rustc_version",
  "send_wrapper",
  "serde",
  "serde_json",
- "sledgehammer_bindgen",
- "sledgehammer_utils",
- "slotmap",
  "thiserror 2.0.17",
  "tokio",
  "tokio-test",
@@ -2179,12 +2071,6 @@ dependencies = [
  "http-body",
  "pin-project-lite",
 ]
-
-[[package]]
-name = "http-range"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21dec9db110f5f872ed9699c3ecf50cf16f423502706ba5c72462e28d3157573"
 
 [[package]]
 name = "http-range-header"
@@ -3009,7 +2895,7 @@ dependencies = [
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "rustls",
  "socket2 0.6.2",
  "thiserror 2.0.17",
@@ -3030,7 +2916,7 @@ dependencies = [
  "lru-slab",
  "rand 0.9.2",
  "ring",
- "rustc-hash 2.1.1",
+ "rustc-hash",
  "rustls",
  "rustls-pki-types",
  "slab",
@@ -3300,12 +3186,6 @@ dependencies = [
  "rmp",
  "serde",
 ]
-
-[[package]]
-name = "rustc-hash"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
@@ -3715,35 +3595,6 @@ name = "slab"
 version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
-
-[[package]]
-name = "sledgehammer_bindgen"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49e83e178d176459c92bc129cfd0958afac3ced925471b889b3a75546cfc4133"
-dependencies = [
- "sledgehammer_bindgen_macro",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "sledgehammer_bindgen_macro"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f62f06db0370222f7f498ef478fce9f8df5828848d1d3517e3331936d7074f55"
-dependencies = [
- "quote",
- "syn",
-]
-
-[[package]]
-name = "sledgehammer_utils"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "debdd4b83524961983cea3c55383b3910fd2f24fd13a188f5b091d2d504a61ae"
-dependencies = [
- "rustc-hash 1.1.0",
-]
 
 [[package]]
 name = "slotmap"
@@ -4392,12 +4243,6 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
 ]
-
-[[package]]
-name = "v_htmlescape"
-version = "0.15.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e8257fbc510f0a46eb602c10215901938b5c2a7d5e70fc11483b1d3c9b5b18c"
 
 [[package]]
 name = "version-compare"

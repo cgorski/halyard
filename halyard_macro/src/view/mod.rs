@@ -1,17 +1,17 @@
 mod component_builder;
 mod slot_helper;
-mod utils;
+pub(crate) mod utils;
 
 use self::{
     component_builder::component_to_tokens,
     slot_helper::{get_slot, slot_to_tokens},
+    utils::{is_component_node, value_to_string},
 };
 use convert_case::{
     Case::{Snake, UpperCamel},
     Casing,
 };
 use convert_case_extras::is_case;
-use halyard_hot_reload::parsing::{is_component_node, value_to_string};
 use proc_macro2::{Ident, Span, TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned, ToTokens};
 use rstml::node::{
@@ -40,7 +40,6 @@ pub(crate) enum TagType {
 pub fn render_view(
     nodes: &mut [Node],
     global_class: Option<&TokenTree>,
-    view_marker: Option<String>,
     disable_inert_html: bool,
 ) -> Option<TokenStream> {
     let disable_inert_html = disable_inert_html || global_class.is_some();
@@ -61,11 +60,10 @@ pub fn render_view(
                 TagType::Unknown,
                 None,
                 global_class,
-                view_marker.as_deref(),
                 true,
                 disable_inert_html,
             ),
-            // only add View wrapper and view marker to a regular HTML
+            // only add View wrapper to a regular HTML
             // element or component, not to a <{..} /> attribute list
             match &nodes[0] {
                 Node::Element(node) => !is_spread_marker(node),
@@ -78,7 +76,6 @@ pub fn render_view(
                 TagType::Unknown,
                 None,
                 global_class,
-                view_marker.as_deref(),
                 disable_inert_html,
             ),
             true,
@@ -87,13 +84,6 @@ pub fn render_view(
     base.map(|view| {
         if !should_add_view {
             view
-        } else if let Some(vm) = view_marker {
-            quote! {
-                ::halyard::prelude::View::new(
-                    #view
-                )
-                .with_view_marker(#vm)
-            }
         } else {
             quote! {
                 ::halyard::prelude::View::new(
@@ -517,7 +507,6 @@ fn element_children_to_tokens(
     parent_type: TagType,
     parent_slots: Option<&mut HashMap<String, Vec<TokenStream>>>,
     global_class: Option<&TokenTree>,
-    view_marker: Option<&str>,
     disable_inert_html: bool,
 ) -> Option<TokenStream> {
     let children = children_to_tokens(
@@ -525,7 +514,6 @@ fn element_children_to_tokens(
         parent_type,
         parent_slots,
         global_class,
-        view_marker,
         false,
         disable_inert_html,
     );
@@ -576,7 +564,6 @@ fn fragment_to_tokens(
     parent_type: TagType,
     parent_slots: Option<&mut HashMap<String, Vec<TokenStream>>>,
     global_class: Option<&TokenTree>,
-    view_marker: Option<&str>,
     disable_inert_html: bool,
 ) -> Option<TokenStream> {
     let children = children_to_tokens(
@@ -584,7 +571,6 @@ fn fragment_to_tokens(
         parent_type,
         parent_slots,
         global_class,
-        view_marker,
         true,
         disable_inert_html,
     );
@@ -623,7 +609,6 @@ fn children_to_tokens(
     parent_type: TagType,
     parent_slots: Option<&mut HashMap<String, Vec<TokenStream>>>,
     global_class: Option<&TokenTree>,
-    view_marker: Option<&str>,
     top_level: bool,
     disable_inert_html: bool,
 ) -> Vec<TokenStream> {
@@ -633,7 +618,6 @@ fn children_to_tokens(
             parent_type,
             parent_slots,
             global_class,
-            view_marker,
             top_level,
             disable_inert_html,
         ) {
@@ -650,7 +634,6 @@ fn children_to_tokens(
                     TagType::Unknown,
                     Some(&mut slots),
                     global_class,
-                    view_marker,
                     top_level,
                     disable_inert_html,
                 )
@@ -673,7 +656,6 @@ fn node_to_tokens(
     parent_type: TagType,
     parent_slots: Option<&mut HashMap<String, Vec<TokenStream>>>,
     global_class: Option<&TokenTree>,
-    view_marker: Option<&str>,
     top_level: bool,
     disable_inert_html: bool,
 ) -> Option<TokenStream> {
@@ -690,7 +672,6 @@ fn node_to_tokens(
             parent_type,
             parent_slots,
             global_class,
-            view_marker,
             disable_inert_html,
         ),
         Node::Block(block) => {
@@ -753,7 +734,6 @@ fn node_to_tokens(
                     parent_type,
                     parent_slots,
                     global_class,
-                    view_marker,
                     disable_inert_html,
                 )
             }
@@ -780,7 +760,6 @@ pub(crate) fn element_to_tokens(
     mut parent_type: TagType,
     parent_slots: Option<&mut HashMap<String, Vec<TokenStream>>>,
     global_class: Option<&TokenTree>,
-    view_marker: Option<&str>,
     disable_inert_html: bool,
 ) -> Option<TokenStream> {
     // attribute sorting:
@@ -1020,7 +999,6 @@ pub(crate) fn element_to_tokens(
                 parent_type,
                 parent_slots,
                 global_class,
-                view_marker,
                 disable_inert_html,
             )
         } else {
@@ -1893,27 +1871,6 @@ fn convert_to_snake_case(name: String) -> String {
         name.to_case(Snake)
     } else {
         name
-    }
-}
-
-pub(crate) fn ident_from_tag_name(tag_name: &NodeName) -> Ident {
-    match tag_name {
-        NodeName::Path(path) => path
-            .path
-            .segments
-            .iter()
-            .next_back()
-            .map(|segment| segment.ident.clone())
-            .expect("element needs to have a name"),
-        NodeName::Block(_) => {
-            let span = tag_name.span();
-            emit_error!(span, "blocks not allowed in tag-name position");
-            Ident::new("", span)
-        }
-        _ => Ident::new(
-            &tag_name.to_string().replace(['-', ':'], "_"),
-            tag_name.span(),
-        ),
     }
 }
 

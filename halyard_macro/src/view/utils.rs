@@ -1,7 +1,39 @@
 use proc_macro2::Ident;
 use quote::format_ident;
-use rstml::node::{KeyedAttribute, NodeName};
+use rstml::node::{CustomNode, KeyedAttribute, NodeElement, NodeName};
 use syn::{spanned::Spanned, ExprPath};
+
+/// Converts a simple literal (string, char, integer or float) to its string representation.
+///
+/// A literal wrapped in a block, like `{"string"}`, is not converted.
+pub fn value_to_string(value: &syn::Expr) -> Option<String> {
+    match &value {
+        syn::Expr::Lit(lit) => match &lit.lit {
+            syn::Lit::Str(s) => Some(s.value()),
+            syn::Lit::Char(c) => Some(c.value().to_string()),
+            syn::Lit::Int(i) => Some(i.base10_digits().to_string()),
+            syn::Lit::Float(f) => Some(f.base10_digits().to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether an element names a component: its tag is a path whose last segment starts with
+/// an ASCII uppercase letter (`<Foo/>`, `<module::Foo/>`).
+pub fn is_component_node(node: &NodeElement<impl CustomNode>) -> bool {
+    match node.name() {
+        NodeName::Path(path) => {
+            path.path.segments.last().is_some_and(|segment| {
+                segment
+                    .ident
+                    .to_string()
+                    .starts_with(|c: char| c.is_ascii_uppercase())
+            })
+        }
+        NodeName::Block(_) | NodeName::Punctuated(_) => false,
+    }
+}
 
 pub fn filter_prefixed_attrs<'a, A>(attrs: A, prefix: &str) -> Vec<Ident>
 where

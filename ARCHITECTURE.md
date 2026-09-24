@@ -229,9 +229,8 @@ for reference: they include large amounts of manual SSR route handling, etc.
 
 ## `cargo-halyard` helpers
 
-`halyard_config` and `halyard_hot_reload` exist to support two different features
-of `cargo-halyard`, namely its configuration and its view-patching/hot-reloading 
-features.
+`halyard_config` exists to support a feature of `cargo-halyard`, namely its
+configuration, which the build tool and the server read alike.
 
 It’s important to say that the main feature `cargo-halyard` remains its ability
 to conveniently tie together different build tooling, compiling your app to

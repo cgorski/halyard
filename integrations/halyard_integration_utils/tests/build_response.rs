@@ -1,6 +1,6 @@
-//! halyard_axum and halyard_actix render every server page through `build_response`: the
+//! halyard_axum renders every server page through `build_response`: the
 //! app's HTML, then the `<script>` tags that carry the page's server data to the client.
-//! These tests render through it as they do, including in situations that used to panic
+//! These tests render through it as it does, including in situations that used to panic
 //! (README, "Project policy": no panics, ever).
 
 use futures::{executor::block_on, stream::once, StreamExt};

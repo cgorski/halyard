@@ -29,13 +29,6 @@ pub mod types {
     };
 }
 
-/* #[cfg(feature = "testing")]
-/// A renderer based on a mock DOM.
-pub mod mock_dom;
-/// A DOM renderer optimized for element creation.
-#[cfg(feature = "sledgehammer")]
-pub mod sledgehammer; */
-
 /// Implements the instructions necessary to render an interface on some platform.
 ///
 /// By default, this is implemented for the Document Object Model (DOM) in a Web

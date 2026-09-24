@@ -114,24 +114,8 @@ pub(crate) fn slot_to_tokens(
             TagType::Unknown,
             Some(&mut slots),
             global_class,
-            None,
             disable_inert_html,
         );
-
-        // TODO view markers for hot-reloading
-        /*
-         cfg_if::cfg_if! {
-            if #[cfg(debug_assertions)] {
-                let marker = format!("<{component_name}/>-children");
-                // For some reason spanning for `.children` breaks, unless `#view_marker`
-                // is also covered by `children.span()`.
-                let view_marker = quote_spanned!(children.span()=> .with_view_marker(#marker));
-            } else {
-                let view_marker = quote! {};
-            }
-        }
-        */
-        let view_marker = quote! {};
 
         if let Some(children) = children {
             let bindables =
@@ -148,7 +132,7 @@ pub(crate) fn slot_to_tokens(
                     .children({
                         #(#clonables)*
 
-                        move |#(#bindables)*| #children #view_marker
+                        move |#(#bindables)*| #children
                     })
                 }
             } else {
@@ -156,7 +140,7 @@ pub(crate) fn slot_to_tokens(
                     .children({
                         #(#clonables)*
 
-                        ::halyard::children::ToChildren::to_children(move || #children #view_marker)
+                        ::halyard::children::ToChildren::to_children(move || #children)
                     })
                 }
             }

@@ -24,7 +24,7 @@ pub struct ConfFile {
 }
 
 /// This struct serves as a convenient place to store details used for configuring Halyard.
-/// It's used in our actix and axum integrations to generate the
+/// It's used in our axum integration to generate the
 /// correct path for WASM, JS, and Websockets, as well as other configuration tasks.
 /// It shares keys with cargo-halyard, to allow for easy interoperability
 #[derive(TypedBuilder, Debug, Clone, serde::Deserialize)]
@@ -475,7 +475,7 @@ impl<'de> serde::Deserialize<'de> for Env {
     }
 }
 
-/// An enum that can be used to define the websocket protocol Halyard uses for hotreloading
+/// An enum that can be used to define the websocket protocol Halyard uses for live reloading
 /// Defaults to `ws`.
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default,

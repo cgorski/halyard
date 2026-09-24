@@ -17,7 +17,7 @@ use web_sys::Element;
 /// ```rust,ignore
 /// use halyard_tachys::html::element::ElementExt;
 ///
-/// let view: HtmlElement<_, _, _, MockDom> = button();
+/// let view = button();
 ///
 /// // add an event listener as part of the static type
 /// // this will be lazily added when the element is built

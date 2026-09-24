@@ -26,7 +26,6 @@ proc-macro2 = { workspace = true, default-features = true }
 quote = { workspace = true, default-features = true }
 syn = { features = ["full"], workspace = true, default-features = true }
 rstml = { workspace = true, default-features = true }
-halyard_hot_reload = { workspace = true }
 halyard_server_fn_macro = { workspace = true }
 convert_case = { workspace = true, default-features = true }
 convert_case_extras = { workspace = true, default-features = true }

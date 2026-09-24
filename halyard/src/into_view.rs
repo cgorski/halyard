@@ -7,7 +7,6 @@ use halyard_tachys::{
         ToTemplate,
     },
 };
-use std::borrow::Cow;
 
 /// A wrapper for any kind of view.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -16,53 +15,18 @@ where
     T: Sized,
 {
     inner: T,
-    #[cfg(debug_assertions)]
-    view_marker: Option<Cow<'static, str>>,
 }
 
 impl<T> View<T> {
     /// Wraps the view.
     pub fn new(inner: T) -> Self {
-        Self {
-            inner,
-            #[cfg(debug_assertions)]
-            view_marker: None,
-        }
+        Self { inner }
     }
 
     /// Unwraps the view, returning the inner type.
     pub fn into_inner(self) -> T {
         self.inner
     }
-
-    /// Adds a view marker, which is used for hot-reloading and debug purposes.
-    #[inline(always)]
-    pub fn with_view_marker(
-        #[allow(unused_mut)] // used in debug
-        mut self,
-        #[allow(unused_variables)] // used in debug
-        view_marker: impl Into<Cow<'static, str>>,
-    ) -> Self {
-        #[cfg(debug_assertions)]
-        {
-            self.view_marker = Some(view_marker.into());
-        }
-        self
-    }
-}
-
-/// Whether hot-reload view markers (`<!--hot-reload|...|open-->`) should be
-/// emitted into server-rendered HTML.
-///
-/// This is decided at **runtime** from `HALYARD_WATCH` (or the legacy
-/// `LEPTOS_WATCH`), which the build tool sets while `watch`ing. Upstream used
-/// `option_env!("LEPTOS_WATCH")`, so a server binary built by plain
-/// `cargo build` and one built by the build tool emitted different HTML.
-#[cfg(debug_assertions)]
-fn hot_reload_markers_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| halyard_config::halyard_env_is_set("WATCH"))
 }
 
 /// A trait that is implemented for types that can be rendered.
@@ -79,11 +43,7 @@ where
     T: Sized + Render + RenderHtml + Send, //+ AddAnyAttr,
 {
     fn into_view(self) -> View<Self> {
-        View {
-            inner: self,
-            #[cfg(debug_assertions)]
-            view_marker: None,
-        }
+        View { inner: self }
     }
 }
 
@@ -122,18 +82,6 @@ impl<T: RenderHtml> RenderHtml for View<T> {
         mark_branches: bool,
         extra_attrs: Vec<AnyAttribute>,
     ) {
-        #[cfg(debug_assertions)]
-        let vm = if hot_reload_markers_enabled() {
-            self.view_marker.to_owned()
-        } else {
-            None
-        };
-
-        #[cfg(debug_assertions)]
-        if let Some(vm) = vm.as_ref() {
-            buf.push_str(&format!("<!--hot-reload|{vm}|open-->"));
-        }
-
         self.inner.to_html_with_buf(
             buf,
             position,
@@ -141,11 +89,6 @@ impl<T: RenderHtml> RenderHtml for View<T> {
             mark_branches,
             extra_attrs,
         );
-
-        #[cfg(debug_assertions)]
-        if let Some(vm) = vm.as_ref() {
-            buf.push_str(&format!("<!--hot-reload|{vm}|close-->"));
-        }
     }
 
     fn to_html_async_with_buf<const OUT_OF_ORDER: bool>(
@@ -158,18 +101,6 @@ impl<T: RenderHtml> RenderHtml for View<T> {
     ) where
         Self: Sized,
     {
-        #[cfg(debug_assertions)]
-        let vm = if hot_reload_markers_enabled() {
-            self.view_marker.to_owned()
-        } else {
-            None
-        };
-
-        #[cfg(debug_assertions)]
-        if let Some(vm) = vm.as_ref() {
-            buf.push_sync(&format!("<!--hot-reload|{vm}|open-->"));
-        }
-
         self.inner.to_html_async_with_buf::<OUT_OF_ORDER>(
             buf,
             position,
@@ -177,11 +108,6 @@ impl<T: RenderHtml> RenderHtml for View<T> {
             mark_branches,
             extra_attrs,
         );
-
-        #[cfg(debug_assertions)]
-        if let Some(vm) = vm.as_ref() {
-            buf.push_sync(&format!("<!--hot-reload|{vm}|close-->"));
-        }
     }
 
     fn hydrate<const FROM_SERVER: bool>(
@@ -203,8 +129,6 @@ impl<T: RenderHtml> RenderHtml for View<T> {
     fn into_owned(self) -> Self::Owned {
         View {
             inner: self.inner.into_owned(),
-            #[cfg(debug_assertions)]
-            view_marker: self.view_marker,
         }
     }
 }
@@ -231,15 +155,8 @@ impl<T: AddAnyAttr> AddAnyAttr for View<T> {
     where
         Self::Output<NewAttr>: RenderHtml,
     {
-        let View {
-            inner,
-            #[cfg(debug_assertions)]
-            view_marker,
-        } = self;
         View {
-            inner: inner.add_any_attr(attr),
-            #[cfg(debug_assertions)]
-            view_marker,
+            inner: self.inner.add_any_attr(attr),
         }
     }
 }
