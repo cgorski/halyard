@@ -23,13 +23,13 @@
 //!     view! {
 //!       <Title
 //!         // reactively sets document.title when `name` changes
-//!         text=move || name.get()
+//!         text=name
 //!         // applies the `formatter` function to the `text` value
 //!         formatter=|text| format!("“{text}” is your name")
 //!       />
 //!       <main>
 //!         <input
-//!           prop:value=move || name.get()
+//!           prop:value=name
 //!           on:input=move |ev| set_name.set(event_target_value(&ev))
 //!         />
 //!       </main>

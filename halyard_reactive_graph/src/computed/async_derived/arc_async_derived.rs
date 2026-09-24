@@ -23,8 +23,8 @@ use crate::{
         ArcTrigger,
     },
     traits::{
-        DefinedAt, IsDisposed, Notify, ReadUntracked, Track, UntrackableGuard,
-        Write,
+        DefinedAt, IsDisposed, Notify, Track, TryReadUntracked,
+        UntrackableGuard, Write,
     },
     transition::AsyncTransition,
 };
@@ -65,9 +65,9 @@ use std::{
 /// let signal2 = RwSignal::new(0);
 /// let derived = ArcAsyncDerived::new(move || async move {
 ///   // reactive values can be tracked anywhere in the `async` block
-///   let value1 = signal1.get();
+///   let value1 = signal1.try_get().unwrap();
 ///   tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-///   let value2 = signal2.get();
+///   let value2 = signal2.try_get().unwrap();
 ///
 ///   value1 + value2
 /// });
@@ -93,17 +93,17 @@ use std::{
 /// - [`.get()`](crate::traits::Get) clones the current value as an `Option<T>`.
 ///   If you call it within an effect, it will cause that effect to subscribe
 ///   to the memo, and to re-run whenever the value of the memo changes.
-///   - [`.get_untracked()`](crate::traits::GetUntracked) clones the value of
+///   - [`.get_untracked()`](crate::traits::TryGetUntracked) clones the value of
 ///     without reactively tracking it.
 /// - [`.read()`](crate::traits::Read) returns a guard that allows accessing the
 ///   value by reference. If you call it within an effect, it will
 ///   cause that effect to subscribe to the memo, and to re-run whenever the
 ///   value changes.
-///   - [`.read_untracked()`](crate::traits::ReadUntracked) gives access to the
+///   - [`.read_untracked()`](crate::traits::TryReadUntracked) gives access to the
 ///     current value without reactively tracking it.
 /// - [`.with()`](crate::traits::With) allows you to reactively access the
 ///   value without cloning by applying a callback function.
-///   - [`.with_untracked()`](crate::traits::WithUntracked) allows you to access
+///   - [`.with_untracked()`](crate::traits::TryWithUntracked) allows you to access
 ///     the value by applying a callback function without reactively
 ///     tracking it.
 /// - [`IntoFuture`](std::future::Future) allows you to create a [`Future`] that resolves
@@ -117,6 +117,20 @@ pub struct ArcAsyncDerived<T> {
     pub(crate) wakers: Arc<RwLock<Vec<Waker>>>,
     pub(crate) inner: Arc<RwLock<ArcAsyncDerivedInner>>,
     pub(crate) loading: Arc<AtomicBool>,
+}
+crate::impl_strong!([T] ArcAsyncDerived<T>);
+
+impl<T> ArcAsyncDerived<T> {
+    /// Returns a weak (arena) handle to the value: `Copy`, and it does not keep the value
+    /// alive (like [`std::sync::Arc::downgrade`]). The reverse is `upgrade` on the weak
+    /// handle.
+    #[track_caller]
+    pub fn downgrade(&self) -> crate::computed::AsyncDerived<T>
+    where
+        crate::computed::AsyncDerived<T>: From<Self>,
+    {
+        self.clone().into()
+    }
 }
 
 /// Takes an async lock from synchronous code.
@@ -649,7 +663,7 @@ impl<T: 'static> ArcAsyncDerived<T> {
     }
 }
 
-impl<T: 'static> ReadUntracked for ArcAsyncDerived<T> {
+impl<T: 'static> TryReadUntracked for ArcAsyncDerived<T> {
     type Value =
         ReadGuard<Option<T>, Mapped<AsyncPlain<SendOption<T>>, Option<T>>>;
 
@@ -710,7 +724,7 @@ impl<T: 'static> Write for ArcAsyncDerived<T> {
         ))
     }
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
         let value = self.value.blocking_write()?;
@@ -806,7 +820,7 @@ impl<T> Subscriber for ArcAsyncDerived<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{GetUntracked, Set, UpdateUntracked};
+    use crate::traits::{Set, TryGetUntracked, Update};
 
     fn loaded(value: u32) -> ArcAsyncDerived<u32> {
         _ = crate::executor::Executor::init_tokio();
@@ -827,7 +841,7 @@ mod tests {
         assert_eq!(derived.inner.read().or_poisoned().version, 0);
 
         derived.inner.write().or_poisoned().version = usize::MAX;
-        derived.try_update_untracked(|value| *value = Some(3));
+        derived.update(|value| *value = Some(3));
         assert_eq!(derived.try_get_untracked(), Some(Some(3)));
         assert_eq!(derived.inner.read().or_poisoned().version, 0);
     }

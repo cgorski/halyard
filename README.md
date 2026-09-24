@@ -140,7 +140,10 @@ not follow Leptos.
   built with `panic = "abort"`); on the server it fails a request. Library code returns
   typed errors (`Result`, `thiserror` enums) or recovers visibly (log, fall back to
   client rendering, render nothing), and uses the strongest types that are practical so
-  the impossible states cannot be written. The inherited code does not meet this yet:
+  the impossible states cannot be written. Reactive handles follow `Rc`/`Weak`: a `Copy`
+  (arena) handle is weak, read with `try_get` (an `Option`) or put in the view as it is;
+  a reference-counted handle is strong, read with `get` (`docs/no-panics.md`, "Design:
+  weak arena handles"). The inherited code does not meet this yet:
   `scripts/panic-ratchet.sh` counts every `unwrap`, `expect`, `panic!`, `unreachable!`,
   `todo!`, unchecked index and unchecked arithmetic per crate, CI fails if a count rises,
   and each crate's lints go to `deny` once its count reaches zero. The hydration and

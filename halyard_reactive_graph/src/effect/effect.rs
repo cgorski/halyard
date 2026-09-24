@@ -52,19 +52,19 @@ use std::{
 /// // ✅ use effects to interact between reactive state and the outside world
 /// Effect::new(move || {
 ///   // on the next “tick” prints "Value: 0" and subscribes to `a`
-///   println!("Value: {}", a.get());
+///   println!("Value: {}", a.try_get().unwrap());
 /// });
 ///
-/// # assert_eq!(a.get(), 0);
+/// # assert_eq!(a.try_get(), Some(0));
 /// a.set(1);
-/// # assert_eq!(a.get(), 1);
+/// # assert_eq!(a.try_get(), Some(1));
 /// // ✅ because it's subscribed to `a`, the effect reruns and prints "Value: 1"
 ///
 /// // ❌ don't use effects to synchronize state within the reactive system
 /// Effect::new(move || {
 ///   // this technically works but can cause unnecessary re-renders
 ///   // and easily lead to problems like infinite loops
-///   b.set(a.get() + 1);
+///   b.set(a.try_get().unwrap() + 1);
 /// });
 /// # }).await;
 /// # });
@@ -225,21 +225,21 @@ impl Effect<LocalStorage> {
     /// let (num, set_num) = signal(0);
     ///
     /// let effect = Effect::watch(
-    ///     move || num.get(),
+    ///     move || num.try_get().unwrap(),
     ///     move |num, prev_num, _| {
     ///         // log::debug!("Number: {}; Prev: {:?}", num, prev_num);
     ///     },
     ///     false,
     /// );
-    /// # assert_eq!(num.get(), 0);
+    /// # assert_eq!(num.try_get(), Some(0));
     ///
     /// set_num.set(1); // > "Number: 1; Prev: Some(0)"
-    /// # assert_eq!(num.get(), 1);
+    /// # assert_eq!(num.try_get(), Some(1));
     ///
     /// effect.stop(); // stop watching
     ///
     /// set_num.set(2); // (nothing happens)
-    /// # assert_eq!(num.get(), 2);
+    /// # assert_eq!(num.try_get(), Some(2));
     /// # }).await;
     /// # });
     /// ```
@@ -258,23 +258,23 @@ impl Effect<LocalStorage> {
     /// let (cb_num, set_cb_num) = signal(0);
     ///
     /// Effect::watch(
-    ///     move || num.get(),
+    ///     move || num.try_get().unwrap(),
     ///     move |num, _, _| {
     ///         // log::debug!("Number: {}; Cb: {}", num, cb_num.get());
     ///     },
     ///     false,
     /// );
     ///
-    /// # assert_eq!(num.get(), 0);
+    /// # assert_eq!(num.try_get(), Some(0));
     /// set_num.set(1); // > "Number: 1; Cb: 0"
-    /// # assert_eq!(num.get(), 1);
+    /// # assert_eq!(num.try_get(), Some(1));
     ///
-    /// # assert_eq!(cb_num.get(), 0);
+    /// # assert_eq!(cb_num.try_get(), Some(0));
     /// set_cb_num.set(1); // (nothing happens)
-    /// # assert_eq!(cb_num.get(), 1);
+    /// # assert_eq!(cb_num.try_get(), Some(1));
     ///
     /// set_num.set(2); // > "Number: 2; Cb: 1"
-    /// # assert_eq!(num.get(), 2);
+    /// # assert_eq!(num.try_get(), Some(2));
     /// # }).await;
     /// # });
     /// ```
@@ -296,16 +296,16 @@ impl Effect<LocalStorage> {
     /// let (num, set_num) = signal(0);
     ///
     /// Effect::watch(
-    ///     move || num.get(),
+    ///     move || num.try_get().unwrap(),
     ///     move |num, prev_num, _| {
     ///         // log::debug!("Number: {}; Prev: {:?}", num, prev_num);
     ///     },
     ///     true,
     /// ); // > "Number: 0; Prev: None"
     ///
-    /// # assert_eq!(num.get(), 0);
+    /// # assert_eq!(num.try_get(), Some(0));
     /// set_num.set(1); // > "Number: 1; Prev: Some(0)"
-    /// # assert_eq!(num.get(), 1);
+    /// # assert_eq!(num.try_get(), Some(1));
     /// # }).await;
     /// # });
     /// ```

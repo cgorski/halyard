@@ -113,17 +113,17 @@ impl Observer {
 /// let (b, set_b) = signal(0);
 /// let c = Memo::new(move |_| {
 ///     // this memo will *only* update when `a` changes
-///     a.get() + untrack(move || b.get())
+///     a.try_get().unwrap() + untrack(move || b.try_get().unwrap())
 /// });
 ///
-/// assert_eq!(c.get(), 0);
+/// assert_eq!(c.try_get(), Some(0));
 /// set_a.set(1);
-/// assert_eq!(c.get(), 1);
+/// assert_eq!(c.try_get(), Some(1));
 /// set_b.set(1);
 /// // hasn't updated, because we untracked before reading b
-/// assert_eq!(c.get(), 1);
+/// assert_eq!(c.try_get(), Some(1));
 /// set_a.set(2);
-/// assert_eq!(c.get(), 3);
+/// assert_eq!(c.try_get(), Some(3));
 /// # });
 /// ```
 #[track_caller]

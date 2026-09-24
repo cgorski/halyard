@@ -5,18 +5,25 @@
 //! The callback types implement [`Copy`], so they can easily be moved into and out of other closures, just like signals.
 //!
 //! # Types
-//! This modules implements 2 callback types:
-//! - [`Callback`](crate::callback::Callback)
-//! - [`UnsyncCallback`](crate::callback::UnsyncCallback)
+//! This modules implements 4 callback types:
+//! - [`Callback`](crate::callback::Callback) and
+//!   [`UnsyncCallback`](crate::callback::UnsyncCallback): `Copy` arena (weak) handles, like
+//!   signals. [`try_run`](Callable::try_run) gives `None` once the callback is gone;
+//!   [`run`](Run::run) exists only for callbacks that return `()`, and does nothing
+//!   (reported once) once the callback is gone.
+//! - [`ArcCallback`](crate::callback::ArcCallback) and
+//!   [`ArcUnsyncCallback`](crate::callback::ArcUnsyncCallback): reference-counted (strong)
+//!   callbacks, which keep their function alive: [`run`](Run::run) is total.
 //!
-//! Use `SyncCallback` if the function is not `Sync` and `Send`.
+//! Use `UnsyncCallback` if the function is not `Sync` and `Send`.
 
 use crate::{
+    gone::{report_gone, Attempt},
     owner::{LocalStorage, StoredValue},
-    traits::{Dispose, GetValue, WithValue},
+    traits::{DefinedAt, Dispose, TryGetValue, TryWithValue},
     IntoReactiveValue,
 };
-use std::{fmt, rc::Rc, sync::Arc};
+use std::{fmt, panic::Location, rc::Rc, sync::Arc};
 
 /// A wrapper trait for calling callbacks.
 ///
@@ -27,10 +34,14 @@ pub trait Callable<In: 'static, Out: 'static = ()> {
     ///
     /// Returns None if the callback has been disposed
     fn try_run(&self, input: In) -> Option<Out>;
-    /// calls the callback with the specified argument.
-    ///
-    /// # Panics
-    /// Panics if you try to run a callback that has been disposed
+}
+
+/// Calls a callback that always runs or has nothing to return: a strong callback
+/// ([`ArcCallback`], [`ArcUnsyncCallback`]), or a weak one ([`Callback`], [`UnsyncCallback`])
+/// that returns `()`, which does nothing (reported once) when it is gone.
+pub trait Run<In: 'static, Out: 'static = ()> {
+    /// Calls the callback with the specified argument.
+    #[track_caller]
     fn run(&self, input: In) -> Out;
 }
 
@@ -42,7 +53,7 @@ pub trait Callable<In: 'static, Out: 'static = ()> {
 /// let _: UnsyncCallback<()> = UnsyncCallback::new(|_| {});
 /// let _: UnsyncCallback<(i32, i32)> = (|_x: i32, _y: i32| {}).into();
 /// let cb: UnsyncCallback<i32, String> = UnsyncCallback::new(|x: i32| x.to_string());
-/// assert_eq!(cb.run(42), "42".to_string());
+/// assert_eq!(cb.try_run(42), Some("42".to_string()));
 /// ```
 pub struct UnsyncCallback<In: 'static, Out: 'static = ()>(
     StoredValue<Rc<dyn Fn(In) -> Out>, LocalStorage>,
@@ -99,11 +110,80 @@ impl<In: 'static, Out: 'static> Callable<In, Out> for UnsyncCallback<In, Out> {
         let fun = self.0.try_get_value()?;
         Some(fun(input))
     }
+}
 
+impl<In: 'static> Run<In> for UnsyncCallback<In> {
     #[track_caller]
+    fn run(&self, input: In) {
+        if self.try_run(input).is_none() {
+            report_gone(
+                Attempt::Write,
+                "UnsyncCallback",
+                self.0.defined_at(),
+                Location::caller(),
+            );
+        }
+    }
+}
+
+impl<In: 'static, Out: 'static> UnsyncCallback<In, Out> {
+    /// Returns a strong (reference-counted) callback, which keeps the function alive, or
+    /// `None` if it is gone (like [`std::rc::Weak::upgrade`]). The reverse, a downgrade, is
+    /// `From<ArcUnsyncCallback>`.
+    pub fn upgrade(&self) -> Option<ArcUnsyncCallback<In, Out>> {
+        self.0.try_get_value().map(ArcUnsyncCallback)
+    }
+}
+
+/// A reference-counted callback that is not required to be [`Send`] or [`Sync`]. It keeps
+/// its function alive, so [`run`](Run::run) is total.
+///
+/// ```
+/// # use halyard_reactive_graph::callback::*;
+/// let cb = ArcUnsyncCallback::new(|x: i32| x.to_string());
+/// assert_eq!(cb.run(42), "42".to_string());
+/// ```
+pub struct ArcUnsyncCallback<In: 'static, Out: 'static = ()>(
+    Rc<dyn Fn(In) -> Out>,
+);
+
+impl<In, Out> ArcUnsyncCallback<In, Out> {
+    /// Creates a new callback from the given function.
+    pub fn new(f: impl Fn(In) -> Out + 'static) -> Self {
+        Self(Rc::new(f))
+    }
+}
+
+impl<In, Out> Clone for ArcUnsyncCallback<In, Out> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
+
+impl<In, Out> fmt::Debug for ArcUnsyncCallback<In, Out> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        fmt.write_str("ArcUnsyncCallback")
+    }
+}
+
+impl<In: 'static, Out: 'static> Callable<In, Out>
+    for ArcUnsyncCallback<In, Out>
+{
+    fn try_run(&self, input: In) -> Option<Out> {
+        Some((self.0)(input))
+    }
+}
+
+impl<In: 'static, Out: 'static> Run<In, Out> for ArcUnsyncCallback<In, Out> {
     fn run(&self, input: In) -> Out {
-        let fun = self.0.get_value();
-        fun(input)
+        (self.0)(input)
+    }
+}
+
+impl<In, Out> From<ArcUnsyncCallback<In, Out>> for UnsyncCallback<In, Out> {
+    #[track_caller]
+    fn from(value: ArcUnsyncCallback<In, Out>) -> Self {
+        Self(StoredValue::new_local(value.0))
     }
 }
 
@@ -148,7 +228,7 @@ impl_unsync_callable_from_fn!(
 /// let _: Callback<()> = Callback::new(|_| {});
 /// let _: Callback<(i32, i32)> = (|_x: i32, _y: i32| {}).into();
 /// let cb: Callback<i32, String> = Callback::new(|x: i32| x.to_string());
-/// assert_eq!(cb.run(42), "42".to_string());
+/// assert_eq!(cb.try_run(42), Some("42".to_string()));
 /// ```
 pub struct Callback<In, Out = ()>(
     StoredValue<Arc<dyn Fn(In) -> Out + Send + Sync>>,
@@ -169,11 +249,78 @@ impl<In, Out> Callable<In, Out> for Callback<In, Out> {
         let fun = self.0.try_get_value()?;
         Some(fun(input))
     }
+}
 
+impl<In: 'static> Run<In> for Callback<In> {
     #[track_caller]
+    fn run(&self, input: In) {
+        if self.try_run(input).is_none() {
+            report_gone(
+                Attempt::Write,
+                "Callback",
+                self.0.defined_at(),
+                Location::caller(),
+            );
+        }
+    }
+}
+
+impl<In: 'static, Out: 'static> Callback<In, Out> {
+    /// Returns a strong (reference-counted) callback, which keeps the function alive, or
+    /// `None` if it is gone (like [`std::sync::Weak::upgrade`]). The reverse, a downgrade,
+    /// is `From<ArcCallback>`.
+    pub fn upgrade(&self) -> Option<ArcCallback<In, Out>> {
+        self.0.try_get_value().map(ArcCallback)
+    }
+}
+
+/// A reference-counted callback that is [`Send`] + [`Sync`]. It keeps its function alive,
+/// so [`run`](Run::run) is total.
+///
+/// ```
+/// # use halyard_reactive_graph::callback::*;
+/// let cb = ArcCallback::new(|x: i32| x.to_string());
+/// assert_eq!(cb.run(42), "42".to_string());
+/// ```
+pub struct ArcCallback<In: 'static, Out: 'static = ()>(
+    Arc<dyn Fn(In) -> Out + Send + Sync>,
+);
+
+impl<In, Out> ArcCallback<In, Out> {
+    /// Creates a new callback from the given function.
+    pub fn new(f: impl Fn(In) -> Out + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+}
+
+impl<In, Out> Clone for ArcCallback<In, Out> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<In, Out> fmt::Debug for ArcCallback<In, Out> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        fmt.write_str("ArcCallback")
+    }
+}
+
+impl<In: 'static, Out: 'static> Callable<In, Out> for ArcCallback<In, Out> {
+    fn try_run(&self, input: In) -> Option<Out> {
+        Some((self.0)(input))
+    }
+}
+
+impl<In: 'static, Out: 'static> Run<In, Out> for ArcCallback<In, Out> {
     fn run(&self, input: In) -> Out {
-        let fun = self.0.get_value();
-        fun(input)
+        (self.0)(input)
+    }
+}
+
+impl<In, Out> From<ArcCallback<In, Out>> for Callback<In, Out> {
+    #[track_caller]
+    fn from(value: ArcCallback<In, Out>) -> Self {
+        Self(StoredValue::new(value.0))
     }
 }
 

@@ -6,7 +6,7 @@ use super::{
 use crate::{
     graph::SubscriberSet,
     prelude::{IsDisposed, Notify},
-    traits::{DefinedAt, IntoInner, ReadUntracked, UntrackableGuard, Write},
+    traits::{DefinedAt, IntoInner, TryReadUntracked, UntrackableGuard, Write},
 };
 use core::fmt::{Debug, Formatter, Result};
 use std::{
@@ -30,17 +30,17 @@ use std::{
 /// - [`.get()`](crate::traits::Get) clones the current value of the signal.
 ///   If you call it within an effect, it will cause that effect to subscribe
 ///   to the signal, and to re-run whenever the value of the signal changes.
-///   - [`.get_untracked()`](crate::traits::GetUntracked) clones the value of
+///   - [`.get_untracked()`](crate::traits::TryGetUntracked) clones the value of
 ///     the signal without reactively tracking it.
 /// - [`.read()`](crate::traits::Read) returns a guard that allows accessing the
 ///   value of the signal by reference. If you call it within an effect, it will
 ///   cause that effect to subscribe to the signal, and to re-run whenever the
 ///   value of the signal changes.
-///   - [`.read_untracked()`](crate::traits::ReadUntracked) gives access to the
+///   - [`.read_untracked()`](crate::traits::TryReadUntracked) gives access to the
 ///     current value of the signal without reactively tracking it.
 /// - [`.with()`](crate::traits::With) allows you to reactively access the signal’s
 ///   value without cloning by applying a callback function.
-///   - [`.with_untracked()`](crate::traits::WithUntracked) allows you to access
+///   - [`.with_untracked()`](crate::traits::TryWithUntracked) allows you to access
 ///     the signal’s value by applying a callback function without reactively
 ///     tracking it.
 /// - [`.to_stream()`](crate::traits::ToStream) converts the signal to an `async`
@@ -102,6 +102,20 @@ pub struct ArcRwSignal<T> {
     pub(crate) inner: Arc<RwLock<SubscriberSet>>,
     /// The writer turn: writes to the signal serialize on it (see `commit.rs`).
     pub(crate) turn: Arc<Mutex<()>>,
+}
+crate::impl_strong!([T] ArcRwSignal<T>);
+
+impl<T> ArcRwSignal<T> {
+    /// Returns a weak (arena) handle to the value: `Copy`, and it does not keep the value
+    /// alive (like [`std::sync::Arc::downgrade`]). The reverse is `upgrade` on the weak
+    /// handle.
+    #[track_caller]
+    pub fn downgrade(&self) -> crate::signal::RwSignal<T>
+    where
+        crate::signal::RwSignal<T>: From<Self>,
+    {
+        self.clone().into()
+    }
 }
 
 impl<T> Clone for ArcRwSignal<T> {
@@ -273,7 +287,7 @@ impl<T> AsSubscriberSet for ArcRwSignal<T> {
     }
 }
 
-impl<T: 'static> ReadUntracked for ArcRwSignal<T> {
+impl<T: 'static> TryReadUntracked for ArcRwSignal<T> {
     type Value = ReadGuard<T, Plain<T>>;
 
     fn try_read_untracked(&self) -> Option<Self::Value> {
@@ -305,7 +319,7 @@ impl<T: 'static> Write for ArcRwSignal<T> {
     /// thread is using it (the write is inside the signal's own `with` or `update`, or a
     /// guard of it is alive), which would never end. That is logged once.
     #[allow(refining_impl_trait)]
-    fn try_write_untracked(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
+    fn try_write_in_place(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
         self.writer().in_place_guard()
     }
 

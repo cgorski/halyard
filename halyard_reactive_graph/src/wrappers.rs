@@ -15,9 +15,9 @@ pub mod read {
             ReadSignal, RwSignal,
         },
         traits::{
-            DefinedAt, Dispose, Get, Read, ReadUntracked, ReadValue, Track,
+            DefinedAt, Dispose, Get, IsDisposed, Track, TryGet, TryRead,
+            TryReadUntracked, TryReadValue,
         },
-        unwrap_signal,
     };
     use send_wrapper::SendWrapper;
     use std::{
@@ -39,6 +39,9 @@ pub mod read {
         Memo(ArcMemo<T, S>),
         /// A derived signal.
         DerivedSignal(Arc<dyn Fn() -> T + Send + Sync>),
+        /// A derived signal that may have no value ([`Signal::derive_try`]): a closure
+        /// over weak handles. Only in a [`Signal`], never in an [`ArcSignal`].
+        DerivedTry(Arc<dyn Fn() -> Option<T> + Send + Sync>),
         /// A static, stored value.
         Stored(ArcStoredValue<T>),
     }
@@ -52,6 +55,7 @@ pub mod read {
                 Self::ReadSignal(arg0) => Self::ReadSignal(arg0.clone()),
                 Self::Memo(arg0) => Self::Memo(arg0.clone()),
                 Self::DerivedSignal(arg0) => Self::DerivedSignal(arg0.clone()),
+                Self::DerivedTry(arg0) => Self::DerivedTry(arg0.clone()),
                 Self::Stored(arg0) => Self::Stored(arg0.clone()),
             }
         }
@@ -67,6 +71,7 @@ pub mod read {
                     f.debug_tuple("ReadSignal").field(arg0).finish()
                 }
                 Self::Memo(arg0) => f.debug_tuple("Memo").field(arg0).finish(),
+                Self::DerivedTry(_) => f.debug_tuple("DerivedTry").finish(),
                 Self::DerivedSignal(_) => {
                     f.debug_tuple("DerivedSignal").finish()
                 }
@@ -86,6 +91,9 @@ pub mod read {
                 (Self::ReadSignal(l0), Self::ReadSignal(r0)) => l0 == r0,
                 (Self::Memo(l0), Self::Memo(r0)) => l0 == r0,
                 (Self::DerivedSignal(l0), Self::DerivedSignal(r0)) => {
+                    std::ptr::eq(l0, r0)
+                }
+                (Self::DerivedTry(l0), Self::DerivedTry(r0)) => {
                     std::ptr::eq(l0, r0)
                 }
                 _ => false,
@@ -126,6 +134,8 @@ pub mod read {
         defined_at: &'static Location<'static>,
         inner: SignalTypes<T, S>,
     }
+
+    crate::impl_strong!([T, S] ArcSignal<T, S> where [S: Storage<T>]);
 
     impl<T, S> Clone for ArcSignal<T, S>
     where
@@ -226,14 +236,25 @@ pub mod read {
         /// Wraps a derived signal. Works like [`Signal::derive`] but uses [`LocalStorage`].
         #[track_caller]
         pub fn derive_local(derived_signal: impl Fn() -> T + 'static) -> Self {
-            Signal::derive_local(derived_signal).into()
+            let derived_signal = SendWrapper::new(derived_signal);
+            Self {
+                inner: SignalTypes::DerivedSignal(Arc::new(move || {
+                    derived_signal()
+                })),
+                #[cfg(any(debug_assertions, halyard_debuginfo))]
+                defined_at: std::panic::Location::caller(),
+            }
         }
 
         /// Moves a static, nonreactive value into a signal, backed by [`ArcStoredValue`].
         /// Works like [`Signal::stored`] but uses [`LocalStorage`].
         #[track_caller]
         pub fn stored_local(value: T) -> Self {
-            Signal::stored_local(value).into()
+            Self {
+                inner: SignalTypes::Stored(ArcStoredValue::new(value)),
+                #[cfg(any(debug_assertions, halyard_debuginfo))]
+                defined_at: std::panic::Location::caller(),
+            }
         }
     }
 
@@ -257,39 +278,11 @@ pub mod read {
         }
     }
 
-    impl<T, S> From<ReadSignal<T, S>> for ArcSignal<T, S>
-    where
-        S: Storage<ArcReadSignal<T>> + Storage<T>,
-    {
-        #[track_caller]
-        fn from(value: ReadSignal<T, S>) -> Self {
-            Self {
-                inner: SignalTypes::ReadSignal(value.into()),
-                #[cfg(any(debug_assertions, halyard_debuginfo))]
-                defined_at: std::panic::Location::caller(),
-            }
-        }
-    }
-
     impl<T: Send + Sync> From<ArcRwSignal<T>> for ArcSignal<T, SyncStorage> {
         #[track_caller]
         fn from(value: ArcRwSignal<T>) -> Self {
             Self {
                 inner: SignalTypes::ReadSignal(value.read_only()),
-                #[cfg(any(debug_assertions, halyard_debuginfo))]
-                defined_at: std::panic::Location::caller(),
-            }
-        }
-    }
-
-    impl<T, S> From<RwSignal<T, S>> for ArcSignal<T, S>
-    where
-        S: Storage<ArcRwSignal<T>> + Storage<ArcReadSignal<T>> + Storage<T>,
-    {
-        #[track_caller]
-        fn from(value: RwSignal<T, S>) -> Self {
-            Self {
-                inner: SignalTypes::ReadSignal(value.read_only().into()),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -304,20 +297,6 @@ pub mod read {
         fn from(value: ArcMemo<T, S>) -> Self {
             Self {
                 inner: SignalTypes::Memo(value),
-                #[cfg(any(debug_assertions, halyard_debuginfo))]
-                defined_at: std::panic::Location::caller(),
-            }
-        }
-    }
-
-    impl<T, S> From<Memo<T, S>> for ArcSignal<T, S>
-    where
-        S: Storage<ArcMemo<T, S>> + Storage<T>,
-    {
-        #[track_caller]
-        fn from(value: Memo<T, S>) -> Self {
-            Self {
-                inner: SignalTypes::Memo(value.into()),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -356,6 +335,16 @@ pub mod read {
         }
     }
 
+    impl<T, S> IsDisposed for ArcSignal<T, S>
+    where
+        S: Storage<T>,
+    {
+        /// A strong handle keeps its value alive.
+        fn is_disposed(&self) -> bool {
+            false
+        }
+    }
+
     impl<T, S> Track for ArcSignal<T, S>
     where
         S: Storage<T>,
@@ -371,13 +360,16 @@ pub mod read {
                 SignalTypes::DerivedSignal(i) => {
                     i();
                 }
+                SignalTypes::DerivedTry(i) => {
+                    _ = i();
+                }
                 // Doesn't change.
                 SignalTypes::Stored(_) => {}
             }
         }
     }
 
-    impl<T, S> ReadUntracked for ArcSignal<T, S>
+    impl<T, S> TryReadUntracked for ArcSignal<T, S>
     where
         S: Storage<T>,
     {
@@ -393,6 +385,9 @@ pub mod read {
                 }
                 SignalTypes::DerivedSignal(i) => {
                     Some(SignalReadGuard::Owned(untrack(|| i())))
+                }
+                SignalTypes::DerivedTry(i) => {
+                    untrack(|| i()).map(SignalReadGuard::Owned)
                 }
                 SignalTypes::Stored(i) => {
                     i.try_read_value().map(SignalReadGuard::Read)
@@ -414,6 +409,9 @@ pub mod read {
                     }
                     SignalTypes::DerivedSignal(i) => {
                         Some(SignalReadGuard::Owned(i()))
+                    }
+                    SignalTypes::DerivedTry(i) => {
+                        i().map(SignalReadGuard::Owned)
                     }
                     SignalTypes::Stored(i) => {
                         i.try_read_value().map(SignalReadGuard::Read)
@@ -457,6 +455,8 @@ pub mod read {
         defined_at: &'static Location<'static>,
         inner: ArenaItem<SignalTypes<T, S>, S>,
     }
+
+    crate::impl_weak!([T, S] Signal<T, S> where [S: Storage<T>]);
 
     impl<T, S> Dispose for Signal<T, S>
     where
@@ -539,13 +539,16 @@ pub mod read {
                 SignalTypes::DerivedSignal(i) => {
                     i();
                 }
+                SignalTypes::DerivedTry(i) => {
+                    _ = i();
+                }
                 // Doesn't change.
                 SignalTypes::Stored(_) => {}
             }
         }
     }
 
-    impl<T, S> ReadUntracked for Signal<T, S>
+    impl<T, S> TryReadUntracked for Signal<T, S>
     where
         T: 'static,
         S: Storage<SignalTypes<T, S>> + Storage<T>,
@@ -567,6 +570,9 @@ pub mod read {
                         }
                         SignalTypes::DerivedSignal(i) => {
                             Some(SignalReadGuard::Owned(untrack(|| i())))
+                        }
+                        SignalTypes::DerivedTry(i) => {
+                            untrack(|| i()).map(SignalReadGuard::Owned)
                         }
                         SignalTypes::Stored(i) => {
                             i.try_read_value().map(SignalReadGuard::Read)
@@ -594,6 +600,9 @@ pub mod read {
                             }
                             SignalTypes::DerivedSignal(i) => {
                                 Some(SignalReadGuard::Owned(i()))
+                            }
+                            SignalTypes::DerivedTry(i) => {
+                                i().map(SignalReadGuard::Owned)
                             }
                             SignalTypes::Stored(i) => {
                                 i.try_read_value().map(SignalReadGuard::Read)
@@ -631,11 +640,11 @@ pub mod read {
         /// # use halyard_reactive_graph::wrappers::read::Signal;
         /// # use halyard_reactive_graph::prelude::*;
         /// let (count, set_count) = signal(2);
-        /// let double_count = Signal::derive(move || count.get() * 2);
+        /// let double_count = Signal::derive_try(move || Some(count.try_get()? * 2));
         ///
         /// // this function takes any kind of wrapped signal
         /// fn above_3(arg: &Signal<i32>) -> bool {
-        ///     arg.get() > 3
+        ///     arg.try_get().unwrap() > 3
         /// }
         ///
         /// assert_eq!(above_3(&count.into()), false);
@@ -656,6 +665,43 @@ pub mod read {
 
             Self {
                 inner: ArenaItem::new_with_storage(SignalTypes::DerivedSignal(
+                    Arc::new(derived_signal),
+                )),
+                #[cfg(any(debug_assertions, halyard_debuginfo))]
+                defined_at: std::panic::Location::caller(),
+            }
+        }
+
+        /// Wraps a derived signal that may have no value: a computation over weak handles,
+        /// with `?` on their `try_*` reads. While the closure gives `None`, the signal has
+        /// no value (reads give `None`, and it renders nothing).
+        /// ```rust
+        /// # use halyard_reactive_graph::signal::*; let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+        /// # use halyard_reactive_graph::wrappers::read::Signal;
+        /// # use halyard_reactive_graph::prelude::*;
+        /// let a = RwSignal::new(1);
+        /// let b = RwSignal::new(2);
+        /// let sum = Signal::derive_try(move || Some(a.try_get()? + b.try_get()?));
+        /// assert_eq!(sum.try_get(), Some(3));
+        /// ```
+        ///
+        /// A signal made this way has no strong form ([`upgrade`](Signal::upgrade) gives
+        /// `None`).
+        #[track_caller]
+        pub fn derive_try(
+            derived_signal: impl Fn() -> Option<T> + Send + Sync + 'static,
+        ) -> Self {
+            #[cfg(feature = "tracing")]
+            let span = ::tracing::Span::current();
+
+            let derived_signal = move || {
+                #[cfg(feature = "tracing")]
+                let _guard = span.enter();
+                derived_signal()
+            };
+
+            Self {
+                inner: ArenaItem::new_with_storage(SignalTypes::DerivedTry(
                     Arc::new(derived_signal),
                 )),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
@@ -697,6 +743,31 @@ pub mod read {
                 inner: ArenaItem::new_local(SignalTypes::DerivedSignal(
                     Arc::new(derived_signal),
                 )),
+                #[cfg(any(debug_assertions, halyard_debuginfo))]
+                defined_at: std::panic::Location::caller(),
+            }
+        }
+
+        /// Wraps a derived signal that may have no value. Works like [`Signal::derive_try`]
+        /// but uses [`LocalStorage`].
+        #[track_caller]
+        pub fn derive_try_local(
+            derived_signal: impl Fn() -> Option<T> + 'static,
+        ) -> Self {
+            let derived_signal = SendWrapper::new(derived_signal);
+            #[cfg(feature = "tracing")]
+            let span = ::tracing::Span::current();
+
+            let derived_signal = move || {
+                #[cfg(feature = "tracing")]
+                let _guard = span.enter();
+                derived_signal()
+            };
+
+            Self {
+                inner: ArenaItem::new_local(SignalTypes::DerivedTry(Arc::new(
+                    derived_signal,
+                ))),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -789,20 +860,30 @@ pub mod read {
         }
     }
 
-    impl<T, S> From<Signal<T, S>> for ArcSignal<T, S>
+    impl<T, S> Signal<T, S>
     where
         S: Storage<SignalTypes<T, S>> + Storage<T>,
     {
+        /// Returns a strong (reference-counted) handle to the signal, which keeps it alive,
+        /// or `None` if its value is gone (like [`std::sync::Weak::upgrade`]), or if it is
+        /// derived with [`Signal::derive_try`] (a closure over weak handles has no strong
+        /// form). The reverse, a downgrade, is `From<ArcSignal>`.
         #[track_caller]
-        fn from(value: Signal<T, S>) -> Self {
-            ArcSignal {
+        pub fn upgrade(&self) -> Option<ArcSignal<T, S>> {
+            let inner = self.inner.try_get_value()?;
+            let fallible = match &inner {
+                SignalTypes::DerivedTry(_) => true,
+                SignalTypes::Memo(memo) => memo.inner.is_fallible(),
+                _ => false,
+            };
+            if fallible {
+                return None;
+            }
+            Some(ArcSignal {
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: Location::caller(),
-                inner: value
-                    .inner
-                    .try_get_value()
-                    .unwrap_or_else(unwrap_signal!(value)),
-            }
+                inner,
+            })
         }
     }
 
@@ -812,8 +893,12 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: ReadSignal<T>) -> Self {
+            // a signal made from a gone one is gone too
+            let Some(inner) = value.upgrade() else {
+                return Self::disposed();
+            };
             Self {
-                inner: ArenaItem::new(SignalTypes::ReadSignal(value.into())),
+                inner: ArenaItem::new(SignalTypes::ReadSignal(inner)),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -826,10 +911,12 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: ReadSignal<T, LocalStorage>) -> Self {
+            // a signal made from a gone one is gone too
+            let Some(inner) = value.upgrade() else {
+                return Self::disposed();
+            };
             Self {
-                inner: ArenaItem::new_local(SignalTypes::ReadSignal(
-                    value.into(),
-                )),
+                inner: ArenaItem::new_local(SignalTypes::ReadSignal(inner)),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -870,10 +957,13 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: RwSignal<T>) -> Self {
+            // a signal made from a gone one is gone too
+            let Some(inner) = value.upgrade().map(|signal| signal.read_only())
+            else {
+                return Self::disposed();
+            };
             Self {
-                inner: ArenaItem::new(SignalTypes::ReadSignal(
-                    value.read_only().into(),
-                )),
+                inner: ArenaItem::new(SignalTypes::ReadSignal(inner)),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -908,10 +998,13 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: RwSignal<T, LocalStorage>) -> Self {
+            // a signal made from a gone one is gone too
+            let Some(inner) = value.upgrade().map(|signal| signal.read_only())
+            else {
+                return Self::disposed();
+            };
             Self {
-                inner: ArenaItem::new_local(SignalTypes::ReadSignal(
-                    value.read_only().into(),
-                )),
+                inner: ArenaItem::new_local(SignalTypes::ReadSignal(inner)),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -966,8 +1059,12 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: Memo<T>) -> Self {
+            // a signal made from a gone one is gone too
+            let Some(inner) = value.upgrade_inner() else {
+                return Self::disposed();
+            };
             Self {
-                inner: ArenaItem::new(SignalTypes::Memo(value.into())),
+                inner: ArenaItem::new(SignalTypes::Memo(inner)),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -980,8 +1077,12 @@ pub mod read {
     {
         #[track_caller]
         fn from(value: Memo<T, LocalStorage>) -> Self {
+            // a signal made from a gone one is gone too
+            let Some(inner) = value.upgrade_inner() else {
+                return Self::disposed();
+            };
             Self {
-                inner: ArenaItem::new_local(SignalTypes::Memo(value.into())),
+                inner: ArenaItem::new_local(SignalTypes::Memo(inner)),
                 #[cfg(any(debug_assertions, halyard_debuginfo))]
                 defined_at: std::panic::Location::caller(),
             }
@@ -1421,15 +1522,15 @@ pub mod read {
     /// # use halyard_reactive_graph::computed::Memo;
     /// # use halyard_reactive_graph::prelude::*;
     /// let (count, set_count) = signal(2);
-    /// let double_count = MaybeSignal::derive(move || count.get() * 2);
-    /// let memoized_double_count = Memo::new(move |_| count.get() * 2);
+    /// let double_count = MaybeSignal::derive(move || count.try_get().unwrap() * 2);
+    /// let memoized_double_count = Memo::new_try(move |_| Some(count.try_get()? * 2));
     /// let static_value = 5;
     ///
     /// // this function takes either a reactive or non-reactive value
     /// fn above_3(arg: &MaybeSignal<i32>) -> bool {
     ///     // ✅ calling the signal clones and returns the value
     ///     //    it is a shorthand for arg.get()
-    ///     arg.get() > 3
+    ///     arg.try_get().unwrap() > 3
     /// }
     ///
     /// assert_eq!(above_3(&static_value.into()), true);
@@ -1507,7 +1608,7 @@ pub mod read {
     }
 
     #[allow(deprecated)]
-    impl<T, S> ReadUntracked for MaybeSignal<T, S>
+    impl<T, S> TryReadUntracked for MaybeSignal<T, S>
     where
         T: Clone,
         S: Storage<SignalTypes<T, S>> + Storage<T>,
@@ -1714,15 +1815,15 @@ pub mod read {
     /// # use halyard_reactive_graph::prelude::*;
     /// let (count, set_count) = signal(Some(2));
     /// let double = |n| n * 2;
-    /// let double_count = MaybeProp::derive(move || count.get().map(double));
-    /// let memoized_double_count = Memo::new(move |_| count.get().map(double));
+    /// let double_count = MaybeProp::derive(move || count.try_get().unwrap().map(double));
+    /// let memoized_double_count = Memo::new_try(move |_| Some(count.try_get()?.map(double)));
     /// let static_value = 5;
     ///
     /// // this function takes either a reactive or non-reactive value
     /// fn above_3(arg: &MaybeProp<i32>) -> bool {
     ///     // ✅ calling the signal clones and returns the value
     ///     //    it is a shorthand for arg.get()q
-    ///     arg.get().map(|arg| arg > 3).unwrap_or(false)
+    ///     arg.try_get().unwrap().map(|arg| arg > 3).unwrap_or(false)
     /// }
     ///
     /// assert_eq!(above_3(&None::<i32>.into()), false);
@@ -1737,6 +1838,8 @@ pub mod read {
     )
     where
         S: Storage<Option<T>> + Storage<SignalTypes<Option<T>, S>>;
+
+    crate::impl_weak!([T, S] MaybeProp<T, S> where [S: Storage<Option<T>> + Storage<SignalTypes<Option<T>, S>>]);
 
     impl<T, S> Clone for MaybeProp<T, S>
     where
@@ -1783,7 +1886,7 @@ pub mod read {
         }
     }
 
-    impl<T, S> ReadUntracked for MaybeProp<T, S>
+    impl<T, S> TryReadUntracked for MaybeProp<T, S>
     where
         S: Storage<Option<T>> + Storage<SignalTypes<Option<T>, S>>,
     {
@@ -2198,9 +2301,9 @@ pub mod write {
     /// }
     ///
     /// set_to_4(&set_count.into());
-    /// assert_eq!(count.get(), 4);
+    /// assert_eq!(count.try_get(), Some(4));
     /// set_to_4(&set_double_input);
-    /// assert_eq!(count.get(), 8);
+    /// assert_eq!(count.try_get(), Some(8));
     /// ```
     #[derive(Debug, PartialEq, Eq)]
     pub struct SignalSetter<T, S = SyncStorage>

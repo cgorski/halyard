@@ -5,9 +5,8 @@ use super::{
 use crate::{
     signal::guards::{Plain, ReadGuard, UntrackedWriteGuard},
     traits::{
-        DefinedAt, Dispose, IntoInner, IsDisposed, ReadValue, WriteValue,
+        DefinedAt, Dispose, IntoInner, IsDisposed, TryReadValue, WriteValue,
     },
-    unwrap_signal,
 };
 use std::{
     fmt::{Debug, Formatter},
@@ -25,7 +24,7 @@ use std::{
 ///
 /// ## Re-entry
 ///
-/// [`with_value`](crate::traits::WithValue::with_value) and
+/// [`with_value`](crate::traits::TryWithValue::with_value) and
 /// [`update_value`](crate::traits::UpdateValue::update_value) run their closure on the
 /// borrowed value. From inside that closure, this same stored value cannot be replaced or
 /// updated (the change is refused: `try_set_value` hands the value back, `try_update_value`
@@ -39,6 +38,19 @@ pub struct StoredValue<T, S = SyncStorage> {
     value: ArenaItem<ArcStoredValue<T>, S>,
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     defined_at: &'static Location<'static>,
+}
+crate::impl_weak!([T, S] StoredValue<T, S>);
+
+impl<T, S> StoredValue<T, S> {
+    /// A handle whose value is gone (what an accessor of a gone handle returns).
+    #[track_caller]
+    pub(crate) fn disposed() -> Self {
+        Self {
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at: Location::caller(),
+            value: ArenaItem::disposed(),
+        }
+    }
 }
 
 impl<T, S> Copy for StoredValue<T, S> {}
@@ -137,7 +149,7 @@ where
     }
 }
 
-impl<T, S> ReadValue for StoredValue<T, S>
+impl<T, S> TryReadValue for StoredValue<T, S>
 where
     T: 'static,
     S: Storage<ArcStoredValue<T>>,
@@ -204,16 +216,16 @@ where
     }
 }
 
-impl<T, S> From<StoredValue<T, S>> for ArcStoredValue<T>
+impl<T, S> StoredValue<T, S>
 where
     S: Storage<ArcStoredValue<T>>,
 {
+    /// Returns a strong (reference-counted) handle to the value, which keeps it alive, or
+    /// `None` if the value is gone (like [`std::sync::Weak::upgrade`]). The reverse, a
+    /// downgrade, is `From<ArcStoredValue>`.
     #[track_caller]
-    fn from(value: StoredValue<T, S>) -> Self {
-        value
-            .value
-            .try_get_value()
-            .unwrap_or_else(unwrap_signal!(value))
+    pub fn upgrade(&self) -> Option<ArcStoredValue<T>> {
+        self.value.try_get_value()
     }
 }
 

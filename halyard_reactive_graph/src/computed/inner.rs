@@ -11,7 +11,10 @@ use crate::{
 use std::{
     fmt::Debug,
     panic::Location,
-    sync::{Arc, RwLock, RwLockWriteGuard},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock, RwLockWriteGuard,
+    },
 };
 
 /// A memo read under a guard on its own value after its sources changed (logged once).
@@ -24,10 +27,12 @@ where
     /// Must always be acquired *after* the reactivity lock
     pub(crate) value: Arc<RwLock<Option<S::Wrapped>>>,
     #[allow(clippy::type_complexity)]
-    pub(crate) fun: Arc<dyn Fn(Option<T>) -> (T, bool) + Send + Sync>,
+    pub(crate) fun: Arc<dyn Fn(Option<T>) -> (Option<T>, bool) + Send + Sync>,
     pub(crate) owner: Owner,
     pub(crate) reactivity: RwLock<MemoInnerReactivity>,
     pub(crate) defined_at: Option<&'static Location<'static>>,
+    /// Made by `Memo::new_try`: the function may give no value, so there is no strong form.
+    fallible: AtomicBool,
 }
 
 pub(crate) struct MemoInnerReactivity {
@@ -52,7 +57,7 @@ where
 {
     #[allow(clippy::type_complexity)]
     pub fn new(
-        fun: Arc<dyn Fn(Option<T>) -> (T, bool) + Send + Sync>,
+        fun: Arc<dyn Fn(Option<T>) -> (Option<T>, bool) + Send + Sync>,
         any_subscriber: AnySubscriber,
         defined_at: Option<&'static Location<'static>>,
     ) -> Self {
@@ -67,7 +72,16 @@ where
                 any_subscriber,
             }),
             defined_at,
+            fallible: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn set_fallible(&self) {
+        self.fallible.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_fallible(&self) -> bool {
+        self.fallible.load(Ordering::Relaxed)
     }
 }
 
@@ -169,7 +183,9 @@ where
             {
                 // Safety: Can block endlessly if the user is has a ReadGuard on the value
                 let mut value_lock = self.value.write().or_poisoned();
-                *value_lock = Some(S::wrap(new_value));
+                // `None` from a memo made with `Memo::new_try`: a source is gone, and so
+                // is the memo's value until a source changes
+                *value_lock = new_value.map(S::wrap);
             }
 
             /// codegen optimisation:

@@ -1,4 +1,5 @@
-use halyard::prelude::{ArcStoredValue, WriteValue};
+use halyard::prelude::ArcStoredValue;
+use halyard_reactive_graph::traits::StrongWriteValue;
 use halyard_tachys::either::*;
 use halyard_tachys::view::any_view::{AnyView, IntoAny};
 use std::{future::Future, marker::PhantomData};

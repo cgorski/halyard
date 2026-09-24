@@ -549,7 +549,7 @@ macro_rules!  tuple_class_reactive {
 
             fn to_html(self, class: &mut String) {
                 let (name, f) = self;
-                let include = f.get();
+                let include = halyard_reactive_graph::gone::render_value(&f).unwrap_or(false);
                 if include {
                     <&str as IntoClass>::to_html(name, class);
                 }
@@ -560,7 +560,7 @@ macro_rules!  tuple_class_reactive {
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
                 IntoClass::hydrate::<FROM_SERVER>(
-                    (self.0, move || self.1.get()),
+                    (self.0, move || halyard_reactive_graph::gone::render_value(&self.1).unwrap_or(false)),
                     el,
                 )
             }
@@ -569,11 +569,11 @@ macro_rules!  tuple_class_reactive {
                 self,
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
-                IntoClass::build((self.0, move || self.1.get()), el)
+                IntoClass::build((self.0, move || halyard_reactive_graph::gone::render_value(&self.1).unwrap_or(false)), el)
             }
 
             fn rebuild(self, state: &mut Self::State) {
-                IntoClass::rebuild((self.0, move || self.1.get()), state)
+                IntoClass::rebuild((self.0, move || halyard_reactive_graph::gone::render_value(&self.1).unwrap_or(false)), state)
             }
 
             fn into_cloneable(self) -> Self::Cloneable {
@@ -620,11 +620,12 @@ macro_rules!  class_reactive {
         impl<$($gen),*> IntoClass for $name<$($gen),*>
         where
             $v: IntoClass + Clone + Send + Sync + 'static,
-            <$v as IntoClass>::State: 'static,
+            Option<$v>: IntoClass,
+            <Option<$v> as IntoClass>::State: 'static,
             $($where_clause)*
         {
             type AsyncOutput = Self;
-            type State = RenderEffect<<$v as IntoClass>::State>;
+            type State = RenderEffect<<Option<$v> as IntoClass>::State>;
             type Cloneable = Self;
             type CloneableOwned = Self;
 
@@ -633,7 +634,7 @@ macro_rules!  class_reactive {
             }
 
             fn to_html(self, class: &mut String) {
-                let value = self.get();
+                let value = halyard_reactive_graph::gone::render_value(&self);
                 value.to_html(class);
             }
 
@@ -641,18 +642,18 @@ macro_rules!  class_reactive {
                 self,
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
-                (move || self.get()).hydrate::<FROM_SERVER>(el)
+                (move || halyard_reactive_graph::gone::render_value(&self)).hydrate::<FROM_SERVER>(el)
             }
 
             fn build(
                 self,
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
-                (move || self.get()).build(el)
+                (move || halyard_reactive_graph::gone::render_value(&self)).build(el)
             }
 
             fn rebuild(self, state: &mut Self::State) {
-                (move || self.get()).rebuild(state)
+                (move || halyard_reactive_graph::gone::render_value(&self)).rebuild(state)
             }
 
             fn into_cloneable(self) -> Self::Cloneable {
@@ -673,7 +674,7 @@ macro_rules!  class_reactive {
                 *state = RenderEffect::new_with_value(
                     move |prev| {
                         if let Some(mut state) = prev {
-                            <$v>::reset(&mut state);
+                            <Option<$v>>::reset(&mut state);
                             state
                         } else {
                             unreachable!()
@@ -695,14 +696,14 @@ mod stable {
         computed::{ArcMemo, Memo},
         owner::Storage,
         signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
-        traits::Get,
+        traits::{IsDisposed, TryGet},
         wrappers::read::{ArcSignal, Signal},
     };
     class_reactive!(
         RwSignal,
         <V, S>,
         V,
-        RwSignal<V, S>: Get<Value = V>,
+        RwSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -710,7 +711,7 @@ mod stable {
         ReadSignal,
         <V, S>,
         V,
-        ReadSignal<V, S>: Get<Value = V>,
+        ReadSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -718,7 +719,7 @@ mod stable {
         Memo,
         <V, S>,
         V,
-        Memo<V, S>: Get<Value = V>,
+        Memo<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -726,7 +727,7 @@ mod stable {
         Signal,
         <V, S>,
         V,
-        Signal<V, S>: Get<Value = V>,
+        Signal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -734,20 +735,20 @@ mod stable {
         MaybeSignal,
         <V, S>,
         V,
-        MaybeSignal<V, S>: Get<Value = V>,
+        MaybeSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
-    class_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: Get<Value = V>);
-    class_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: Get<Value = V>);
-    class_reactive!(ArcMemo, <V>, V, ArcMemo<V>: Get<Value = V>);
-    class_reactive!(ArcSignal, <V>, V, ArcSignal<V>: Get<Value = V>);
+    class_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: TryGet<Value = V> + IsDisposed);
+    class_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: TryGet<Value = V> + IsDisposed);
+    class_reactive!(ArcMemo, <V>, V, ArcMemo<V>: TryGet<Value = V> + IsDisposed);
+    class_reactive!(ArcSignal, <V>, V, ArcSignal<V>: TryGet<Value = V> + IsDisposed);
 
     tuple_class_reactive!(
         RwSignal,
         <S>,
         <bool, S>,
-        RwSignal<bool, S>: Get<Value = bool>,
+        RwSignal<bool, S>: TryGet<Value = bool> + IsDisposed,
         S: Storage<bool>,
         S: Send  + 'static,
     );
@@ -755,7 +756,7 @@ mod stable {
         ReadSignal,
         <S>,
         <bool, S>,
-        ReadSignal<bool, S>: Get<Value = bool>,
+        ReadSignal<bool, S>: TryGet<Value = bool> + IsDisposed,
         S: Storage<bool>,
         S: Send + 'static,
     );
@@ -763,7 +764,7 @@ mod stable {
         Memo,
         <S>,
         <bool, S>,
-        Memo<bool, S>: Get<Value = bool>,
+        Memo<bool, S>: TryGet<Value = bool> + IsDisposed,
         S: Storage<bool>,
         S: Send + 'static,
     );
@@ -771,7 +772,7 @@ mod stable {
         Signal,
         <S>,
         <bool, S>,
-        Signal<bool, S>: Get<Value = bool>,
+        Signal<bool, S>: TryGet<Value = bool> + IsDisposed,
         S: Storage<bool>,
         S: Send + 'static,
     );
@@ -779,14 +780,14 @@ mod stable {
         MaybeSignal,
         <S>,
         <bool, S>,
-        MaybeSignal<bool, S>: Get<Value = bool>,
+        MaybeSignal<bool, S>: TryGet<Value = bool> + IsDisposed,
         S: Storage<bool>,
         S: Send + 'static,
     );
-    tuple_class_reactive!(ArcRwSignal,<>, <bool>, ArcRwSignal<bool>: Get<Value = bool>);
-    tuple_class_reactive!(ArcReadSignal,<>, <bool>, ArcReadSignal<bool>: Get<Value = bool>);
-    tuple_class_reactive!(ArcMemo,<>, <bool>, ArcMemo<bool>: Get<Value = bool>);
-    tuple_class_reactive!(ArcSignal,<>, <bool>, ArcSignal<bool>: Get<Value = bool>);
+    tuple_class_reactive!(ArcRwSignal,<>, <bool>, ArcRwSignal<bool>: TryGet<Value = bool> + IsDisposed);
+    tuple_class_reactive!(ArcReadSignal,<>, <bool>, ArcReadSignal<bool>: TryGet<Value = bool> + IsDisposed);
+    tuple_class_reactive!(ArcMemo,<>, <bool>, ArcMemo<bool>: TryGet<Value = bool> + IsDisposed);
+    tuple_class_reactive!(ArcSignal,<>, <bool>, ArcSignal<bool>: TryGet<Value = bool> + IsDisposed);
 }
 
 /*

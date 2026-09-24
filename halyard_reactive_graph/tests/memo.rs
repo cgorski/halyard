@@ -37,11 +37,13 @@ fn memo_calculates_value() {
     let b = RwSignal::new(2);
     let c = RwSignal::new(3);
 
-    let d = Memo::new(move |_| a.get() + b.get() + c.get());
-    assert_eq!(d.read(), 6);
-    assert_eq!(d.with_untracked(|n| *n), 6);
-    assert_eq!(d.with(|n| *n), 6);
-    assert_eq!(d.get_untracked(), 6);
+    let d = Memo::new(move |_| {
+        a.try_get().unwrap() + b.try_get().unwrap() + c.try_get().unwrap()
+    });
+    assert_eq!(d.try_read().unwrap(), 6);
+    assert_eq!(d.try_with_untracked(|n| *n), Some(6));
+    assert_eq!(d.try_with(|n| *n), Some(6));
+    assert_eq!(d.try_get_untracked(), Some(6));
 }
 
 #[test]
@@ -53,7 +55,9 @@ fn arc_memo_readable() {
     let b = RwSignal::new(2);
     let c = RwSignal::new(3);
 
-    let d = ArcMemo::new(move |_| a.get() + b.get() + c.get());
+    let d = ArcMemo::new(move |_| {
+        a.try_get().unwrap() + b.try_get().unwrap() + c.try_get().unwrap()
+    });
     assert_eq!(d.read(), 6);
 }
 
@@ -72,17 +76,17 @@ fn memo_doesnt_repeat_calculation_per_get() {
         let calculations = Arc::clone(&calculations);
         move |_| {
             *calculations.write().unwrap() += 1;
-            a.get() + b.get() + c.get()
+            a.try_get().unwrap() + b.try_get().unwrap() + c.try_get().unwrap()
         }
     });
-    assert_eq!(d.get_untracked(), 6);
-    assert_eq!(d.get_untracked(), 6);
-    assert_eq!(d.get_untracked(), 6);
+    assert_eq!(d.try_get_untracked(), Some(6));
+    assert_eq!(d.try_get_untracked(), Some(6));
+    assert_eq!(d.try_get_untracked(), Some(6));
     assert_eq!(*calculations.read().unwrap(), 1);
 
     println!("\n\n**setting to 0**");
     a.set(0);
-    assert_eq!(d.get_untracked(), 5);
+    assert_eq!(d.try_get_untracked(), Some(5));
     assert_eq!(*calculations.read().unwrap(), 2);
 }
 
@@ -95,31 +99,31 @@ fn nested_memos() {
     let b = RwSignal::new(0); // 2
     let c = Memo::new(move |_| {
         println!("calculating C");
-        a.get() + b.get()
+        a.try_get().unwrap() + b.try_get().unwrap()
     }); // 3
     let d = Memo::new(move |_| {
         println!("calculating D");
-        c.get() * 2
+        c.try_get().unwrap() * 2
     }); // 4
     let e = Memo::new(move |_| {
         println!("calculating E");
-        d.get() + 1
+        d.try_get().unwrap() + 1
     }); // 5
-    assert_eq!(e.get_untracked(), 1);
-    assert_eq!(d.get_untracked(), 0);
-    assert_eq!(c.get_untracked(), 0);
+    assert_eq!(e.try_get_untracked(), Some(1));
+    assert_eq!(d.try_get_untracked(), Some(0));
+    assert_eq!(c.try_get_untracked(), Some(0));
 
     println!("\n\nFirst Set\n\n");
     a.set(5);
-    assert_eq!(c.get_untracked(), 5);
-    assert_eq!(d.get_untracked(), 10);
-    assert_eq!(e.get_untracked(), 11);
+    assert_eq!(c.try_get_untracked(), Some(5));
+    assert_eq!(d.try_get_untracked(), Some(10));
+    assert_eq!(e.try_get_untracked(), Some(11));
 
     println!("\n\nSecond Set\n\n");
     b.set(1);
-    assert_eq!(e.get_untracked(), 13);
-    assert_eq!(d.get_untracked(), 12);
-    assert_eq!(c.get_untracked(), 6);
+    assert_eq!(e.try_get_untracked(), Some(13));
+    assert_eq!(d.try_get_untracked(), Some(12));
+    assert_eq!(c.try_get_untracked(), Some(6));
 }
 
 #[test]
@@ -141,7 +145,7 @@ fn memo_runs_only_when_inputs_change() {
             let mut call_count = call_count.write().unwrap();
             *call_count += 1;
 
-            a.get() + b.get() + c.get()
+            a.try_get().unwrap() + b.try_get().unwrap() + c.try_get().unwrap()
         }
     });
 
@@ -149,18 +153,18 @@ fn memo_runs_only_when_inputs_change() {
     assert_eq!(*call_count.read().unwrap(), 0);
 
     // here we access the value a bunch of times
-    assert_eq!(c.get_untracked(), 0);
-    assert_eq!(c.get_untracked(), 0);
-    assert_eq!(c.get_untracked(), 0);
-    assert_eq!(c.get_untracked(), 0);
-    assert_eq!(c.get_untracked(), 0);
+    assert_eq!(c.try_get_untracked(), Some(0));
+    assert_eq!(c.try_get_untracked(), Some(0));
+    assert_eq!(c.try_get_untracked(), Some(0));
+    assert_eq!(c.try_get_untracked(), Some(0));
+    assert_eq!(c.try_get_untracked(), Some(0));
 
     // we've still only called the memo calculation once
     assert_eq!(*call_count.read().unwrap(), 1);
 
     // and we only call it again when an input changes
     a.set(1);
-    assert_eq!(c.get_untracked(), 1);
+    assert_eq!(c.try_get_untracked(), Some(1));
     assert_eq!(*call_count.read().unwrap(), 2);
 }
 
@@ -172,11 +176,21 @@ fn diamond_problem() {
     let name = RwSignal::new("Greg Johnston".to_string());
     let first = Memo::new(move |_| {
         println!("calculating first");
-        name.get().split_whitespace().next().unwrap().to_string()
+        name.try_get()
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_string()
     });
     let last = Memo::new(move |_| {
         println!("calculating last");
-        name.get().split_whitespace().nth(1).unwrap().to_string()
+        name.try_get()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string()
     });
 
     let combined_count = Arc::new(RwLock::new(0));
@@ -187,17 +201,17 @@ fn diamond_problem() {
             let mut combined_count = combined_count.write().unwrap();
             *combined_count += 1;
 
-            format!("{} {}", first.get(), last.get())
+            format!("{} {}", first.try_get().unwrap(), last.try_get().unwrap())
         }
     });
 
-    assert_eq!(first.get_untracked(), "Greg");
-    assert_eq!(last.get_untracked(), "Johnston");
+    assert_eq!(first.try_get_untracked(), Some("Greg".to_string()));
+    assert_eq!(last.try_get_untracked(), Some("Johnston".to_string()));
 
     name.set("Will Smith".to_string());
-    assert_eq!(first.get_untracked(), "Will");
-    assert_eq!(last.get_untracked(), "Smith");
-    assert_eq!(combined.get_untracked(), "Will Smith");
+    assert_eq!(first.try_get_untracked(), Some("Will".to_string()));
+    assert_eq!(last.try_get_untracked(), Some("Smith".to_string()));
+    assert_eq!(combined.try_get_untracked(), Some("Will Smith".to_string()));
     // should not have run the memo logic twice, even
     // though both paths have been updated
     assert_eq!(*combined_count.read().unwrap(), 1);
@@ -457,20 +471,22 @@ fn unsync_derived_signal_and_memo() {
     let a = RwSignal::new_local(Rc::new(1));
     let b = RwSignal::new(2);
     let c = RwSignal::new(3);
-    let d = Memo::new(move |_| *a.get() + b.get() + c.get());
+    let d = Memo::new(move |_| {
+        *a.try_get().unwrap() + b.try_get().unwrap() + c.try_get().unwrap()
+    });
 
     let e = Rc::new(0);
-    let f = Signal::derive_local(move || d.get() + *e);
+    let f = Signal::derive_local(move || d.try_get().unwrap() + *e);
 
-    assert_eq!(d.read(), 6);
-    assert_eq!(d.with_untracked(|n| *n), 6);
-    assert_eq!(d.with(|n| *n), 6);
-    assert_eq!(d.get_untracked(), 6);
+    assert_eq!(d.try_read().unwrap(), 6);
+    assert_eq!(d.try_with_untracked(|n| *n), Some(6));
+    assert_eq!(d.try_with(|n| *n), Some(6));
+    assert_eq!(d.try_get_untracked(), Some(6));
 
     // derived signal also works
-    assert_eq!(f.with_untracked(|n| *n), 6);
-    assert_eq!(f.with(|n| *n), 6);
-    assert_eq!(f.get_untracked(), 6);
+    assert_eq!(f.try_with_untracked(|n| *n), Some(6));
+    assert_eq!(f.try_with(|n| *n), Some(6));
+    assert_eq!(f.try_get_untracked(), Some(6));
 }
 
 #[cfg(feature = "effects")]
@@ -546,32 +562,32 @@ fn memo_updates_even_if_not_read_until_later() {
     // regression test for https://github.com/leptos-rs/leptos/issues/3339
 
     let input = RwSignal::new(0);
-    let first_memo = Memo::new(move |_| input.get() == 1);
-    let second_memo = Memo::new(move |_| first_memo.get());
+    let first_memo = Memo::new(move |_| input.try_get().unwrap() == 1);
+    let second_memo = Memo::new(move |_| first_memo.try_get().unwrap());
 
-    assert_eq!(input.get(), 0);
-    assert_eq!(first_memo.get(), false);
+    assert_eq!(input.try_get(), Some(0));
+    assert_eq!(first_memo.try_get(), Some(false));
 
     println!("update to 1");
     input.set(1);
-    assert_eq!(input.get(), 1);
+    assert_eq!(input.try_get(), Some(1));
     println!("read memo 1");
-    assert_eq!(first_memo.get(), true);
+    assert_eq!(first_memo.try_get(), Some(true));
     println!("read memo 2");
-    assert_eq!(second_memo.get(), true);
+    assert_eq!(second_memo.try_get(), Some(true));
 
     // this time, we don't read the memo
     println!("\nupdate to 2");
     input.set(2);
-    assert_eq!(input.get(), 2);
+    assert_eq!(input.try_get(), Some(2));
     println!("read memo 1");
-    assert_eq!(first_memo.get(), false);
+    assert_eq!(first_memo.try_get(), Some(false));
 
     println!("\nupdate to 3");
     input.set(3);
-    assert_eq!(input.get(), 3);
+    assert_eq!(input.try_get(), Some(3));
     println!("read memo 1");
-    assert_eq!(first_memo.get(), false);
+    assert_eq!(first_memo.try_get(), Some(false));
     println!("read memo 2");
-    assert_eq!(second_memo.get(), false);
+    assert_eq!(second_memo.try_get(), Some(false));
 }

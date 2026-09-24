@@ -5,8 +5,7 @@ use crate::{
         guards::{Mapped, Plain, ReadGuard},
         ArcReadSignal,
     },
-    traits::{DefinedAt, Dispose, Get, ReadUntracked, Track},
-    unwrap_signal,
+    traits::{DefinedAt, Dispose, Get, Track, TryReadUntracked},
 };
 use std::{fmt::Debug, hash::Hash, panic::Location};
 
@@ -42,12 +41,12 @@ use std::{fmt::Debug, hash::Hash, panic::Location};
 /// let (value, set_value) = signal(0);
 ///
 /// // 🆗 we could create a derived signal with a simple function
-/// let double_value = move || value.get() * 2;
+/// let double_value = move || value.try_get().unwrap() * 2;
 /// set_value.set(2);
 /// assert_eq!(double_value(), 4);
 ///
 /// // but imagine the computation is really expensive
-/// let expensive = move || really_expensive_computation(value.get()); // lazy: doesn't run until called
+/// let expensive = move || really_expensive_computation(value.try_get().unwrap()); // lazy: doesn't run until called
 /// Effect::new(move |_| {
 ///   // 🆗 run #1: calls `really_expensive_computation` the first time
 ///   println!("expensive = {}", expensive());
@@ -60,14 +59,14 @@ use std::{fmt::Debug, hash::Hash, panic::Location};
 ///
 /// // instead, we create a memo
 /// // 🆗 run #1: the calculation runs once immediately
-/// let memoized = Memo::new(move |_| really_expensive_computation(value.get()));
+/// let memoized = Memo::new_try(move |_| Some(really_expensive_computation(value.try_get()?)));
 /// Effect::new(move |_| {
 ///   // 🆗 reads the current value of the memo
-///   println!("memoized = {}", memoized.get());
+///   println!("memoized = {}", memoized.try_get().unwrap());
 /// });
 /// Effect::new(move |_| {
 ///   // ✅ reads the current value **without re-running the calculation**
-///   let value = memoized.get();
+///   let value = memoized.try_get().unwrap();
 ///   // do something else...
 /// });
 /// # });
@@ -78,17 +77,17 @@ use std::{fmt::Debug, hash::Hash, panic::Location};
 /// - [`.get()`](crate::traits::Get) clones the current value of the memo.
 ///   If you call it within an effect, it will cause that effect to subscribe
 ///   to the memo, and to re-run whenever the value of the memo changes.
-///   - [`.get_untracked()`](crate::traits::GetUntracked) clones the value of
+///   - [`.get_untracked()`](crate::traits::TryGetUntracked) clones the value of
 ///     the memo without reactively tracking it.
 /// - [`.read()`](crate::traits::Read) returns a guard that allows accessing the
 ///   value of the memo by reference. If you call it within an effect, it will
 ///   cause that effect to subscribe to the memo, and to re-run whenever the
 ///   value of the memo changes.
-///   - [`.read_untracked()`](crate::traits::ReadUntracked) gives access to the
+///   - [`.read_untracked()`](crate::traits::TryReadUntracked) gives access to the
 ///     current value of the memo without reactively tracking it.
 /// - [`.with()`](crate::traits::With) allows you to reactively access the memo’s
 ///   value without cloning by applying a callback function.
-///   - [`.with_untracked()`](crate::traits::WithUntracked) allows you to access
+///   - [`.with_untracked()`](crate::traits::TryWithUntracked) allows you to access
 ///     the memo’s value by applying a callback function without reactively
 ///     tracking it.
 /// - [`.to_stream()`](crate::traits::ToStream) converts the memo to an `async`
@@ -102,6 +101,23 @@ where
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     defined_at: &'static Location<'static>,
     inner: ArenaItem<ArcMemo<T, S>, S>,
+}
+
+crate::impl_weak!([T, S] Memo<T, S> where [S: Storage<T>]);
+
+impl<T, S> Memo<T, S>
+where
+    S: Storage<T>,
+{
+    /// A handle whose value is gone (what an accessor of a gone handle returns).
+    #[track_caller]
+    pub(crate) fn disposed() -> Self {
+        Self {
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at: Location::caller(),
+            inner: ArenaItem::disposed(),
+        }
+    }
 }
 
 impl<T, S> Dispose for Memo<T, S>
@@ -166,7 +182,7 @@ where
     ///
     /// // the memo will reactively update whenever `value` changes
     /// let memoized =
-    ///     Memo::new(move |_| really_expensive_computation(value.get()));
+    ///     Memo::new_try(move |_| Some(really_expensive_computation(value.try_get()?)));
     /// # });
     /// ```
     pub fn new(fun: impl Fn(Option<&T>) -> T + Send + Sync + 'static) -> Self
@@ -223,6 +239,42 @@ where
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: Location::caller(),
             inner: ArenaItem::new_with_storage(ArcMemo::new_owning(fun)),
+        }
+    }
+
+    /// Creates a memo whose function may give no value, for a computation over weak handles
+    /// (`?` on their `try_*` reads): while it gives `None`, the memo has no value either
+    /// (reads give `None`, and it renders nothing) until a source changes.
+    ///
+    /// ```rust
+    /// # use halyard_reactive_graph::prelude::*;
+    /// # use halyard_reactive_graph::computed::Memo;
+    /// # use halyard_reactive_graph::signal::RwSignal;
+    /// # let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// let a = RwSignal::new(1);
+    /// let b = RwSignal::new(2);
+    /// let sum = Memo::new_try(move |_| Some(a.try_get()? + b.try_get()?));
+    /// assert_eq!(sum.try_get(), Some(3));
+    /// ```
+    ///
+    /// A memo made this way has no strong form ([`upgrade`](Memo::upgrade) gives `None`).
+    #[track_caller]
+    pub fn new_try(
+        fun: impl Fn(Option<&T>) -> Option<T> + Send + Sync + 'static,
+    ) -> Self
+    where
+        T: PartialEq,
+    {
+        let inner = ArcMemo::new_owning_try(move |prev: Option<T>| {
+            let new_value = fun(prev.as_ref());
+            let changed = prev.as_ref() != new_value.as_ref();
+            (new_value, changed)
+        });
+        inner.inner.set_fallible();
+        Self {
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at: Location::caller(),
+            inner: ArenaItem::new_with_storage(inner),
         }
     }
 }
@@ -300,7 +352,7 @@ where
     }
 }
 
-impl<T, S> ReadUntracked for Memo<T, S>
+impl<T, S> TryReadUntracked for Memo<T, S>
 where
     T: 'static,
     S: Storage<ArcMemo<T, S>> + Storage<T>,
@@ -313,17 +365,25 @@ where
     }
 }
 
-impl<T, S> From<Memo<T, S>> for ArcMemo<T, S>
+impl<T, S> Memo<T, S>
 where
     T: 'static,
     S: Storage<ArcMemo<T, S>> + Storage<T>,
 {
+    /// Returns a strong (reference-counted) handle to the value, which keeps it alive,
+    /// or `None` if the value is gone (like [`std::sync::Weak::upgrade`]) or the memo was
+    /// made with [`Memo::new_try`]. The reverse, a downgrade, is `From<ArcMemo>`.
     #[track_caller]
-    fn from(value: Memo<T, S>) -> Self {
-        value
-            .inner
+    pub fn upgrade(&self) -> Option<ArcMemo<T, S>> {
+        self.inner
             .try_get_value()
-            .unwrap_or_else(unwrap_signal!(value))
+            .filter(|memo| !memo.inner.is_fallible())
+    }
+
+    /// The memo behind this handle, also one made with [`Memo::new_try`] (for a
+    /// [`Signal`](crate::wrappers::read::Signal), which may have no value).
+    pub(crate) fn upgrade_inner(&self) -> Option<ArcMemo<T, S>> {
+        self.inner.try_get_value()
     }
 }
 

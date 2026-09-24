@@ -36,7 +36,7 @@ async fn chain_await_resource() {
             move || {
                 Suspend::new(async move {
                     consuming.await;
-                    rs.get()
+                    rs.try_get().unwrap()
                 })
             }
         }</Suspense>
@@ -69,7 +69,7 @@ async fn chain_no_await_resource() {
             move || {
                 Suspend::new(async move {
                     consuming.await;
-                    rs.get()
+                    rs.try_get().unwrap()
                 })
             }
         }</Suspense>

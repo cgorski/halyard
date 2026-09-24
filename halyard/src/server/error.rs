@@ -94,8 +94,6 @@ pub(crate) enum DisposedUse {
     Ready,
     /// Subscribing to it as a reactive source.
     Subscribe,
-    /// Converting it to its reference-counted form.
-    IntoArc,
 }
 
 impl fmt::Display for DisposedUse {
@@ -104,7 +102,6 @@ impl fmt::Display for DisposedUse {
             Self::Await => "awaiting it never finishes",
             Self::Ready => "it is never ready",
             Self::Subscribe => "as a reactive source it never changes",
-            Self::IntoArc => "its reference-counted form never loads",
         })
     }
 }

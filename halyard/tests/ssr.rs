@@ -15,7 +15,7 @@ fn simple_ssr_test() {
     let rendered: View<HtmlElement<_, _, _>> = view! {
         <div>
             <button on:click=move |_| set_value.update(|value| *value -= 1)>"-1"</button>
-            <span>"Value: " {move || value.get().to_string()} "!"</span>
+            <span>"Value: " {move || value.try_get().unwrap().to_string()} "!"</span>
             <button on:click=move |_| set_value.update(|value| *value += 1)>"+1"</button>
         </div>
     };
@@ -43,7 +43,7 @@ fn ssr_test_with_components() {
         view! {
             <div>
                 <button on:click=move |_| set_value.update(|value| *value -= 1)>"-1"</button>
-                <span>"Value: " {move || value.get().to_string()} "!"</span>
+                <span>"Value: " {move || value.try_get().unwrap().to_string()} "!"</span>
                 <button on:click=move |_| set_value.update(|value| *value += 1)>"+1"</button>
             </div>
         }
@@ -80,7 +80,7 @@ fn ssr_test_with_snake_case_components() {
         view! {
             <div>
                 <button on:click=move |_| set_value.update(|value| *value -= 1)>"-1"</button>
-                <span>"Value: " {move || value.get().to_string()} "!"</span>
+                <span>"Value: " {move || value.try_get().unwrap().to_string()} "!"</span>
                 <button on:click=move |_| set_value.update(|value| *value += 1)>"+1"</button>
             </div>
         }
@@ -114,9 +114,9 @@ fn test_classes() {
     let rendered: View<HtmlElement<_, _, _>> = view! {
         <div
             class="my big"
-            class:a=move || { value.get() > 10 }
+            class:a=move || { value.try_get().unwrap() > 10 }
             class:red=true
-            class:car=move || { value.get() > 1 }
+            class:car=move || { value.try_get().unwrap() > 1 }
         ></div>
     };
 

@@ -2,10 +2,10 @@
 
 use core::fmt::Debug;
 use halyard_reactive_graph::executor::Executor;
+use halyard_reactive_graph::traits::TryWith;
 use halyard_reactive_graph::{
     computed::Memo,
     signal::{ArcRwSignal, ReadSignal},
-    traits::With,
 };
 use halyard_tachys::dom::window;
 use js_sys::Reflect;
@@ -194,11 +194,15 @@ impl Location {
     ) -> Self {
         let url = url.into();
         let state = state.into();
-        let pathname = Memo::new(move |_| url.with(|url| url.path.clone()));
-        let search = Memo::new(move |_| url.with(|url| url.search.clone()));
-        let hash = Memo::new(move |_| url.with(|url| url.hash().to_string()));
-        let query =
-            Memo::new(move |_| url.with(|url| url.search_params.clone()));
+        let pathname =
+            Memo::new_try(move |_| url.try_with(|url| url.path.clone()));
+        let search =
+            Memo::new_try(move |_| url.try_with(|url| url.search.clone()));
+        let hash =
+            Memo::new_try(move |_| url.try_with(|url| url.hash().to_string()));
+        let query = Memo::new_try(move |_| {
+            url.try_with(|url| url.search_params.clone())
+        });
         Location {
             pathname,
             search,

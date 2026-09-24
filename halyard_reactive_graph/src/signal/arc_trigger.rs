@@ -18,6 +18,8 @@ pub struct ArcTrigger {
     pub(crate) inner: Arc<RwLock<SubscriberSet>>,
 }
 
+crate::impl_strong!([] ArcTrigger);
+
 impl ArcTrigger {
     /// Creates a new trigger.
     #[track_caller]

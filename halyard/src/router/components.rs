@@ -19,7 +19,7 @@ use halyard::{children, prelude::*};
 use halyard_reactive_graph::{
     owner::{provide_context, use_context, Owner},
     signal::ArcRwSignal,
-    traits::{GetUntracked, ReadUntracked, Set},
+    traits::Set,
     wrappers::write::SignalSetter,
 };
 use halyard_tachys::either::EitherOf3;
@@ -716,7 +716,12 @@ pub fn RoutingProgress(
 
     StoredValue::new(RenderEffect::new(
         move |prev: Option<Option<IntervalHandle>>| {
-            if is_routing.get() && !is_showing.get() {
+            // gone with the component: nothing more to animate
+            let Some((routing, showing)) = (is_routing, is_showing).try_get()
+            else {
+                return prev.flatten();
+            };
+            if routing && !showing {
                 set_is_showing.set(true);
                 set_interval_with_handle(
                     move || {
@@ -725,7 +730,7 @@ pub fn RoutingProgress(
                     Duration::from_millis(INCREMENT_EVERY_MS as u64),
                 )
                 .ok()
-            } else if is_routing.get() && is_showing.get() {
+            } else if routing && showing {
                 set_progress.set(0.0);
                 prev?
             } else {
@@ -746,8 +751,8 @@ pub fn RoutingProgress(
     ));
 
     view! {
-        <Show when=move || is_showing.get() fallback=|| ()>
-            <progress min="0" max="100" value=move || progress.get()></progress>
+        <Show when=is_showing fallback=|| ()>
+            <progress min="0" max="100" value=progress></progress>
         </Show>
     }
 }

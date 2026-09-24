@@ -9,7 +9,7 @@ use crate::{
         guards::{Mapped, Plain, ReadGuard},
         ArcReadSignal, ArcRwSignal,
     },
-    traits::{DefinedAt, Get, IsDisposed, ReadUntracked},
+    traits::{DefinedAt, Get, IsDisposed, TryReadUntracked},
 };
 use core::fmt::Debug;
 use std::{
@@ -46,12 +46,12 @@ use std::{
 /// let (value, set_value) = signal(0);
 ///
 /// // 🆗 we could create a derived signal with a simple function
-/// let double_value = move || value.get() * 2;
+/// let double_value = move || value.try_get().unwrap() * 2;
 /// set_value.set(2);
 /// assert_eq!(double_value(), 4);
 ///
 /// // but imagine the computation is really expensive
-/// let expensive = move || really_expensive_computation(value.get()); // lazy: doesn't run until called
+/// let expensive = move || really_expensive_computation(value.try_get().unwrap()); // lazy: doesn't run until called
 /// // 🆗 run #1: calls `really_expensive_computation` the first time
 /// println!("expensive = {}", expensive());
 /// // ❌ run #2: this calls `really_expensive_computation` a second time!
@@ -59,7 +59,7 @@ use std::{
 ///
 /// // instead, we create a memo
 /// // 🆗 run #1: the calculation runs once immediately
-/// let memoized = ArcMemo::new(move |_| really_expensive_computation(value.get()));
+/// let memoized = ArcMemo::new(move |_| really_expensive_computation(value.try_get().unwrap()));
 /// // 🆗 reads the current value of the memo
 /// println!("memoized = {}", memoized.get());
 /// // ✅ reads the current value **without re-running the calculation**
@@ -70,17 +70,17 @@ use std::{
 /// - [`.get()`](crate::traits::Get) clones the current value of the memo.
 ///   If you call it within an effect, it will cause that effect to subscribe
 ///   to the memo, and to re-run whenever the value of the memo changes.
-///   - [`.get_untracked()`](crate::traits::GetUntracked) clones the value of
+///   - [`.get_untracked()`](crate::traits::TryGetUntracked) clones the value of
 ///     the memo without reactively tracking it.
 /// - [`.read()`](crate::traits::Read) returns a guard that allows accessing the
 ///   value of the memo by reference. If you call it within an effect, it will
 ///   cause that effect to subscribe to the memo, and to re-run whenever the
 ///   value of the memo changes.
-///   - [`.read_untracked()`](crate::traits::ReadUntracked) gives access to the
+///   - [`.read_untracked()`](crate::traits::TryReadUntracked) gives access to the
 ///     current value of the memo without reactively tracking it.
 /// - [`.with()`](crate::traits::With) allows you to reactively access the memo’s
 ///   value without cloning by applying a callback function.
-///   - [`.with_untracked()`](crate::traits::WithUntracked) allows you to access
+///   - [`.with_untracked()`](crate::traits::TryWithUntracked) allows you to access
 ///     the memo’s value by applying a callback function without reactively
 ///     tracking it.
 /// - [`.to_stream()`](crate::traits::ToStream) converts the memo to an `async`
@@ -93,7 +93,25 @@ where
 {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     defined_at: &'static Location<'static>,
-    inner: Arc<MemoInner<T, S>>,
+    pub(crate) inner: Arc<MemoInner<T, S>>,
+}
+
+crate::impl_strong!([T, S] ArcMemo<T, S> where [S: Storage<T>]);
+
+impl<T, S> ArcMemo<T, S>
+where
+    S: Storage<T>,
+{
+    /// Returns a weak (arena) handle to the value: `Copy`, and it does not keep the value
+    /// alive (like [`std::sync::Arc::downgrade`]). The reverse is `upgrade` on the weak
+    /// handle.
+    #[track_caller]
+    pub fn downgrade(&self) -> crate::computed::Memo<T, S>
+    where
+        crate::computed::Memo<T, S>: From<Self>,
+    {
+        self.clone().into()
+    }
 }
 
 impl<T: 'static> ArcMemo<T, SyncStorage>
@@ -152,6 +170,19 @@ where
     )]
     pub fn new_owning(
         fun: impl Fn(Option<T>) -> (T, bool) + Send + Sync + 'static,
+    ) -> Self {
+        Self::new_owning_try(move |prev| {
+            let (value, changed) = fun(prev);
+            (Some(value), changed)
+        })
+    }
+
+    /// A memo whose function may give no value (`None`): then reads give `None` until a
+    /// source changes. Only for [`Memo::new_try`](crate::computed::Memo::new_try): a strong
+    /// memo always has a value.
+    #[track_caller]
+    pub(crate) fn new_owning_try(
+        fun: impl Fn(Option<T>) -> (Option<T>, bool) + Send + Sync + 'static,
     ) -> Self {
         let caller = Location::caller();
         let defined_at =
@@ -321,7 +352,7 @@ where
     }
 }
 
-impl<T: 'static, S> ReadUntracked for ArcMemo<T, S>
+impl<T: 'static, S> TryReadUntracked for ArcMemo<T, S>
 where
     S: Storage<T>,
 {

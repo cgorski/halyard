@@ -14,7 +14,7 @@ fn poisoned_signal() -> ArcRwSignal<u32> {
     let signal = ArcRwSignal::new(7);
     let in_thread = signal.clone();
     _ = thread::spawn(move || {
-        let _guard = in_thread.try_write_untracked();
+        let _guard = in_thread.try_write_in_place();
         panic!("poisons the signal's lock (expected in this test)");
     })
     .join();

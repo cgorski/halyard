@@ -92,10 +92,11 @@ macro_rules! property_reactive {
         impl<$($gen),*> IntoProperty for $name<$($gen),*>
         where
             $v: IntoProperty + Clone + Send + Sync + 'static,
-            <$v as IntoProperty>::State: 'static,
+            Option<$v>: IntoProperty,
+            <Option<$v> as IntoProperty>::State: 'static,
             $($where_clause)*
         {
-            type State = RenderEffect<<$v as IntoProperty>::State>;
+            type State = RenderEffect<<Option<$v> as IntoProperty>::State>;
             type Cloneable = Self;
             type CloneableOwned = Self;
 
@@ -104,7 +105,7 @@ macro_rules! property_reactive {
                 el: &crate::renderer::types::Element,
                 key: &str,
             ) -> Self::State {
-                (move || self.get()).hydrate::<FROM_SERVER>(el, key)
+                (move || halyard_reactive_graph::gone::render_value(&self)).hydrate::<FROM_SERVER>(el, key)
             }
 
             fn build(
@@ -112,11 +113,11 @@ macro_rules! property_reactive {
                 el: &crate::renderer::types::Element,
                 key: &str,
             ) -> Self::State {
-                (move || self.get()).build(el, key)
+                (move || halyard_reactive_graph::gone::render_value(&self)).build(el, key)
             }
 
             fn rebuild(self, state: &mut Self::State, key: &str) {
-                (move || self.get()).rebuild(state, key)
+                (move || halyard_reactive_graph::gone::render_value(&self)).rebuild(state, key)
             }
 
             fn into_cloneable(self) -> Self::Cloneable {
@@ -139,7 +140,7 @@ mod stable {
         effect::RenderEffect,
         owner::Storage,
         signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
-        traits::Get,
+        traits::{IsDisposed, TryGet},
         wrappers::read::{ArcSignal, Signal},
     };
 
@@ -147,7 +148,7 @@ mod stable {
         RwSignal,
         <V, S>,
         V,
-        RwSignal<V, S>: Get<Value = V>,
+        RwSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -155,7 +156,7 @@ mod stable {
         ReadSignal,
         <V, S>,
         V,
-        ReadSignal<V, S>: Get<Value = V>,
+        ReadSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -163,7 +164,7 @@ mod stable {
         Memo,
         <V, S>,
         V,
-        Memo<V, S>: Get<Value = V>,
+        Memo<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -171,7 +172,7 @@ mod stable {
         Signal,
         <V, S>,
         V,
-        Signal<V, S>: Get<Value = V>,
+        Signal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -179,12 +180,12 @@ mod stable {
         MaybeSignal,
         <V, S>,
         V,
-        MaybeSignal<V, S>: Get<Value = V>,
+        MaybeSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
-    property_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: Get<Value = V>);
-    property_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: Get<Value = V>);
-    property_reactive!(ArcMemo, <V>, V, ArcMemo<V>: Get<Value = V>);
-    property_reactive!(ArcSignal, <V>, V, ArcSignal<V>: Get<Value = V>);
+    property_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: TryGet<Value = V> + IsDisposed);
+    property_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: TryGet<Value = V> + IsDisposed);
+    property_reactive!(ArcMemo, <V>, V, ArcMemo<V>: TryGet<Value = V> + IsDisposed);
+    property_reactive!(ArcSignal, <V>, V, ArcSignal<V>: TryGet<Value = V> + IsDisposed);
 }

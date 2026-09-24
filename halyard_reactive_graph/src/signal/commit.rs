@@ -450,7 +450,7 @@ impl<T: 'static> ArcWriteSignal<T> {
         }
     }
 
-    /// `try_write_untracked`: a guard that changes the value in place; `None` if this thread
+    /// `try_write_in_place`: a guard that changes the value in place; `None` if this thread
     /// uses the signal already.
     pub(crate) fn in_place_guard(&self) -> Option<UntrackedWriteGuard<T>> {
         let writing = self.begin_in_place()?;

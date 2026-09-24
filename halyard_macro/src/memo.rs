@@ -40,10 +40,10 @@ impl ToTokens for MemoMacroInput {
         let path = &self.path;
 
         tokens.extend(quote! {
-            ::halyard::reactive::computed::Memo::new(
+            ::halyard::reactive::computed::Memo::new_try(
                 move |_| {
-                    use ::halyard::reactive::traits::With;
-                    #root.with(|st: _| st.#path.clone())
+                    use ::halyard::reactive::traits::TryWith;
+                    #root.try_with(|st: _| st.#path.clone())
                 }
             )
         })

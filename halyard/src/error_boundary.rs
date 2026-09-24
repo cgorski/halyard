@@ -6,12 +6,13 @@ use halyard_reactive_graph::hydration_context::{
 };
 use halyard_reactive_graph::or_poisoned::OrPoisoned;
 use halyard_reactive_graph::throw_error::{Error, ErrorHook, ErrorId};
+use halyard_reactive_graph::traits::{StrongWriteValue, WithUntracked};
 use halyard_reactive_graph::{
     computed::ArcMemo,
     effect::RenderEffect,
     owner::{provide_context, ArcStoredValue, Owner},
     signal::ArcRwSignal,
-    traits::{Get, Update, With, WithUntracked, WriteValue},
+    traits::{Get, Update, With},
 };
 use halyard_tachys::{
     html::attribute::{any_attribute::AnyAttribute, Attribute},
@@ -49,7 +50,7 @@ use std::{
 ///     <ErrorBoundary
 ///       fallback=move |_| view! { <p class="error">"Enter a valid number."</p>}
 ///     >
-///       <p>"Value is: " {move || value.get()}</p>
+///       <p>"Value is: " {value}</p>
 ///     </ErrorBoundary>
 ///   }
 /// }

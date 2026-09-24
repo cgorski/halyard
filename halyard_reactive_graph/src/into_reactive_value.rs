@@ -24,7 +24,7 @@ mod tests {
     use crate::{
         into_reactive_value::IntoReactiveValue,
         owner::{LocalStorage, Owner},
-        traits::GetUntracked,
+        traits::TryGetUntracked,
         wrappers::read::Signal,
     };
     use typed_builder::TypedBuilder;
@@ -50,14 +50,21 @@ mod tests {
             sig: Signal<usize>,
         }
 
-        assert_eq!(Foo::builder().sig(2).build().sig.get_untracked(), 2);
-        assert_eq!(Foo::builder().sig(|| 2).build().sig.get_untracked(), 2);
+        assert_eq!(
+            Foo::builder().sig(2).build().sig.try_get_untracked(),
+            Some(2)
+        );
+        assert_eq!(
+            Foo::builder().sig(|| 2).build().sig.try_get_untracked(),
+            Some(2)
+        );
         assert_eq!(
             Foo::builder()
                 .sig(Signal::stored(2))
                 .build()
                 .sig
-                .get_untracked(),
+                .try_get_untracked()
+                .unwrap(),
             2
         );
     }

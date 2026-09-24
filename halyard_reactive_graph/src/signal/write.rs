@@ -37,24 +37,25 @@ use std::{hash::Hash, ops::DerefMut, panic::Location};
 ///
 /// // ✅ calling the setter sets the value
 /// set_count.set(1);
-/// assert_eq!(count.get(), 1);
+/// assert_eq!(count.try_get(), Some(1));
 ///
 /// // ❌ you could call the getter within the setter
 /// // set_count.set(count.get() + 1);
 ///
 /// // ✅ however it's simpler to use .update(), which changes a copy and commits it
 /// set_count.update(|count: &mut i32| *count += 1);
-/// assert_eq!(count.get(), 2);
+/// assert_eq!(count.try_get(), Some(2));
 ///
 /// // ✅ `.write()` returns a guard that implements `DerefMut` and will notify when dropped
-/// *set_count.write() += 1;
-/// assert_eq!(count.get(), 3);
+/// *set_count.try_write().unwrap() += 1;
+/// assert_eq!(count.try_get(), Some(3));
 /// ```
 pub struct WriteSignal<T, S = SyncStorage> {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     pub(crate) defined_at: &'static Location<'static>,
     pub(crate) inner: ArenaItem<ArcWriteSignal<T>, S>,
 }
+crate::impl_weak!([T, S] WriteSignal<T, S>);
 
 impl<T, S> Dispose for WriteSignal<T, S> {
     fn dispose(self) {
@@ -163,6 +164,13 @@ where
     fn notify(&self) {
         if let Some(inner) = self.inner.try_get_value() {
             inner.notify();
+        } else {
+            crate::gone::report_gone(
+                crate::gone::Attempt::Write,
+                "WriteSignal",
+                self.defined_at(),
+                std::panic::Location::caller(),
+            );
         }
     }
 }
@@ -186,7 +194,7 @@ where
     /// Changes the value in place. Waits while another thread writes it; `None` if this
     /// thread is using it (the write is inside the signal's own `with` or `update`, or a
     /// guard of it is alive), which would never end. That is logged once.
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
         self.inner.try_get_value()?.in_place_guard()

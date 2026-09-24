@@ -7,8 +7,7 @@ use crate::{
     owner::{use_context, Storage},
     send_wrapper_ext::SendOption,
     signal::guards::{AsyncAwaited, Mapped, ReadGuard},
-    traits::{DefinedAt, Track},
-    unwrap_signal,
+    traits::Track,
 };
 use futures::pin_mut;
 use std::{
@@ -96,11 +95,7 @@ where
 
     #[track_caller]
     fn into_future(self) -> Self::IntoFuture {
-        let this = self
-            .inner
-            .try_get_value()
-            .unwrap_or_else(unwrap_signal!(self));
-        this.into_future()
+        self.inner_or_pending().into_future()
     }
 }
 
@@ -179,11 +174,7 @@ where
     /// value by reference rather than by cloning it.
     #[track_caller]
     pub fn by_ref(&self) -> AsyncDerivedRefFuture<T> {
-        let this = self
-            .inner
-            .try_get_value()
-            .unwrap_or_else(unwrap_signal!(self));
-        this.by_ref()
+        self.inner_or_pending().by_ref()
     }
 }
 

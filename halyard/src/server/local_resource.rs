@@ -2,6 +2,7 @@ use crate::server::{
     error::{warn, warn_disposed, DisposedUse, ResourceError},
     resource::never_loads,
 };
+use halyard_reactive_graph::traits::TryWith;
 use halyard_reactive_graph::{
     computed::{
         suspense::LocalResourceNotifier, ArcAsyncDerived, AsyncDerived,
@@ -18,8 +19,8 @@ use halyard_reactive_graph::{
         ArcRwSignal, RwSignal,
     },
     traits::{
-        DefinedAt, IsDisposed, Notify, ReadUntracked, Track, UntrackableGuard,
-        Update, With, Write,
+        DefinedAt, IsDisposed, Notify, Track, TryReadUntracked,
+        UntrackableGuard, Update, Write,
     },
 };
 use std::{
@@ -35,6 +36,8 @@ pub struct ArcLocalResource<T> {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     defined_at: &'static Location<'static>,
 }
+
+halyard_reactive_graph::impl_strong!([T] ArcLocalResource<T>);
 
 impl<T> Clone for ArcLocalResource<T> {
     fn clone(&self) -> Self {
@@ -106,7 +109,7 @@ impl<T> ArcLocalResource<T> {
     /// Re-runs the async function.
     pub fn refetch(&self) {
         // wrapping, not saturating: every refetch must change the value it tracks
-        self.refetch.try_update(|n| *n = n.wrapping_add(1));
+        self.refetch.update(|n| *n = n.wrapping_add(1));
     }
 
     /// Synchronously, reactively reads the current value of the resource and applies the function
@@ -210,14 +213,14 @@ where
         self.data.try_write()
     }
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.data.try_write_untracked()
+        self.data.try_write_in_place()
     }
 }
 
-impl<T> ReadUntracked for ArcLocalResource<T>
+impl<T> TryReadUntracked for ArcLocalResource<T>
 where
     T: 'static,
 {
@@ -301,6 +304,8 @@ pub struct LocalResource<T> {
     defined_at: &'static Location<'static>,
 }
 
+halyard_reactive_graph::impl_weak!([T] LocalResource<T>);
+
 impl<T> Deref for LocalResource<T> {
     type Target = AsyncDerived<T>;
 
@@ -367,7 +372,7 @@ impl<T> LocalResource<T> {
     /// Re-runs the async function.
     pub fn refetch(&self) {
         // wrapping, not saturating: every refetch must change the value it tracks
-        self.refetch.try_update(|n| *n = n.wrapping_add(1));
+        self.refetch.update(|n| *n = n.wrapping_add(1));
     }
 
     /// Synchronously, reactively reads the current value of the resource and applies the function
@@ -455,14 +460,14 @@ where
         self.data.try_write()
     }
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.data.try_write_untracked()
+        self.data.try_write_in_place()
     }
 }
 
-impl<T> ReadUntracked for LocalResource<T>
+impl<T> TryReadUntracked for LocalResource<T>
 where
     T: 'static,
 {
@@ -563,28 +568,18 @@ impl<T: 'static> From<ArcLocalResource<T>> for LocalResource<T> {
     }
 }
 
-impl<T: 'static> From<LocalResource<T>> for ArcLocalResource<T> {
+impl<T: 'static> LocalResource<T> {
+    /// Returns a strong (reference-counted) handle to the resource, which keeps it alive, or
+    /// `None` if it is gone (like [`std::sync::Weak::upgrade`]). The reverse, a downgrade,
+    /// is `From<ArcLocalResource>`.
     #[track_caller]
-    fn from(local: LocalResource<T>) -> Self {
-        if local.data.is_disposed() || local.refetch.is_disposed() {
-            warn_disposed(
-                DisposedUse::IntoArc,
-                Location::caller(),
-                local.defined_at(),
-            );
-            return Self {
-                data: never_loads(),
-                refetch: ArcRwSignal::new(0),
-                #[cfg(any(debug_assertions, halyard_debuginfo))]
-                defined_at: local.defined_at,
-            };
-        }
-        Self {
-            data: local.data.into(),
-            refetch: local.refetch.into(),
+    pub fn upgrade(&self) -> Option<ArcLocalResource<T>> {
+        Some(ArcLocalResource {
+            data: self.data.upgrade()?,
+            refetch: self.refetch.upgrade()?,
             #[cfg(any(debug_assertions, halyard_debuginfo))]
-            defined_at: local.defined_at,
-        }
+            defined_at: self.defined_at,
+        })
     }
 }
 
@@ -593,18 +588,18 @@ mod tests {
     use super::*;
     use crate::server::test_support::init_executor;
     use futures::FutureExt;
-    use halyard_reactive_graph::{owner::Owner, traits::GetUntracked};
+    use halyard_reactive_graph::{owner::Owner, traits::TryGetUntracked};
 
     /// `refetch` counts up: at `usize::MAX` it used to overflow, a panic in debug builds.
     #[test]
     fn arc_local_resource_refetch_wraps_instead_of_overflowing() {
         init_executor();
         let resource = ArcLocalResource::new(|| async { 1_u32 });
-        resource.refetch.try_update(|n| *n = usize::MAX);
+        resource.refetch.update(|n| *n = usize::MAX);
 
         resource.refetch();
 
-        assert_eq!(resource.refetch.get_untracked(), 0);
+        assert_eq!(resource.refetch.try_get_untracked(), Some(0));
     }
 
     #[test]
@@ -612,11 +607,11 @@ mod tests {
         init_executor();
         let owner = Owner::new();
         let resource = owner.with(|| LocalResource::new(|| async { 1_u32 }));
-        resource.refetch.try_update(|n| *n = usize::MAX);
+        resource.refetch.update(|n| *n = usize::MAX);
 
         resource.refetch();
 
-        assert_eq!(resource.refetch.get_untracked(), 0);
+        assert_eq!(resource.refetch.try_get_untracked(), Some(0));
     }
 
     /// Awaiting a local resource whose owner is gone used to panic ("Tried to access a
@@ -632,15 +627,13 @@ mod tests {
     }
 
     #[test]
-    fn a_disposed_local_resource_converts_to_one_that_never_loads() {
+    fn a_disposed_local_resource_has_no_strong_form() {
         init_executor();
         let owner = Owner::new();
         let resource = owner.with(|| LocalResource::new(|| async { 1_u32 }));
         owner.cleanup();
 
-        let arc = ArcLocalResource::from(resource);
-
-        assert!(arc.into_future().now_or_never().is_none());
+        assert!(resource.upgrade().is_none());
     }
 
     /// On the server, local resources never load.

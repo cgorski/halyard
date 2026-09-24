@@ -1,8 +1,8 @@
 use halyard_reactive_graph::{
     computed::Memo,
     owner::{on_cleanup, Owner},
+    prelude::*,
     signal::{RwSignal, Trigger},
-    traits::{Dispose, GetUntracked, Track},
 };
 use std::sync::Arc;
 
@@ -45,7 +45,7 @@ fn cleanup_on_dispose() {
         });
     });
     println!("Memo 1: {memo:?}");
-    memo.get_untracked(); // First cleanup registered.
+    memo.try_get_untracked().unwrap(); // First cleanup registered.
 
     memo.dispose(); // Cleanup not run here.
 
@@ -57,7 +57,7 @@ fn cleanup_on_dispose() {
     });
     println!("Memo 2: {memo:?}");
     println!("^ Note how the memos have the same key (different versions).");
-    memo.get_untracked(); // First cleanup registered.
+    memo.try_get_untracked().unwrap(); // First cleanup registered.
 
     println!("Test passed.");
 
@@ -80,7 +80,7 @@ fn leak_on_dispose() {
         RwSignal::new(value.clone());
     });
 
-    memo.get_untracked();
+    memo.try_get_untracked().unwrap();
 
     memo.dispose();
 

@@ -85,7 +85,7 @@ fn a_callback_that_calls_itself_finishes() {
             }
         });
         slot.set_value(Some(countdown));
-        countdown.run(5)
+        countdown.try_run(5).unwrap()
     });
     assert_eq!(depth, 5);
 }
@@ -146,12 +146,14 @@ fn an_effect_that_writes_a_signal_it_reads_finishes() {
         finishes("an effect that writes a signal it reads", || {
             let count = RwSignal::new(0);
             let effect = RenderEffect::new_isomorphic(move |_| {
-                count.with(|n| {
-                    if *n < 3 {
-                        count.set(*n + 1);
-                    }
-                    *n
-                })
+                count
+                    .try_with(|n| {
+                        if *n < 3 {
+                            count.set(*n + 1);
+                        }
+                        *n
+                    })
+                    .unwrap()
             });
             let first = count.try_get_untracked();
             // the effect runs again on the runtime's threads

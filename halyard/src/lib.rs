@@ -82,10 +82,12 @@
 //!     let (value, set_value) = signal(initial_value);
 //!
 //!     // create event handlers for our buttons
-//!     // note that `value` and `set_value` are `Copy`, so it's super easy to move them into closures
+//!     // `value` and `set_value` are `Copy` (weak) handles, so they move into closures for
+//!     // free; writes through them always succeed (or do nothing once the component is gone),
+//!     // and the view reads `value` directly
 //!     let clear = move |_| set_value.set(0);
-//!     let decrement = move |_| *set_value.write() -= 1;
-//!     let increment = move |_| *set_value.write() += 1;
+//!     let decrement = move |_| set_value.update(|value| *value -= 1);
+//!     let increment = move |_| set_value.update(|value| *value += 1);
 //!
 //!     view! {
 //!         <div>
@@ -373,7 +375,7 @@ pub struct PrefetchLazyFn(
 #[doc(hidden)]
 pub fn prefetch_lazy_fn_on_server(id: &'static str) {
     use crate::context::use_context;
-    use halyard_reactive_graph::traits::WriteValue;
+    use halyard_reactive_graph::traits::StrongWriteValue;
 
     if let Some(prefetches) = use_context::<PrefetchLazyFn>() {
         prefetches.0.write_value().insert(id);

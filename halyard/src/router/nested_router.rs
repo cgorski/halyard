@@ -15,18 +15,19 @@ use futures::{
     FutureExt,
 };
 use halyard::{
-    attr::any_attribute::AnyAttribute,
-    component,
-    oco::Oco,
-    prelude::{ArcStoredValue, WriteValue},
+    attr::any_attribute::AnyAttribute, component, oco::Oco,
+    prelude::ArcStoredValue,
 };
 use halyard_reactive_graph::executor::Executor;
 use halyard_reactive_graph::or_poisoned::OrPoisoned;
+use halyard_reactive_graph::traits::{
+    GetUntracked, ReadUntracked, StrongWriteValue,
+};
 use halyard_reactive_graph::{
     computed::{ArcMemo, ScopedFuture},
     owner::{provide_context, use_context, Owner},
     signal::{ArcRwSignal, ArcTrigger},
-    traits::{Get, GetUntracked, Notify, ReadUntracked, Set, Track, Write},
+    traits::{Get, Notify, Set, Track, TryGetUntracked, Write},
     transition::AsyncTransition,
     wrappers::write::SignalSetter,
 };
@@ -168,7 +169,10 @@ where
 
         let new_match = self.routes.match_route(url_snapshot.path());
 
-        *state.current_url.write_untracked() = url_snapshot;
+        // replaced in place, untracked: no code runs while the value is lent out
+        if let Some(mut current_url) = state.current_url.try_write_in_place() {
+            *current_url = url_snapshot;
+        }
 
         match new_match {
             None => {
@@ -210,7 +214,8 @@ where
                 let location = self.location.clone();
                 let is_back = location
                     .as_ref()
-                    .map(|nav| nav.is_back().get_untracked())
+                    // a location that is gone is not navigating back
+                    .and_then(|nav| nav.is_back().try_get_untracked())
                     .unwrap_or(false);
                 Executor::spawn_local(async move {
                     let triggers = Abortable::new(

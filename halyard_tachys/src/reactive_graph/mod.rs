@@ -719,14 +719,15 @@ macro_rules! reactive_impl {
         impl<$($gen),*> Render for $name<$($gen),*>
         where
             $v: Render + Clone + Send + Sync + 'static,
-            <$v as Render>::State: 'static,
+            Option<$v>: Render,
+            <Option<$v> as Render>::State: 'static,
             $($where_clause)*
         {
-            type State = RenderEffectState<<$v as Render>::State>;
+            type State = RenderEffectState<<Option<$v> as Render>::State>;
 
             #[track_caller]
             fn build(self) -> Self::State {
-                (move || self.get()).build()
+                (move || halyard_reactive_graph::gone::render_value(&self)).build()
             }
 
             #[track_caller]
@@ -742,7 +743,8 @@ macro_rules! reactive_impl {
         impl<$($gen),*> AddAnyAttr for $name<$($gen),*>
         where
             $v: RenderHtml + Clone + Send + Sync + 'static,
-            <$v as Render>::State: 'static,
+            Option<$v>: RenderHtml,
+            <Option<$v> as Render>::State: 'static,
             $($where_clause)*
         {
             type Output<SomeNewAttr: Attribute> = Self;
@@ -759,7 +761,8 @@ macro_rules! reactive_impl {
         impl<$($gen),*> RenderHtml for $name<$($gen),*>
         where
             $v: RenderHtml + Clone + Send + Sync + 'static,
-            <$v as Render>::State: 'static,
+            Option<$v>: RenderHtml,
+            <Option<$v> as Render>::State: 'static,
             $($where_clause)*
         {
             type AsyncOutput = Self;
@@ -769,7 +772,7 @@ macro_rules! reactive_impl {
 
             fn dry_resolve(&mut self) {
                 if $dry_resolve {
-                    _ = self.get();
+                    _ = halyard_reactive_graph::gone::render_value(&*self);
                 }
             }
 
@@ -778,7 +781,7 @@ macro_rules! reactive_impl {
             }
 
             fn html_len(&self) -> usize {
-                <$v>::MIN_LENGTH
+                <Option<$v>>::MIN_LENGTH
             }
 
             fn to_html_with_buf(
@@ -789,7 +792,7 @@ macro_rules! reactive_impl {
                 mark_branches: bool,
                 extra_attrs: Vec<AnyAttribute>,
             ) {
-                let value = self.get();
+                let value = halyard_reactive_graph::gone::render_value(&self);
                 value.to_html_with_buf(
                     buf,
                     position,
@@ -809,7 +812,7 @@ macro_rules! reactive_impl {
             ) where
                 Self: Sized,
             {
-                let value = self.get();
+                let value = halyard_reactive_graph::gone::render_value(&self);
                 value.to_html_async_with_buf::<OUT_OF_ORDER>(
                     buf,
                     position,
@@ -824,7 +827,7 @@ macro_rules! reactive_impl {
                 cursor: &Cursor,
                 position: &PositionState,
             ) -> Self::State {
-                (move || self.get())
+                (move || halyard_reactive_graph::gone::render_value(&self))
                     .hydrate::<FROM_SERVER>(cursor, position)
             }
 
@@ -837,11 +840,12 @@ macro_rules! reactive_impl {
         impl<$($gen),*> AttributeValue for $name<$($gen),*>
         where
             $v: AttributeValue + Send + Sync + Clone + 'static,
-            <$v as AttributeValue>::State: 'static,
+            Option<$v>: AttributeValue,
+            <Option<$v> as AttributeValue>::State: 'static,
             $($where_clause)*
         {
             type AsyncOutput = Self;
-            type State = RenderEffect<<$v as AttributeValue>::State>;
+            type State = RenderEffect<<Option<$v> as AttributeValue>::State>;
             type Cloneable = Self;
             type CloneableOwned = Self;
 
@@ -850,7 +854,7 @@ macro_rules! reactive_impl {
             }
 
             fn to_html(self, key: &str, buf: &mut String) {
-                let value = self.get();
+                let value = halyard_reactive_graph::gone::render_value(&self);
                 value.to_html(key, buf);
             }
 
@@ -861,7 +865,7 @@ macro_rules! reactive_impl {
                 key: &str,
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
-                (move || self.get()).hydrate::<FROM_SERVER>(key, el)
+                (move || halyard_reactive_graph::gone::render_value(&self)).hydrate::<FROM_SERVER>(key, el)
             }
 
             fn build(
@@ -869,11 +873,11 @@ macro_rules! reactive_impl {
                 el: &crate::renderer::types::Element,
                 key: &str,
             ) -> Self::State {
-                (move || self.get()).build(el, key)
+                (move || halyard_reactive_graph::gone::render_value(&self)).build(el, key)
             }
 
             fn rebuild(self, key: &str, state: &mut Self::State) {
-                (move || self.get()).rebuild(key, state)
+                (move || halyard_reactive_graph::gone::render_value(&self)).rebuild(key, state)
             }
 
             fn into_cloneable(self) -> Self::Cloneable {
@@ -913,7 +917,7 @@ mod stable {
         effect::RenderEffect,
         owner::Storage,
         signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
-        traits::Get,
+        traits::{IsDisposed, TryGet},
         wrappers::read::{ArcSignal, MaybeProp, Signal, SignalTypes},
     };
 
@@ -922,7 +926,7 @@ mod stable {
         <V, S>,
         V,
         false,
-        RwSignal<V, S>: Get<Value = V>,
+        RwSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -931,7 +935,7 @@ mod stable {
         <V, S>,
         V,
         false,
-        ReadSignal<V, S>: Get<Value = V>,
+        ReadSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -940,7 +944,7 @@ mod stable {
         <V, S>,
         V,
         true,
-        Memo<V, S>: Get<Value = V>,
+        Memo<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -949,7 +953,7 @@ mod stable {
         <V, S>,
         V,
         true,
-        Signal<V, S>: Get<Value = V>,
+        Signal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -958,7 +962,7 @@ mod stable {
         <V, S>,
         V,
         true,
-        MaybeSignal<V, S>: Get<Value = V>,
+        MaybeSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -967,14 +971,14 @@ mod stable {
         <V, S>,
         Option<V>,
         true,
-        MaybeProp<V, S>: Get<Value = Option<V>>,
+        MaybeProp<V, S>: TryGet<Value = Option<V>> + IsDisposed,
         S: Storage<Option<V>> + Storage<SignalTypes<Option<V>, S>>,
         S: Send + Sync + 'static,
     );
-    reactive_impl!(ArcRwSignal, <V>, V, false, ArcRwSignal<V>: Get<Value = V>);
-    reactive_impl!(ArcReadSignal, <V>, V, false, ArcReadSignal<V>: Get<Value = V>);
-    reactive_impl!(ArcMemo, <V>, V, false, ArcMemo<V>: Get<Value = V>);
-    reactive_impl!(ArcSignal, <V>, V, true, ArcSignal<V>: Get<Value = V>);
+    reactive_impl!(ArcRwSignal, <V>, V, false, ArcRwSignal<V>: TryGet<Value = V> + IsDisposed);
+    reactive_impl!(ArcReadSignal, <V>, V, false, ArcReadSignal<V>: TryGet<Value = V> + IsDisposed);
+    reactive_impl!(ArcMemo, <V>, V, false, ArcMemo<V>: TryGet<Value = V> + IsDisposed);
+    reactive_impl!(ArcSignal, <V>, V, true, ArcSignal<V>: TryGet<Value = V> + IsDisposed);
 }
 
 #[cfg(test)]

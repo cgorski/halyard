@@ -5,12 +5,13 @@ use crate::{
     IntoView,
 };
 use halyard_macro::component;
+use halyard_reactive_graph::traits::WithUntracked;
 use halyard_reactive_graph::{
     computed::{suspense::SuspenseContext, ArcMemo},
     effect::Effect,
     owner::{provide_context, use_context, Owner},
     signal::ArcRwSignal,
-    traits::{Get, Set, Track, With, WithUntracked},
+    traits::{Get, Set, Track, With},
     wrappers::write::SignalSetter,
 };
 use halyard_tachys::reactive_graph::OwnedView;
@@ -37,14 +38,14 @@ use std::sync::Arc;
 ///
 /// let (cat_count, set_cat_count) = signal::<u32>(1);
 ///
-/// let cats = Resource::new(move || cat_count.get(), |count| fetch_cats(count));
+/// let cats = Resource::new(move || cat_count.try_get().unwrap(), |count| fetch_cats(count));
 ///
 /// view! {
 ///   <div>
 ///     <Transition fallback=move || view! { <p>"Loading (Suspense Fallback)..."</p> }>
 ///       // you can access a resource synchronously
 ///       {move || {
-///           cats.get().map(|data| {
+///           cats.try_get().unwrap().map(|data| {
 ///             data
 ///               .into_iter()
 ///               .map(|src| {

@@ -56,6 +56,8 @@ pub struct ArcOnceResource<T, Ser = JsonSerdeCodec> {
     defined_at: &'static Location<'static>,
 }
 
+halyard_reactive_graph::impl_strong!([T, Ser] ArcOnceResource<T, Ser>);
+
 impl<T, Ser> Clone for ArcOnceResource<T, Ser> {
     fn clone(&self) -> Self {
         Self {
@@ -250,7 +252,7 @@ impl<T, Ser> Track for ArcOnceResource<T, Ser> {
     }
 }
 
-impl<T, Ser> ReadUntracked for ArcOnceResource<T, Ser>
+impl<T, Ser> TryReadUntracked for ArcOnceResource<T, Ser>
 where
     T: 'static,
 {
@@ -428,6 +430,8 @@ pub struct OnceResource<T, Ser = JsonSerdeCodec> {
     defined_at: &'static Location<'static>,
 }
 
+halyard_reactive_graph::impl_weak!([T, Ser] OnceResource<T, Ser>);
+
 impl<T, Ser> Clone for OnceResource<T, Ser> {
     fn clone(&self) -> Self {
         *self
@@ -578,7 +582,7 @@ where
     }
 }
 
-impl<T, Ser> ReadUntracked for OnceResource<T, Ser>
+impl<T, Ser> TryReadUntracked for OnceResource<T, Ser>
 where
     T: Send + Sync + 'static,
     Ser: 'static,

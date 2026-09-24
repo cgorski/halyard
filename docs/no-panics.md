@@ -39,7 +39,8 @@ a disposed signal read after an `await`, or from a re-entrant lock.
 (default features; server; browser on wasm32), per crate: 616 at the first count, 613
 after `c426d9a3`, 93 on 2026-09-24 (in `halyard_macro` 42, `halyard_tachys` 31, the vendored
 `halyard_rstml` 17, `halyard_reactive_graph` 3, `halyard` 0). CI fails if a crate's count
-rises. The table is the first count, plus what clippy cannot see. It names the crates of
+rises. The 36 `unwrap_signal!` sites, which clippy does not see (a macro expanded into every
+accessor), are gone with B (2026-09-24). The table is the first count, plus what clippy cannot see. It names the crates of
 that time: `halyard_router`, `halyard_dom`, `halyard_axum` and `halyard_integration_utils`
 are modules of `halyard` now (`router`, `dom`, `axum`, `integration_utils`), and
 `halyard_server_fn_macro` was removed with server functions.
@@ -47,7 +48,7 @@ are modules of `halyard` now (`router`, `dom`, `axum`, `integration_utils`), and
 | Class | Where | Count | Reaches users? |
 |---|---|---|---|
 | `unwrap`/`expect` | everywhere; worst `halyard_tachys` (renderer/dom, keyed/either views), `halyard_router`, `halyard_reactive_graph` | 257 | yes |
-| disposed reactive value read (`unwrap_signal!`) | `halyard_reactive_graph` accessors: `get`, `with`, `read`, `write`, `get_value`, `with_value`, `write_value`, `Action::dispatch`, ... | 42 macro sites behind every `.get()` in every app | **yes, the most likely remaining runtime panic** |
+| disposed reactive value read (`unwrap_signal!`) | `halyard_reactive_graph` accessors: `get`, `with`, `read`, `write`, `get_value`, `with_value`, `write_value`, `Action::dispatch`, ... | 42 macro sites behind every `.get()` in every app; **0 since B** | was the most likely runtime panic; removed by type (B) |
 | unchecked index / arithmetic | keyed diffing, string builders, macros | 247 | partly |
 | `unreachable!`/`panic!`/`todo!` | `AnyView` without its feature, `any_attribute`, `either`, macros | 107 | mostly misuse, some real |
 | `RefCell` borrow conflicts | `halyard_tachys` 45, router 8, reactive graph 10 | 65 | yes (re-entrant event handlers) |
@@ -185,7 +186,9 @@ rendering of a weak handle whose value is gone renders or updates nothing and lo
 
 ## Design: weak arena handles (B)
 
-Written 2026-09-24; not implemented yet. It builds on "Re-entrant access to a signal".
+Written 2026-09-24 and implemented the same day; where the implementation departs from the
+text below, "As implemented" (at the end of this section) says how and why. It builds on
+"Re-entrant access to a signal".
 
 ### The rule
 
@@ -394,6 +397,57 @@ order: the trait split and `upgrade`/`downgrade` (2 to 3 days, most of it in
 examples and tests (2 days); then each application (about 15 pages today: mostly
 mechanical, a view closure becoming the handle, a handler read gaining a `let ... else`).
 
+### As implemented
+
+The design above is implemented as written, with these changes and details:
+
+- **Strong reads are total except in a cycle.** A weak and a strong handle can share a
+  value (`upgrade`, `downgrade`), so a strong read inside the value's own in-place change
+  (made through the weak handle, obstacle 4) has nothing to read; nor has a memo read inside
+  its own computation, or (on a server) a memo that another thread is recomputing. Rather
+  than a panic or a default, the total forms (`get`, `with`, `read`, their `_untracked` and
+  `Value` forms, `write`, `write_value`) are built on the `try_*` form and, if it is `None`,
+  report once and wait for the value (`gone::wait_for`). Only the cross-thread case can end;
+  the same-thread cases are cycles in the application's code, documented on `Strong`.
+  Refusing in-place changes while strong handles exist would close the first case, but needs
+  a count of strong handles that the arena's own copies do not hold; not done.
+- **Traits.** `TryReadUntracked`, `TryRead`, `TryWithUntracked`, `TryWith`,
+  `TryGetUntracked`, `TryGet`, `TryReadValue`, `TryWithValue`, `TryGetValue` for every
+  readable handle; `Read`, `ReadUntracked`, `With`, `WithUntracked`, `Get`, `GetUntracked`,
+  `ReadValue`, `WithValue`, `GetValue`, `StrongWrite` (`write`) and `StrongWriteValue`
+  (`write_value`) only for `Strong` types. The sealed markers `Strong` and `Weak` are
+  implemented with `impl_strong!`/`impl_weak!` (doc hidden, so that `halyard` and
+  `halyard_tachys` can mark their handles). The in-place forms are `UpdateInPlace`
+  (`try_update`, `try_maybe_update`), `UpdateUntracked` (`try_update_untracked`) and
+  `WriteUntracked` (`try_write_untracked`), for `Weak` types only; the `Write` hook they use
+  is `try_write_in_place` (doc hidden). Closures and plain values do not get `Get`: a
+  closure is called, a plain value is used as it is.
+- **`downgrade()`** is added to the `Arc` signal, memo, stored-value and async-derived types
+  (next to the `From` conversions), since obstacle 4 recommends it.
+- **Derived values.** `Map::map`/`Map::memo` over a handle or a tuple of up to 8 handles
+  (trait `TryWithAll`), and `TryGetAll::try_get` for tuples. A memo made with
+  `Memo::new_try` (so also `.memo(...)` and the `memo!` macro) and a signal made with
+  `Signal::derive_try` (so also `.map(...)`) have no strong form: `upgrade` gives `None`,
+  because a strong handle to them could not read total.
+- **Rendering.** A weak handle rendered as a child or as an attribute, property, class,
+  style or inner-HTML value renders as an `Option` of its value: nothing when gone
+  (reported once per handle). A class toggle (`class:name=flag`) renders without the
+  class, and a `TextProp` made from a handle renders empty text. `<Show when>`, `<For each>`
+  and `<ForEnumerate each>` take a closure or a handle (trait `ViewSource`): when gone,
+  `<Show>` renders nothing (neither children nor fallback) and `<For>` renders no rows.
+  `<ShowLet some=signal>` also renders nothing when the signal is gone.
+- **Resources.** Their `From<weak> for Arc...` conversions did not panic (they gave a
+  resource that never loads, with a warning); they are replaced by `upgrade()` all the
+  same, so that a gone resource is visible as `None`. `refetch` is an `update` (a logged
+  no-op when gone).
+- **Callbacks.** `Callable` keeps `try_run`; the total `run` is the `Run` trait, for
+  `ArcCallback`/`ArcUnsyncCallback` (any output) and for `Callback`/`UnsyncCallback` whose
+  output is `()`.
+- **Not done:** the debug-build report of a `try_*` read of a gone weak handle (the last
+  bullet of "The rule"): the `try_*` result says so already, and every place that reads
+  through the arena would have to carry the call site. `gone::report_gone_read` is there for
+  it.
+
 ## Dependencies considered
 
 Well-maintained crates can remove code we would otherwise have to make panic-free, as
@@ -422,4 +476,8 @@ they can be swapped later.
       writes, write guards on a copy, writer turn); `AsyncDerived` re-entry no longer
       deadlocks natively; `batch` of `ImmediateEffect`s is per thread
 - [x] Design of B written ("Design: weak arena handles (B)"), with its size
-- [ ] Changes 1 to 7 above (2 remains for `StoredValue` closures and the DOM layer), and B
+- [x] B implemented: weak `Copy` handles (`try_*` reads, logged no-op writes, rendering
+      nothing when gone, `upgrade`), strong `Arc` handles (total reads), no
+      `unwrap_signal!` left; halyard's own call sites, tests, doc examples and example
+      converted ("As implemented" lists the departures from the design)
+- [ ] Changes 1 to 7 above (2 remains for `StoredValue` closures and the DOM layer)

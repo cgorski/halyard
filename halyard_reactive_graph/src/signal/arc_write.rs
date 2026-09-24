@@ -60,6 +60,20 @@ pub struct ArcWriteSignal<T> {
     /// The writer turn: writes to the signal serialize on it (see `commit.rs`).
     pub(crate) turn: Arc<Mutex<()>>,
 }
+crate::impl_strong!([T] ArcWriteSignal<T>);
+
+impl<T> ArcWriteSignal<T> {
+    /// Returns a weak (arena) handle to the value: `Copy`, and it does not keep the value
+    /// alive (like [`std::sync::Arc::downgrade`]). The reverse is `upgrade` on the weak
+    /// handle.
+    #[track_caller]
+    pub fn downgrade(&self) -> crate::signal::WriteSignal<T>
+    where
+        crate::signal::WriteSignal<T>: From<Self>,
+    {
+        self.clone().into()
+    }
+}
 
 impl<T> Clone for ArcWriteSignal<T> {
     #[track_caller]
@@ -155,7 +169,7 @@ impl<T: 'static> Write for ArcWriteSignal<T> {
     /// thread is using it (the write is inside the signal's own `with` or `update`, or a
     /// guard of it is alive), which would never end. That is logged once.
     #[allow(refining_impl_trait)]
-    fn try_write_untracked(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
+    fn try_write_in_place(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
         self.in_place_guard()
     }
 

@@ -23,6 +23,8 @@ pub struct Trigger {
     pub(crate) inner: ArenaItem<ArcTrigger>,
 }
 
+crate::impl_weak!([] Trigger);
+
 impl Trigger {
     /// Creates a new trigger.
     #[track_caller]
@@ -98,6 +100,13 @@ impl Notify for Trigger {
     fn notify(&self) {
         if let Some(inner) = self.inner.try_get_value() {
             inner.mark_dirty();
+        } else {
+            crate::gone::report_gone(
+                crate::gone::Attempt::Write,
+                "Trigger",
+                self.defined_at(),
+                std::panic::Location::caller(),
+            );
         }
     }
 }

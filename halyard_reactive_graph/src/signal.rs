@@ -87,21 +87,21 @@ pub fn arc_signal<T>(value: T) -> (ArcReadSignal<T>, ArcWriteSignal<T>) {
 /// let (count, set_count) = signal(0);
 ///
 /// // ✅ calling the getter clones and returns the value
-/// assert_eq!(count.get(), 0);
+/// assert_eq!(count.try_get(), Some(0));
 ///
 /// // ✅ calling the setter sets the value
 /// set_count.set(1);
-/// assert_eq!(count.get(), 1);
+/// assert_eq!(count.try_get(), Some(1));
 ///
 /// // ❌ you could call the getter within the setter
 /// // set_count.set(count.get() + 1);
 ///
 /// // ✅ however it's simpler to use .update(), which changes a copy and commits it
 /// set_count.update(|count: &mut i32| *count += 1);
-/// assert_eq!(count.get(), 2);
+/// assert_eq!(count.try_get(), Some(2));
 ///
 /// // ✅ you can create "derived signals" with a Fn() -> T interface
-/// let double_count = move || count.get() * 2; // signals are `Copy` so you can `move` them anywhere
+/// let double_count = move || count.try_get().unwrap() * 2; // signals are `Copy` so you can `move` them anywhere
 /// set_count.set(0);
 /// assert_eq!(double_count(), 0);
 /// set_count.set(1);
@@ -146,21 +146,21 @@ pub fn signal_local<T: 'static>(
 /// let (count, set_count) = create_signal(0);
 ///
 /// // ✅ calling the getter clones and returns the value
-/// assert_eq!(count.get(), 0);
+/// assert_eq!(count.try_get(), Some(0));
 ///
 /// // ✅ calling the setter sets the value
 /// set_count.set(1);
-/// assert_eq!(count.get(), 1);
+/// assert_eq!(count.try_get(), Some(1));
 ///
 /// // ❌ you could call the getter within the setter
 /// // set_count.set(count.get() + 1);
 ///
 /// // ✅ however it's simpler to use .update(), which changes a copy and commits it
 /// set_count.update(|count: &mut i32| *count += 1);
-/// assert_eq!(count.get(), 2);
+/// assert_eq!(count.try_get(), Some(2));
 ///
 /// // ✅ you can create "derived signals" with a Fn() -> T interface
-/// let double_count = move || count.get() * 2; // signals are `Copy` so you can `move` them anywhere
+/// let double_count = move || count.try_get().unwrap() * 2; // signals are `Copy` so you can `move` them anywhere
 /// set_count.set(0);
 /// assert_eq!(double_count(), 0);
 /// set_count.set(1);

@@ -95,7 +95,12 @@ macro_rules! textprop_reactive {
         {
             #[inline(always)]
             fn from(s: $name<$($gen),*>) -> Self {
-                TextProp(Arc::new(move || s.get().into()))
+                // a signal whose value is gone renders no text (reported once)
+                TextProp(Arc::new(move || {
+                    halyard_reactive_graph::gone::render_value(&s)
+                        .map(Into::into)
+                        .unwrap_or_default()
+                }))
             }
         }
     };
@@ -109,7 +114,7 @@ mod stable {
         computed::{ArcMemo, Memo},
         owner::Storage,
         signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
-        traits::Get,
+        traits::{IsDisposed, TryGet},
         wrappers::read::{ArcSignal, Signal},
     };
     use halyard_tachys::oco::Oco;
@@ -119,7 +124,7 @@ mod stable {
         RwSignal,
         <V, S>,
         V,
-        RwSignal<V, S>: Get<Value = V>,
+        RwSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -127,7 +132,7 @@ mod stable {
         ReadSignal,
         <V, S>,
         V,
-        ReadSignal<V, S>: Get<Value = V>,
+        ReadSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -135,7 +140,7 @@ mod stable {
         Memo,
         <V, S>,
         V,
-        Memo<V, S>: Get<Value = V>,
+        Memo<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -143,7 +148,7 @@ mod stable {
         Signal,
         <V, S>,
         V,
-        Signal<V, S>: Get<Value = V>,
+        Signal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -151,14 +156,14 @@ mod stable {
         MaybeSignal,
         <V, S>,
         V,
-        MaybeSignal<V, S>: Get<Value = V>,
+        MaybeSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
-    textprop_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: Get<Value = V>);
-    textprop_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: Get<Value = V>);
-    textprop_reactive!(ArcMemo, <V>, V, ArcMemo<V>: Get<Value = V>);
-    textprop_reactive!(ArcSignal, <V>, V, ArcSignal<V>: Get<Value = V>);
+    textprop_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: TryGet<Value = V> + IsDisposed);
+    textprop_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: TryGet<Value = V> + IsDisposed);
+    textprop_reactive!(ArcMemo, <V>, V, ArcMemo<V>: TryGet<Value = V> + IsDisposed);
+    textprop_reactive!(ArcSignal, <V>, V, ArcSignal<V>: TryGet<Value = V> + IsDisposed);
 }
 
 /// Extension trait for `Option<TextProp>`

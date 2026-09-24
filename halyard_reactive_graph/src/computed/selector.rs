@@ -28,7 +28,7 @@ use std::{
 /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 /// let a = RwSignal::new(0);
-/// let is_selected = Selector::new(move || a.get());
+/// let is_selected = Selector::new(move || a.try_get().unwrap());
 /// let total_notifications = StoredValue::new(0);
 /// Effect::new_isomorphic({
 ///     let is_selected = is_selected.clone();
@@ -40,17 +40,17 @@ use std::{
 /// });
 ///
 /// assert_eq!(is_selected.selected(&5), false);
-/// assert_eq!(total_notifications.get_value(), 0);
+/// assert_eq!(total_notifications.try_get_value(), Some(0));
 /// a.set(5);
 /// # halyard_reactive_graph::executor::Executor::tick().await;
 ///
 /// assert_eq!(is_selected.selected(&5), true);
-/// assert_eq!(total_notifications.get_value(), 1);
+/// assert_eq!(total_notifications.try_get_value(), Some(1));
 /// a.set(5);
 /// # halyard_reactive_graph::executor::Executor::tick().await;
 ///
 /// assert_eq!(is_selected.selected(&5), true);
-/// assert_eq!(total_notifications.get_value(), 1);
+/// assert_eq!(total_notifications.try_get_value(), Some(1));
 /// a.set(4);
 ///
 /// # halyard_reactive_graph::executor::Executor::tick().await;

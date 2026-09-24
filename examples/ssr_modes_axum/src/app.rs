@@ -39,7 +39,7 @@ pub fn App() -> impl IntoView {
                 <a href="/">"Home"</a>
                 <a href="/admin">"Admin"</a>
                 <button on:click=move |_| is_admin.update(|n| *n = !*n)>
-                    {move || if is_admin.get() { "Log Out" } else { "Log In" }}
+                    {is_admin.map(|admin| if *admin { "Log Out" } else { "Log In" })}
                 </button>
             </nav>
             <main>
@@ -67,7 +67,7 @@ pub fn App() -> impl IntoView {
                         path=StaticSegment("admin")
                         view=Admin
                         ssr=SsrMode::Async
-                        condition=move || Some(is_admin.get())
+                        condition=move || is_admin.try_get()
                         redirect_path=|| "/"
                     />
                 </FlatRoutes>
@@ -80,7 +80,7 @@ pub fn App() -> impl IntoView {
 fn HomePage() -> impl IntoView {
     // load the posts
     let posts = Resource::new(|| (), |_| list_post_metadata());
-    let posts = move || posts.get().unwrap_or_default();
+    let posts = move || posts.try_get().flatten().unwrap_or_default();
 
     let posts2 = Resource::new(|| (), |_| list_post_metadata());
     let posts2 =

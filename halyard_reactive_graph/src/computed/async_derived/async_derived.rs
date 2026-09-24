@@ -8,10 +8,9 @@ use crate::{
     send_wrapper_ext::SendOption,
     signal::guards::{AsyncPlain, Mapped, MappedMut, ReadGuard, WriteGuard},
     traits::{
-        DefinedAt, Dispose, IsDisposed, Notify, ReadUntracked,
+        DefinedAt, Dispose, IsDisposed, Notify, TryReadUntracked,
         UntrackableGuard, Write,
     },
-    unwrap_signal,
 };
 use core::fmt::Debug;
 use std::{
@@ -43,23 +42,23 @@ use std::{
 /// let signal2 = RwSignal::new(0);
 /// let derived = AsyncDerived::new(move || async move {
 ///   // reactive values can be tracked anywhere in the `async` block
-///   let value1 = signal1.get();
+///   let value1 = signal1.try_get().unwrap();
 ///   tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-///   let value2 = signal2.get();
+///   let value2 = signal2.try_get().unwrap();
 ///
 ///   value1 + value2
 /// });
 ///
 /// // the value can be accessed synchronously as `Option<T>`
-/// assert_eq!(derived.get(), None);
+/// assert_eq!(derived.try_get(), Some(None));
 /// // we can also .await the value, i.e., convert it into a Future
 /// assert_eq!(derived.await, 0);
-/// assert_eq!(derived.get(), Some(0));
+/// assert_eq!(derived.try_get(), Some(Some(0)));
 ///
 /// signal1.set(1);
 /// // while the new value is still pending, the signal holds the old value
 /// tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-/// assert_eq!(derived.get(), Some(0));
+/// assert_eq!(derived.try_get(), Some(Some(0)));
 ///
 /// // setting multiple dependencies will hold until the latest change is ready
 /// signal2.set(1);
@@ -71,17 +70,17 @@ use std::{
 /// - [`.get()`](crate::traits::Get) clones the current value as an `Option<T>`.
 ///   If you call it within an effect, it will cause that effect to subscribe
 ///   to the memo, and to re-run whenever the value of the memo changes.
-///   - [`.get_untracked()`](crate::traits::GetUntracked) clones the value of
+///   - [`.get_untracked()`](crate::traits::TryGetUntracked) clones the value of
 ///     without reactively tracking it.
 /// - [`.read()`](crate::traits::Read) returns a guard that allows accessing the
 ///   value by reference. If you call it within an effect, it will
 ///   cause that effect to subscribe to the memo, and to re-run whenever the
 ///   value changes.
-///   - [`.read_untracked()`](crate::traits::ReadUntracked) gives access to the
+///   - [`.read_untracked()`](crate::traits::TryReadUntracked) gives access to the
 ///     current value without reactively tracking it.
 /// - [`.with()`](crate::traits::With) allows you to reactively access the
 ///   value without cloning by applying a callback function.
-///   - [`.with_untracked()`](crate::traits::WithUntracked) allows you to access
+///   - [`.with_untracked()`](crate::traits::TryWithUntracked) allows you to access
 ///     the value by applying a callback function without reactively
 ///     tracking it.
 /// - [`IntoFuture`](std::future::Future) allows you to create a [`Future`] that resolves
@@ -91,6 +90,7 @@ pub struct AsyncDerived<T, S = SyncStorage> {
     defined_at: &'static Location<'static>,
     pub(crate) inner: ArenaItem<ArcAsyncDerived<T>, S>,
 }
+crate::impl_weak!([T, S] AsyncDerived<T, S>);
 
 impl<T, S> Dispose for AsyncDerived<T, S> {
     fn dispose(self) {
@@ -114,17 +114,17 @@ where
     }
 }
 
-impl<T, S> From<AsyncDerived<T, S>> for ArcAsyncDerived<T>
+impl<T, S> AsyncDerived<T, S>
 where
     T: 'static,
     S: Storage<ArcAsyncDerived<T>>,
 {
+    /// Returns a strong (reference-counted) handle to the value, which keeps it alive,
+    /// or `None` if the value is gone (like [`std::sync::Weak::upgrade`]). The reverse,
+    /// a downgrade, is `From<ArcAsyncDerived>`.
     #[track_caller]
-    fn from(value: AsyncDerived<T, S>) -> Self {
-        value
-            .inner
-            .try_get_value()
-            .unwrap_or_else(unwrap_signal!(value))
+    pub fn upgrade(&self) -> Option<ArcAsyncDerived<T>> {
+        self.inner.try_get_value()
     }
 }
 
@@ -271,11 +271,23 @@ where
     /// Returns a `Future` that is ready when this resource has next finished loading.
     #[track_caller]
     pub fn ready(&self) -> AsyncDerivedReadyFuture {
-        let this = self
-            .inner
-            .try_get_value()
-            .unwrap_or_else(unwrap_signal!(self));
-        this.ready()
+        self.inner_or_pending().ready()
+    }
+
+    /// The value behind this handle, or, if it is gone (reported once), one that never
+    /// loads: the futures (`.await`, [`ready`](Self::ready), `by_ref`) of a gone value stay
+    /// pending. They are awaited by code owned with the value, which is cancelled with it.
+    #[track_caller]
+    pub(crate) fn inner_or_pending(&self) -> ArcAsyncDerived<T> {
+        self.inner.try_get_value().unwrap_or_else(|| {
+            crate::gone::report_gone(
+                crate::gone::Attempt::Await,
+                "AsyncDerived",
+                self.defined_at(),
+                Location::caller(),
+            );
+            ArcAsyncDerived::new_mock(std::future::pending::<T>)
+        })
     }
 }
 
@@ -313,7 +325,7 @@ impl<T, S> DefinedAt for AsyncDerived<T, S> {
     }
 }
 
-impl<T, S> ReadUntracked for AsyncDerived<T, S>
+impl<T, S> TryReadUntracked for AsyncDerived<T, S>
 where
     T: 'static,
     S: Storage<ArcAsyncDerived<T>>,
@@ -357,7 +369,7 @@ where
         ))
     }
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
         let inner = self.inner.try_get_value()?;
@@ -487,7 +499,7 @@ mod tests {
     use crate::or_poisoned::OrPoisoned;
     use crate::{
         owner::Owner,
-        traits::{GetUntracked, Set, UpdateUntracked},
+        traits::{Set, TryGetUntracked, UpdateUntracked},
     };
 
     fn set_version(derived: &AsyncDerived<u32>, version: usize) {

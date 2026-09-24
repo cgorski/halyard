@@ -1,9 +1,6 @@
-use crate::{
-    traits::{
-        DefinedAt, Get, GetUntracked, Read, ReadUntracked, Track, With,
-        WithUntracked,
-    },
-    unwrap_signal,
+use crate::traits::{
+    DefinedAt, Track, TryGet, TryGetUntracked, TryRead, TryReadUntracked,
+    TryWith, TryWithUntracked,
 };
 use std::panic::Location;
 
@@ -27,7 +24,7 @@ where
     }
 }
 
-/// An alternative [`ReadUntracked`](crate) trait that works with `Option<Readable>` types.
+/// An alternative [`TryReadUntracked`](crate) trait that works with `Option<Readable>` types.
 pub trait ReadUntrackedOptional: Sized + DefinedAt {
     /// The guard type that will be returned, which can be dereferenced to the value.
     type Value;
@@ -35,24 +32,14 @@ pub trait ReadUntrackedOptional: Sized + DefinedAt {
     /// Returns the guard, or `None` if the signal has already been disposed.
     #[track_caller]
     fn try_read_untracked(&self) -> Option<Self::Value>;
-
-    /// Returns the guard.
-    ///
-    /// # Panics
-    /// Panics if you try to access a signal that has been disposed.
-    #[track_caller]
-    fn read_untracked(&self) -> Self::Value {
-        self.try_read_untracked()
-            .unwrap_or_else(unwrap_signal!(self))
-    }
 }
 
 impl<T> ReadUntrackedOptional for Option<T>
 where
     Self: DefinedAt,
-    T: ReadUntracked,
+    T: TryReadUntracked,
 {
-    type Value = Option<<T as ReadUntracked>::Value>;
+    type Value = Option<<T as TryReadUntracked>::Value>;
 
     fn try_read_untracked(&self) -> Option<Self::Value> {
         Some(if let Some(signal) = self {
@@ -63,7 +50,7 @@ where
     }
 }
 
-/// An alternative [`Read`](crate) trait that works with `Option<Readable>` types.
+/// An alternative [`TryRead`](crate) trait that works with `Option<Readable>` types.
 pub trait ReadOptional: DefinedAt {
     /// The guard type that will be returned, which can be dereferenced to the value.
     type Value;
@@ -71,23 +58,14 @@ pub trait ReadOptional: DefinedAt {
     /// Subscribes to the signal, and returns the guard, or `None` if the signal has already been disposed.
     #[track_caller]
     fn try_read(&self) -> Option<Self::Value>;
-
-    /// Subscribes to the signal, and returns the guard.
-    ///
-    /// # Panics
-    /// Panics if you try to access a signal that has been disposed.
-    #[track_caller]
-    fn read(&self) -> Self::Value {
-        self.try_read().unwrap_or_else(unwrap_signal!(self))
-    }
 }
 
 impl<T> ReadOptional for Option<T>
 where
     Self: DefinedAt,
-    T: Read,
+    T: TryRead,
 {
-    type Value = Option<<T as Read>::Value>;
+    type Value = Option<<T as TryRead>::Value>;
 
     fn try_read(&self) -> Option<Self::Value> {
         Some(if let Some(readable) = self {
@@ -98,7 +76,7 @@ where
     }
 }
 
-/// An alternative [`WithUntracked`](crate) trait that works with `Option<Withable>` types.
+/// An alternative [`TryWithUntracked`](crate) trait that works with `Option<Withable>` types.
 pub trait WithUntrackedOptional: DefinedAt {
     /// The type of the value contained in the signal.
     type Value: ?Sized;
@@ -110,28 +88,15 @@ pub trait WithUntrackedOptional: DefinedAt {
         &self,
         fun: impl FnOnce(Option<&Self::Value>) -> U,
     ) -> Option<U>;
-
-    /// Applies the closure to the value, and returns the result.
-    ///
-    /// # Panics
-    /// Panics if you try to access a signal that has been disposed.
-    #[track_caller]
-    fn with_untracked<U>(
-        &self,
-        fun: impl FnOnce(Option<&Self::Value>) -> U,
-    ) -> U {
-        self.try_with_untracked(fun)
-            .unwrap_or_else(unwrap_signal!(self))
-    }
 }
 
 impl<T> WithUntrackedOptional for Option<T>
 where
     Self: DefinedAt,
-    T: WithUntracked,
-    <T as WithUntracked>::Value: Sized,
+    T: TryWithUntracked,
+    <T as TryWithUntracked>::Value: Sized,
 {
-    type Value = <T as WithUntracked>::Value;
+    type Value = <T as TryWithUntracked>::Value;
 
     fn try_with_untracked<U>(
         &self,
@@ -145,7 +110,7 @@ where
     }
 }
 
-/// An alternative [`With`](crate) trait that works with `Option<Withable>` types.
+/// An alternative [`TryWith`](crate) trait that works with `Option<Withable>` types.
 pub trait WithOptional: DefinedAt {
     /// The type of the value contained in the signal.
     type Value: ?Sized;
@@ -157,24 +122,15 @@ pub trait WithOptional: DefinedAt {
         &self,
         fun: impl FnOnce(Option<&Self::Value>) -> U,
     ) -> Option<U>;
-
-    /// Subscribes to the signal, applies the closure to the value, and returns the result.
-    ///
-    /// # Panics
-    /// Panics if you try to access a signal that has been disposed.
-    #[track_caller]
-    fn with<U>(&self, fun: impl FnOnce(Option<&Self::Value>) -> U) -> U {
-        self.try_with(fun).unwrap_or_else(unwrap_signal!(self))
-    }
 }
 
 impl<T> WithOptional for Option<T>
 where
     Self: DefinedAt,
-    T: With,
-    <T as With>::Value: Sized,
+    T: TryWith,
+    <T as TryWith>::Value: Sized,
 {
-    type Value = <T as With>::Value;
+    type Value = <T as TryWith>::Value;
 
     fn try_with<U>(
         &self,
@@ -188,12 +144,12 @@ where
     }
 }
 
-impl<T> GetUntracked for Option<T>
+impl<T> TryGetUntracked for Option<T>
 where
     Self: DefinedAt,
-    T: GetUntracked,
+    T: TryGetUntracked,
 {
-    type Value = Option<<T as GetUntracked>::Value>;
+    type Value = Option<<T as TryGetUntracked>::Value>;
 
     fn try_get_untracked(&self) -> Option<Self::Value> {
         Some(if let Some(signal) = self {
@@ -204,12 +160,12 @@ where
     }
 }
 
-impl<T> Get for Option<T>
+impl<T> TryGet for Option<T>
 where
     Self: DefinedAt,
-    T: Get,
+    T: TryGet,
 {
-    type Value = Option<<T as Get>::Value>;
+    type Value = Option<<T as TryGet>::Value>;
 
     fn try_get(&self) -> Option<Self::Value> {
         Some(if let Some(signal) = self {

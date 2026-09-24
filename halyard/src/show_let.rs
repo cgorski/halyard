@@ -1,7 +1,10 @@
 use crate::{children::ViewFn, IntoView};
 use halyard_macro::component;
-use halyard_reactive_graph::traits::Get;
-use halyard_tachys::either::Either;
+use halyard_reactive_graph::{
+    gone::render_value,
+    traits::{IsDisposed, TryGet},
+};
+use halyard_tachys::either::EitherOf3;
 use std::{marker::PhantomData, sync::Arc};
 
 /// Like `<Show>` but for `Option`. This is a shortcut for
@@ -65,7 +68,7 @@ use std::{marker::PhantomData, sync::Arc};
 /// let (opt_value, set_opt_value) = signal(None::<i32>);
 ///
 /// view! {
-///     <ShowLet some=move || opt_value.get().map(|v| v * 2) let:value>
+///     <ShowLet some=move || opt_value.try_get().unwrap().map(|v| v * 2) let:value>
 ///         "We have a value: " {value}
 ///     </ShowLet>
 /// }
@@ -105,15 +108,21 @@ where
         let children = children.clone();
         let fallback = fallback.clone();
 
-        getter
-            .run()
-            .map(move |t| Either::Left(children(t)))
-            .unwrap_or_else(move || Either::Right(fallback.run()))
+        // a signal whose value is gone renders nothing
+        match (getter.0)() {
+            Some(Some(t)) => EitherOf3::A(children(t)),
+            Some(None) => EitherOf3::B(fallback.run()),
+            None => EitherOf3::C(()),
+        }
     }
 }
 
 /// Servers as a wrapper for both, an `Option` signal or a closure that returns an `Option`.
-pub struct OptionGetter<T>(Arc<dyn Fn() -> Option<T> + Send + Sync + 'static>);
+/// The function behind an [`OptionGetter`]; the outer `None` is a signal whose value is gone.
+type OptionFn<T> = dyn Fn() -> Option<Option<T>> + Send + Sync + 'static;
+
+/// Reads the value of a `<ShowLet some=…>`.
+pub struct OptionGetter<T>(Arc<OptionFn<T>>);
 
 impl<T> Clone for OptionGetter<T> {
     fn clone(&self) -> Self {
@@ -124,7 +133,7 @@ impl<T> Clone for OptionGetter<T> {
 impl<T> OptionGetter<T> {
     /// Runs the getter and returns the result.
     pub fn run(&self) -> Option<T> {
-        (self.0)()
+        (self.0)().flatten()
     }
 }
 
@@ -143,7 +152,7 @@ where
     F: Fn() -> Option<T> + Send + Sync + 'static,
 {
     fn into_option_getter(self) -> OptionGetter<T> {
-        OptionGetter(Arc::new(self))
+        OptionGetter(Arc::new(move || Some(self())))
     }
 }
 
@@ -156,11 +165,11 @@ pub struct SignalMarker;
 
 impl<T, S> IntoOptionGetter<T, SignalMarker> for S
 where
-    S: Get<Value = Option<T>> + Clone + Send + Sync + 'static,
+    S: TryGet<Value = Option<T>> + IsDisposed + Clone + Send + Sync + 'static,
 {
     fn into_option_getter(self) -> OptionGetter<T> {
         let cloned = self.clone();
-        OptionGetter(Arc::new(move || cloned.get()))
+        OptionGetter(Arc::new(move || render_value(&cloned)))
     }
 }
 
@@ -173,6 +182,6 @@ where
     T: Clone + Send + Sync + 'static,
 {
     fn into_option_getter(self) -> OptionGetter<T> {
-        OptionGetter(Arc::new(move || self.clone()))
+        OptionGetter(Arc::new(move || Some(self.clone())))
     }
 }

@@ -1,4 +1,4 @@
-use crate::into_view::IntoView;
+use crate::{into_view::IntoView, show::ViewSource};
 use halyard_macro::component;
 use halyard_reactive_graph::{
     owner::Owner,
@@ -47,13 +47,13 @@ fn list_owner(component: &str) -> Owner {
 ///     <div>
 ///       <For
 ///         // a function that returns the items we're iterating over; a signal is fine
-///         each=move || counters.get()
+///         each=counters
 ///         // a unique key for each item
 ///         key=|counter| counter.id
 ///         // renders each item to a view
 ///         children=move |counter: Counter| {
 ///           view! {
-///             <button>"Value: " {move || counter.count.get()}</button>
+///             <button>"Value: " {move || counter.count.try_get().unwrap()}</button>
 ///           }
 ///         }
 ///       />
@@ -81,11 +81,11 @@ fn list_owner(component: &str) -> Owner {
 ///   view! {
 ///     <div>
 ///         <For
-///           each=move || counters.get()
+///           each=counters
 ///           key=|counter| counter.id
 ///           let(counter)
 ///         >
-///             <button>"Value: " {move || counter.count.get()}</button>
+///             <button>"Value: " {move || counter.count.try_get().unwrap()}</button>
 ///         </For>
 ///     </div>
 ///   }
@@ -112,11 +112,11 @@ fn list_owner(component: &str) -> Owner {
 ///   view! {
 ///     <div>
 ///         <For
-///           each=move || counters.get()
+///           each=counters
 ///           key=|counter| counter.id
 ///           let(Counter { id, count })
 ///         >
-///             <button>"Value: " {move || count.get()}</button>
+///             <button>"Value: " {count}</button>
 ///         </For>
 ///     </div>
 ///   }
@@ -126,6 +126,8 @@ fn list_owner(component: &str) -> Owner {
 #[component]
 pub fn For<IF, I, T, EF, N, KF, K>(
     /// Items over which the component should iterate.
+    /// The items: a closure that returns them, or a signal of them. A signal whose value
+    /// is gone renders no rows.
     each: IF,
     /// A key function that will be applied to each item.
     key: KF,
@@ -133,7 +135,7 @@ pub fn For<IF, I, T, EF, N, KF, K>(
     children: EF,
 ) -> impl IntoView
 where
-    IF: Fn() -> I + Send + 'static,
+    IF: ViewSource<Value = I> + Send + 'static,
     I: IntoIterator<Item = T> + Send + 'static,
     EF: Fn(T) -> N + Send + Clone + 'static,
     N: IntoView + 'static,
@@ -155,7 +157,11 @@ where
         let view = owner.with(|| children(child));
         (drop, OwnedView::new_with_owner(view, owner))
     };
-    move || keyed(each(), key.clone(), children.clone())
+    // a signal whose value is gone renders no rows
+    move || {
+        each.read_source()
+            .map(|items| keyed(items, key.clone(), children.clone()))
+    }
 }
 
 /// Iterates over children and displays them, keyed by the `key` function given.
@@ -182,13 +188,13 @@ where
 ///     <div>
 ///       <ForEnumerate
 ///         // a function that returns the items we're iterating over; a signal is fine
-///         each=move || counters.get()
+///         each=counters
 ///         // a unique key for each item
 ///         key=|counter| counter.id
 ///         // renders each item to a view
 ///         children={move |index: ReadSignal<usize>, counter: Counter| {
 ///           view! {
-///             <button>{move || index.get()} ". Value: " {move || counter.count.get()}</button>
+///             <button>{index} ". Value: " {move || counter.count.try_get().unwrap()}</button>
 ///           }
 ///         }}
 ///       />
@@ -200,6 +206,8 @@ where
 #[component]
 pub fn ForEnumerate<IF, I, T, EF, N, KF, K>(
     /// Items over which the component should iterate.
+    /// The items: a closure that returns them, or a signal of them. A signal whose value
+    /// is gone renders no rows.
     each: IF,
     /// A key function that will be applied to each item.
     key: KF,
@@ -207,7 +215,7 @@ pub fn ForEnumerate<IF, I, T, EF, N, KF, K>(
     children: EF,
 ) -> impl IntoView
 where
-    IF: Fn() -> I + Send + 'static,
+    IF: ViewSource<Value = I> + Send + 'static,
     I: IntoIterator<Item = T> + Send + 'static,
     EF: Fn(ReadSignal<usize>, T) -> N + Send + Clone + 'static,
     N: IntoView + 'static,
@@ -233,7 +241,11 @@ where
             OwnedView::new_with_owner(view, owner),
         )
     };
-    move || keyed(each(), key.clone(), children.clone())
+    // a signal whose value is gone renders no rows
+    move || {
+        each.read_source()
+            .map(|items| keyed(items, key.clone(), children.clone()))
+    }
 }
 
 /*

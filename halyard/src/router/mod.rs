@@ -89,7 +89,7 @@
 //!     <div>
 //!       // show the contacts
 //!       <ul>
-//!         {move || contacts.get().map(|contacts| view! { <li>"todo contact info"</li> } )}
+//!         {move || contacts.try_get().flatten().map(|contacts| view! { <li>"todo contact info"</li> } )}
 //!       </ul>
 //!
 //!       // insert the nested child route here
@@ -102,7 +102,7 @@
 //! fn Contact() -> impl IntoView {
 //!   let params = use_params_map();
 //!   let data = Resource::new(
-//!     move || params.read().get("id").unwrap_or_default(),
+//!     move || params.try_with(|p| p.get("id")).flatten().unwrap_or_default(),
 //!     move |id| contact_data(id)
 //!   );
 //!   // ... return some view

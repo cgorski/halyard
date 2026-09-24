@@ -80,7 +80,7 @@ impl FromEncodedStr for [u8] {
 
 mod view_implementations {
     use crate::server::Resource;
-    use halyard_reactive_graph::traits::Read;
+
     use halyard_tachys::{
         html::attribute::{any_attribute::AnyAttribute, Attribute},
         hydration::Cursor,
@@ -146,7 +146,7 @@ mod view_implementations {
         fn dry_resolve(&mut self) {
             // reading registers the resource with the enclosing <Suspense/>; a resource
             // whose owner is gone has nothing to register
-            _ = self.try_read();
+            _ = halyard_reactive_graph::traits::TryRead::try_read(&*self);
         }
 
         fn resolve(self) -> impl Future<Output = Self::AsyncOutput> + Send {

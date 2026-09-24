@@ -75,21 +75,27 @@ fn a_read_inside_its_own_update_sees_the_committed_value() {
     let (seen, after) =
         finishes("a read inside the signal's own update", || {
             let count = RwSignal::new(1);
-            let doubled = Memo::new(move |_| count.get() * 2);
-            let derived = move || count.get() * 3;
+            let doubled = Memo::new(move |_| count.try_get().unwrap() * 2);
+            let derived = move || count.try_get().unwrap() * 3;
             let mut seen = None;
             count.update(|n| {
                 *n = 5;
                 seen = Some((
-                    count.get(),
-                    count.get_untracked(),
-                    count.with(|n| *n),
-                    *count.read(),
-                    doubled.get(),
+                    count.try_get().unwrap(),
+                    count.try_get_untracked().unwrap(),
+                    count.try_with(|n| *n).unwrap(),
+                    *count.try_read().unwrap(),
+                    doubled.try_get().unwrap(),
                     derived(),
                 ));
             });
-            (seen, (count.get_untracked(), doubled.get_untracked()))
+            (
+                seen,
+                (
+                    count.try_get_untracked().unwrap(),
+                    doubled.try_get_untracked().unwrap(),
+                ),
+            )
         });
     assert_eq!(seen, Some((1, 1, 1, 1, 2, 3)), "the committed value");
     assert_eq!(after, (5, 10), "the update is committed afterwards");
@@ -145,16 +151,18 @@ fn nested_updates_of_the_same_signal() {
             count.update(|m| *m += 10);
             *n += 1;
         });
-        let nested = count.get_untracked();
+        let nested = count.try_get_untracked().unwrap();
 
         // deferred updates inside a read compose, in order, with the writes before them
         let total = RwSignal::new(0);
-        total.with(|_| {
-            total.set(5);
-            total.update(|m| *m += 1);
-            total.update(|m| *m *= 10);
-        });
-        (nested, total.get_untracked())
+        total
+            .try_with(|_| {
+                total.set(5);
+                total.update(|m| *m += 1);
+                total.update(|m| *m *= 10);
+            })
+            .unwrap();
+        (nested, total.try_get_untracked().unwrap())
     });
     assert_eq!(
         nested, 11,
@@ -170,7 +178,7 @@ fn an_update_inside_a_memo_recomputed_from_inside_an_update() {
             let count = RwSignal::new(1);
             let other = RwSignal::new(0);
             let memo = Memo::new(move |_| {
-                let n = count.get();
+                let n = count.try_get().unwrap();
                 if n == 1 {
                     // the memo writes the signal that is being updated...
                     count.update(|c| *c += 100);
@@ -181,13 +189,16 @@ fn an_update_inside_a_memo_recomputed_from_inside_an_update() {
             });
             let mut seen = None;
             count.update(|c| {
-                seen = Some(memo.get());
+                seen = Some(memo.try_get().unwrap());
                 *c += 1;
             });
             (
                 seen,
-                (count.get_untracked(), other.get_untracked()),
-                memo.get_untracked(),
+                (
+                    count.try_get_untracked().unwrap(),
+                    other.try_get_untracked().unwrap(),
+                ),
+                memo.try_get_untracked().unwrap(),
             )
         });
     assert_eq!(seen, Some(10), "the memo computed from the committed value");
@@ -204,17 +215,22 @@ fn a_write_guard_with_a_read_inside() {
     let (during, deferred, after, nested) =
         finishes("a write guard with a read inside", || {
             let count = RwSignal::new(1);
-            let mut guard = count.write();
+            let mut guard = count.try_write().unwrap();
             *guard += 1;
-            let during = (count.get_untracked(), *count.read_untracked());
+            let during = (
+                count.try_get_untracked().unwrap(),
+                *count.try_read_untracked().unwrap(),
+            );
             count.set(10);
-            let deferred = count.get_untracked();
+            let deferred = count.try_get_untracked().unwrap();
             drop(guard);
-            let after = count.get_untracked();
+            let after = count.try_get_untracked().unwrap();
 
             // a write guard taken inside the signal's own `with`
-            count.with(|_| *count.write() += 5);
-            (during, deferred, after, count.get_untracked())
+            count
+                .try_with(|_| *count.try_write().unwrap() += 5)
+                .unwrap();
+            (during, deferred, after, count.try_get_untracked().unwrap())
         });
     assert_eq!(during, (1, 1), "the committed value while the guard lives");
     assert_eq!(deferred, 1, "the set waits for the guard");
@@ -307,7 +323,7 @@ fn subscribers_are_notified_once_per_committed_change() {
             })
         });
         // deferred: one commit, one notification, after the read
-        step(&|| count.with(|_| count.set(10)));
+        step(&|| count.try_with(|_| count.set(10)).unwrap());
         // the update's commit, then the deferred set
         step(&|| {
             count.update(|n| {
@@ -315,9 +331,9 @@ fn subscribers_are_notified_once_per_committed_change() {
                 *n += 1;
             })
         });
-        step(&|| *count.write() += 1);
+        step(&|| *count.try_write().unwrap() += 1);
         drop(effect);
-        (after, count.get_untracked())
+        (after, count.try_get_untracked().unwrap())
     });
     assert_eq!(runs, vec![1, 2, 3, 3, 4, 6, 7]);
     assert_eq!(value, 21);
@@ -333,15 +349,17 @@ fn a_value_that_cannot_be_cloned_is_set_or_updated_in_place() {
     let (inside, in_place, after) =
         finishes("a value that is not Clone", || {
             let token = RwSignal::new(Token(1));
-            let inside = token.with(|_| {
-                token.set(Token(2));
-                token.try_update(|t| t.0 += 1)
-            });
+            let inside = token
+                .try_with(|_| {
+                    token.set(Token(2));
+                    token.try_update(|t| t.0 += 1)
+                })
+                .unwrap();
             let in_place = token.try_update(|t| {
                 t.0 += 1;
                 t.0
             });
-            (inside, in_place, token.with_untracked(|t| t.0))
+            (inside, in_place, token.try_with_untracked(|t| t.0).unwrap())
         });
     assert_eq!(inside, None, "not while this thread is reading it");
     assert_eq!(in_place, Some(3), "the deferred set applied first");

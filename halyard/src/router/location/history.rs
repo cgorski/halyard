@@ -7,10 +7,7 @@ use core::fmt;
 use futures::channel::oneshot;
 use halyard::{ev, prelude::*};
 use halyard_reactive_graph::or_poisoned::OrPoisoned;
-use halyard_reactive_graph::{
-    signal::ArcRwSignal,
-    traits::{ReadUntracked, Set},
-};
+use halyard_reactive_graph::{signal::ArcRwSignal, traits::Set};
 use halyard_tachys::dom::{document, window};
 use js_sys::{try_iter, Array, JsString};
 use std::{

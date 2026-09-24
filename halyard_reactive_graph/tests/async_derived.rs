@@ -2,8 +2,8 @@ use halyard_reactive_graph::executor::Executor;
 use halyard_reactive_graph::{
     computed::{ArcAsyncDerived, AsyncDerived},
     owner::Owner,
+    prelude::*,
     signal::RwSignal,
-    traits::{Get, Read, Set, With, WithUntracked},
 };
 use std::future::pending;
 
@@ -30,7 +30,7 @@ async fn arc_async_derived_tracks_signal_change() {
     let signal = RwSignal::new(10);
     let value = ArcAsyncDerived::new(move || async move {
         Executor::tick().await;
-        signal.get()
+        signal.try_get().unwrap()
     });
 
     assert_eq!(value.clone().await, 10);
@@ -65,7 +65,7 @@ async fn async_derived_tracks_signal_change() {
     let signal = RwSignal::new(10);
     let value = AsyncDerived::new(move || async move {
         Executor::tick().await;
-        signal.get()
+        signal.try_get().unwrap()
     });
 
     assert_eq!(value.await, 10);
@@ -85,7 +85,7 @@ async fn read_signal_traits_on_arc() {
 
     let value = ArcAsyncDerived::new(pending::<()>);
     assert_eq!(value.read(), None);
-    assert_eq!(value.with_untracked(|n| *n), None);
+    assert_eq!(value.try_with_untracked(|n| *n), Some(None));
     assert_eq!(value.with(|n| *n), None);
     assert_eq!(value.get(), None);
 }
@@ -97,11 +97,11 @@ async fn read_signal_traits_on_arena() {
     owner.set();
 
     let value = AsyncDerived::new(pending::<()>);
-    println!("{:?}", value.read());
-    assert_eq!(value.read(), None);
-    assert_eq!(value.with_untracked(|n| *n), None);
-    assert_eq!(value.with(|n| *n), None);
-    assert_eq!(value.get(), None);
+    println!("{:?}", value.try_read().unwrap());
+    assert_eq!(value.try_read().unwrap(), None);
+    assert_eq!(value.try_with_untracked(|n| *n), Some(None));
+    assert_eq!(value.try_with(|n| *n), Some(None));
+    assert_eq!(value.try_get(), Some(None));
 }
 
 #[tokio::test]
@@ -115,9 +115,9 @@ async fn async_derived_with_initial() {
     let derived =
         ArcAsyncDerived::new_with_initial(Some(5), move || async move {
             // reactive values can be tracked anywhere in the `async` block
-            let value1 = signal1.get();
+            let value1 = signal1.try_get().unwrap();
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            let value2 = signal2.get();
+            let value2 = signal2.try_get().unwrap();
 
             value1 + value2
         });

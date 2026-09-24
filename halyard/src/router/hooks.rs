@@ -7,11 +7,13 @@ use crate::router::{
     resolve_path::resolve_path,
 };
 use halyard::{dom::helpers::request_animation_frame, oco::Oco};
+use halyard_reactive_graph::traits::StrongWriteValue;
+use halyard_reactive_graph::traits::TryWith;
 use halyard_reactive_graph::{
     computed::{ArcMemo, Memo},
     owner::use_context,
     signal::{ArcRwSignal, ReadSignal},
-    traits::{Get, GetUntracked, With, WithUntracked, WriteValue},
+    traits::{Get, TryGetUntracked, TryWithUntracked, With},
     wrappers::write::SignalSetter,
 };
 use std::{
@@ -68,15 +70,15 @@ where
 ///     let (count, set_count) = query_signal::<i32>("count");
 ///     let clear = move |_| set_count.set(None);
 ///     let decrement =
-///         move |_| set_count.set(Some(count.get().unwrap_or(0) - 1));
+///         move |_| set_count.set(Some(count.try_get().unwrap().unwrap_or(0) - 1));
 ///     let increment =
-///         move |_| set_count.set(Some(count.get().unwrap_or(0) + 1));
+///         move |_| set_count.set(Some(count.try_get().unwrap().unwrap_or(0) + 1));
 ///
 ///     view! {
 ///         <div>
 ///             <button on:click=clear>"Clear"</button>
 ///             <button on:click=decrement>"-1"</button>
-///             <span>"Value: " {move || count.get().unwrap_or(0)} "!"</span>
+///             <span>"Value: " {move || count.try_get().unwrap().unwrap_or(0)} "!"</span>
 ///             <button on:click=increment>"+1"</button>
 ///         </div>
 ///     }
@@ -113,10 +115,10 @@ where
     let query_mutations =
         use_context::<RouterContext>().map(|router| router.query_mutations);
 
-    let get = Memo::new({
+    let get = Memo::new_try({
         let key = key.clone_inplace();
         move |_| {
-            query_map.with(|map| {
+            query_map.try_with(|map| {
                 map.get_str(&key).and_then(|value| value.parse().ok())
             })
         }
@@ -390,9 +392,18 @@ mod tests {
         let owner = Owner::new();
         owner.with(|| {
             let location = use_location();
-            assert_eq!(location.pathname.get_untracked(), "/");
-            assert_eq!(location.search.get_untracked(), "");
-            assert_eq!(location.query.get_untracked(), ParamsMap::new());
+            assert_eq!(
+                location.pathname.try_get_untracked(),
+                Some("/".to_string())
+            );
+            assert_eq!(
+                location.search.try_get_untracked(),
+                Some("".to_string())
+            );
+            assert_eq!(
+                location.query.try_get_untracked(),
+                Some(ParamsMap::new())
+            );
         });
     }
 
@@ -400,7 +411,7 @@ mod tests {
     fn use_url_outside_a_router_is_root() {
         let owner = Owner::new();
         owner.with(|| {
-            assert_eq!(use_url().get_untracked().path(), "/");
+            assert_eq!(use_url().try_get_untracked().unwrap().path(), "/");
         });
     }
 
@@ -408,8 +419,11 @@ mod tests {
     fn use_query_outside_a_router_is_empty() {
         let owner = Owner::new();
         owner.with(|| {
-            assert_eq!(use_query_map().get_untracked(), ParamsMap::new());
-            assert_eq!(use_query::<()>().get_untracked(), Ok(()));
+            assert_eq!(
+                use_query_map().try_get_untracked(),
+                Some(ParamsMap::new())
+            );
+            assert_eq!(use_query::<()>().try_get_untracked(), Some(Ok(())));
         });
     }
 
@@ -417,8 +431,11 @@ mod tests {
     fn use_params_outside_a_route_is_empty() {
         let owner = Owner::new();
         owner.with(|| {
-            assert_eq!(use_params_map().get_untracked(), ParamsMap::new());
-            assert_eq!(use_params::<()>().get_untracked(), Ok(()));
+            assert_eq!(
+                use_params_map().try_get_untracked(),
+                Some(ParamsMap::new())
+            );
+            assert_eq!(use_params::<()>().try_get_untracked(), Some(Ok(())));
         });
     }
 
@@ -426,7 +443,7 @@ mod tests {
     fn use_matched_outside_a_route_is_empty() {
         let owner = Owner::new();
         owner.with(|| {
-            assert_eq!(use_matched().get_untracked(), "");
+            assert_eq!(use_matched().try_get_untracked(), Some("".to_string()));
         });
     }
 
@@ -435,9 +452,12 @@ mod tests {
         let owner = Owner::new();
         owner.with(|| {
             let path = use_resolved_path(|| "reports/1".to_string());
-            assert_eq!(path.get_untracked(), "/reports/1");
+            assert_eq!(
+                path.try_get_untracked(),
+                Some("/reports/1".to_string())
+            );
             let path = use_resolved_path(|| "/c".to_string());
-            assert_eq!(path.get_untracked(), "/c");
+            assert_eq!(path.try_get_untracked(), Some("/c".to_string()));
         });
     }
 
@@ -447,7 +467,7 @@ mod tests {
         let owner = Owner::new();
         owner.with(|| {
             let (page, _set_page) = query_signal::<u32>("page");
-            assert_eq!(page.get_untracked(), None);
+            assert_eq!(page.try_get_untracked(), Some(None));
         });
     }
 }

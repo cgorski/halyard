@@ -7,7 +7,7 @@ use halyard_reactive_graph::{
         RwSignal,
     },
     traits::{
-        DefinedAt, Get, IsDisposed, Notify, ReadUntracked, Set, Track,
+        DefinedAt, IsDisposed, Notify, Set, Track, TryGet, TryReadUntracked,
         UntrackableGuard, Write,
     },
 };
@@ -22,6 +22,8 @@ where
     E: ElementType,
     E::Output: 'static;
 
+halyard_reactive_graph::impl_weak!([E] NodeRef<E> where [E: ElementType, E::Output: 'static]);
+
 impl<E> NodeRef<E>
 where
     E: ElementType,
@@ -31,6 +33,16 @@ where
     #[track_caller]
     pub fn new() -> Self {
         Self(RwSignal::new(None))
+    }
+
+    /// The element, or `None` if it is not mounted (yet), or the `NodeRef`'s owner is gone:
+    /// both mean "no element". Tracks the `NodeRef`, like a `try_get`.
+    #[track_caller]
+    pub fn element(&self) -> Option<E::Output>
+    where
+        E::Output: JsCast + Clone,
+    {
+        self.try_get().flatten()
     }
 
     /// Runs the provided closure when the `NodeRef` has been connected
@@ -48,7 +60,7 @@ where
         // the effect runs again whenever the node reference is loaded again (its element
         // re-rendered); `f` runs on the first load only
         Effect::new(move |_| {
-            if let Some(node_ref) = self.get() {
+            if let Some(node_ref) = self.element() {
                 if let Some(f) = f.take() {
                     untrack(move || {
                         f(node_ref);
@@ -130,14 +142,14 @@ where
         self.0.try_write()
     }
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.0.try_write_untracked()
+        self.0.try_write_in_place()
     }
 }
 
-impl<E> ReadUntracked for NodeRef<E>
+impl<E> TryReadUntracked for NodeRef<E>
 where
     E: ElementType,
     E::Output: JsCast + Clone + 'static,

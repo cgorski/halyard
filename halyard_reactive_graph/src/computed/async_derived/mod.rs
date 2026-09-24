@@ -115,7 +115,7 @@ pub mod suspense {
     use crate::or_poisoned::OrPoisoned;
     use crate::{
         signal::ArcRwSignal,
-        traits::{Update, Write},
+        traits::{StrongWrite, Update},
     };
     use futures::channel::oneshot::Sender;
     use slotmap::{DefaultKey, SlotMap};

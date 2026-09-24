@@ -1,6 +1,6 @@
 use crate::{
     signal::guards::{Plain, ReadGuard, UntrackedWriteGuard},
-    traits::{DefinedAt, IntoInner, IsDisposed, ReadValue, WriteValue},
+    traits::{DefinedAt, IntoInner, IsDisposed, TryReadValue, WriteValue},
 };
 use std::{
     fmt::{Debug, Formatter},
@@ -22,6 +22,20 @@ pub struct ArcStoredValue<T> {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     defined_at: &'static Location<'static>,
     value: Arc<RwLock<T>>,
+}
+crate::impl_strong!([T] ArcStoredValue<T>);
+
+impl<T> ArcStoredValue<T> {
+    /// Returns a weak (arena) handle to the value: `Copy`, and it does not keep the value
+    /// alive (like [`std::sync::Arc::downgrade`]). The reverse is `upgrade` on the weak
+    /// handle.
+    #[track_caller]
+    pub fn downgrade(&self) -> crate::owner::StoredValue<T>
+    where
+        crate::owner::StoredValue<T>: From<Self>,
+    {
+        self.clone().into()
+    }
 }
 
 impl<T> Clone for ArcStoredValue<T> {
@@ -97,7 +111,7 @@ impl<T> ArcStoredValue<T> {
     }
 }
 
-impl<T> ReadValue for ArcStoredValue<T>
+impl<T> TryReadValue for ArcStoredValue<T>
 where
     T: 'static,
 {

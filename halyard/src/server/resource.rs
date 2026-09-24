@@ -75,6 +75,8 @@ pub struct ArcResource<T, Ser = JsonSerdeCodec> {
     defined_at: &'static Location<'static>,
 }
 
+halyard_reactive_graph::impl_strong!([T, Ser] ArcResource<T, Ser>);
+
 impl<T, Ser> Debug for ArcResource<T, Ser> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("ArcResource");
@@ -101,33 +103,22 @@ where
     }
 }
 
-impl<T, Ser> From<Resource<T, Ser>> for ArcResource<T, Ser>
+impl<T, Ser> Resource<T, Ser>
 where
-    T: Send + Sync,
+    T: Send + Sync + 'static,
 {
+    /// Returns a strong (reference-counted) handle to the resource, which keeps it alive, or
+    /// `None` if it is gone (like [`std::sync::Weak::upgrade`]). The reverse, a downgrade,
+    /// is `From<ArcResource>`.
     #[track_caller]
-    fn from(resource: Resource<T, Ser>) -> Self {
-        if resource.data.is_disposed() || resource.refetch.is_disposed() {
-            warn_disposed(
-                DisposedUse::IntoArc,
-                Location::caller(),
-                resource.defined_at(),
-            );
-            return ArcResource {
-                ser: PhantomData,
-                data: never_loads(),
-                refetch: ArcRwSignal::new(0),
-                #[cfg(any(debug_assertions, halyard_debuginfo))]
-                defined_at: Location::caller(),
-            };
-        }
-        ArcResource {
+    pub fn upgrade(&self) -> Option<ArcResource<T, Ser>> {
+        Some(ArcResource {
             ser: PhantomData,
-            data: resource.data.into(),
-            refetch: resource.refetch.into(),
+            data: self.data.upgrade()?,
+            refetch: self.refetch.upgrade()?,
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: Location::caller(),
-        }
+        })
     }
 }
 
@@ -195,10 +186,10 @@ where
         self.data.try_write()
     }
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.data.try_write_untracked()
+        self.data.try_write_in_place()
     }
 }
 
@@ -235,11 +226,11 @@ fn run_in_resource_source_signal<T>(fun: impl FnOnce() -> T) -> T {
     }
 }
 
-impl<T, Ser> ReadUntracked for ArcResource<T, Ser>
+impl<T, Ser> TryReadUntracked for ArcResource<T, Ser>
 where
     T: 'static,
 {
-    type Value = <ArcAsyncDerived<T> as ReadUntracked>::Value;
+    type Value = <ArcAsyncDerived<T> as TryReadUntracked>::Value;
 
     #[track_caller]
     fn try_read_untracked(&self) -> Option<Self::Value> {
@@ -405,7 +396,7 @@ where
     /// Re-runs the async function with the current source data.
     pub fn refetch(&self) {
         // wrapping, not saturating: every refetch must change the value the source compares
-        self.refetch.try_update(|n| *n = n.wrapping_add(1));
+        self.refetch.update(|n| *n = n.wrapping_add(1));
     }
 }
 
@@ -629,6 +620,8 @@ where
     defined_at: &'static Location<'static>,
 }
 
+halyard_reactive_graph::impl_weak!([T, Ser] Resource<T, Ser> where [T: Send + Sync + 'static]);
+
 impl<T, Ser> Debug for Resource<T, Ser>
 where
     T: Send + Sync + 'static,
@@ -708,18 +701,18 @@ where
         self.data.try_write()
     }
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.data.try_write_untracked()
+        self.data.try_write_in_place()
     }
 }
 
-impl<T, Ser> ReadUntracked for Resource<T, Ser>
+impl<T, Ser> TryReadUntracked for Resource<T, Ser>
 where
     T: Send + Sync + 'static,
 {
-    type Value = <AsyncDerived<T> as ReadUntracked>::Value;
+    type Value = <AsyncDerived<T> as TryReadUntracked>::Value;
 
     #[track_caller]
     fn try_read_untracked(&self) -> Option<Self::Value> {
@@ -928,7 +921,7 @@ where
     /// Re-runs the async function with the current source data.
     pub fn refetch(&self) {
         // wrapping, not saturating: every refetch must change the value the source compares
-        self.refetch.try_update(|n| *n = n.wrapping_add(1));
+        self.refetch.update(|n| *n = n.wrapping_add(1));
     }
 }
 
@@ -1031,7 +1024,7 @@ mod tests {
 
         resource.refetch();
 
-        assert_eq!(resource.refetch.get_untracked(), 0);
+        assert_eq!(resource.refetch.try_get_untracked(), Some(0));
     }
 
     /// A `Suspend` (or a task) can outlive the owner of the resource it awaits, e.g. on a
@@ -1060,20 +1053,17 @@ mod tests {
         assert!(resource.by_ref().now_or_never().is_none());
     }
 
-    /// Converting a disposed resource into an `ArcResource` used to panic too. It becomes
-    /// a resource that never loads.
+    /// Converting a disposed resource into an `ArcResource` used to panic too. A disposed
+    /// resource has no strong form: `upgrade` gives `None`.
     #[test]
-    fn a_disposed_resource_converts_to_an_arc_resource_that_never_loads() {
+    fn a_disposed_resource_has_no_strong_form() {
         init_executor();
         let owner = Owner::new();
         let resource =
             owner.with(|| Resource::new(|| (), |()| async { 1_u32 }));
         owner.cleanup();
 
-        let arc = ArcResource::from(resource);
-
-        assert_eq!(arc.get_untracked(), None);
-        assert!(arc.into_future().now_or_never().is_none());
+        assert!(resource.upgrade().is_none());
     }
 
     /// On the server, each resource's value is sent to the browser in the page.
@@ -1130,7 +1120,7 @@ mod tests {
             let (owner, context) = server_request();
             let resource =
                 owner.with(|| ArcResource::new(|| (), |()| async { 1_u32 }));
-            resource.try_update(|value| *value = None);
+            resource.set(None);
 
             let data = page_data(&context);
 

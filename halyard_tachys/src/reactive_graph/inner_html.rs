@@ -99,11 +99,12 @@ macro_rules! inner_html_reactive {
         impl<$($gen),*> InnerHtmlValue for $name<$($gen),*>
         where
             $v: InnerHtmlValue + Clone + Send + Sync + 'static,
-            <$v as InnerHtmlValue>::State: 'static,
+            Option<$v>: InnerHtmlValue,
+            <Option<$v> as InnerHtmlValue>::State: 'static,
             $($where_clause)*
         {
             type AsyncOutput = Self;
-            type State = RenderEffect<<$v as InnerHtmlValue>::State>;
+            type State = RenderEffect<<Option<$v> as InnerHtmlValue>::State>;
             type Cloneable = Self;
             type CloneableOwned = Self;
 
@@ -112,7 +113,7 @@ macro_rules! inner_html_reactive {
             }
 
             fn to_html(self, buf: &mut String) {
-                let value = self.get();
+                let value = halyard_reactive_graph::gone::render_value(&self);
                 value.to_html(buf);
             }
 
@@ -122,18 +123,18 @@ macro_rules! inner_html_reactive {
                 self,
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
-                (move || self.get()).hydrate::<FROM_SERVER>(el)
+                (move || halyard_reactive_graph::gone::render_value(&self)).hydrate::<FROM_SERVER>(el)
             }
 
             fn build(
                 self,
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
-                (move || self.get()).build(el)
+                (move || halyard_reactive_graph::gone::render_value(&self)).build(el)
             }
 
             fn rebuild(self, state: &mut Self::State) {
-                (move || self.get()).rebuild(state)
+                (move || halyard_reactive_graph::gone::render_value(&self)).rebuild(state)
             }
 
             fn into_cloneable(self) -> Self::Cloneable {
@@ -162,7 +163,7 @@ mod stable {
         effect::RenderEffect,
         owner::Storage,
         signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
-        traits::Get,
+        traits::{IsDisposed, TryGet},
         wrappers::read::{ArcSignal, Signal},
     };
 
@@ -170,7 +171,7 @@ mod stable {
         RwSignal,
         <V, S>,
         V,
-        RwSignal<V, S>: Get<Value = V>,
+        RwSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -178,7 +179,7 @@ mod stable {
         ReadSignal,
         <V, S>,
         V,
-        ReadSignal<V, S>: Get<Value = V>,
+        ReadSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -186,7 +187,7 @@ mod stable {
         Memo,
         <V, S>,
         V,
-        Memo<V, S>: Get<Value = V>,
+        Memo<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -194,7 +195,7 @@ mod stable {
         Signal,
         <V, S>,
         V,
-        Signal<V, S>: Get<Value = V>,
+        Signal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -202,12 +203,12 @@ mod stable {
         MaybeSignal,
         <V, S>,
         V,
-        MaybeSignal<V, S>: Get<Value = V>,
+        MaybeSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
-    inner_html_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: Get<Value = V>);
-    inner_html_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: Get<Value = V>);
-    inner_html_reactive!(ArcMemo, <V>, V, ArcMemo<V>: Get<Value = V>);
-    inner_html_reactive!(ArcSignal, <V>, V, ArcSignal<V>: Get<Value = V>);
+    inner_html_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: TryGet<Value = V> + IsDisposed);
+    inner_html_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: TryGet<Value = V> + IsDisposed);
+    inner_html_reactive!(ArcMemo, <V>, V, ArcMemo<V>: TryGet<Value = V> + IsDisposed);
+    inner_html_reactive!(ArcSignal, <V>, V, ArcSignal<V>: TryGet<Value = V> + IsDisposed);
 }

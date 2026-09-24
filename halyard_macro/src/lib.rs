@@ -90,7 +90,7 @@ mod slot;
 ///   // ❌ not like this: `count.get()` returns an `i32`, not a function
 ///   <p>{count.get()}</p>
 ///   // ✅ this is good: Halyard sees the function and knows it's a dynamic value
-///   <p>{move || count.get()}</p>
+///   <p>{count}</p>
 ///   // ✅ this is good too: a signal is a reactive value, so `count` itself can be passed directly into the view
 ///   <p>{count}</p>
 /// }
@@ -125,8 +125,8 @@ mod slot;
 ///   <input
 ///     type="text"
 ///     name="user_name"
-///     value={move || name.get()} // this only sets the default value!
-///     prop:value={move || name.get()} // here's how you update values. Sorry, I didn’t invent the DOM.
+///     value={name} // this only sets the default value!
+///     prop:value={name} // here's how you update values. Sorry, I didn’t invent the DOM.
 ///     on:click=move |ev| set_name.set(event_target_value(&ev)) // `event_target_value` is a useful little Halyard helper
 ///   />
 /// }
@@ -138,7 +138,7 @@ mod slot;
 /// # use halyard::prelude::*;
 /// # fn test() -> impl IntoView {
 /// let (count, set_count) = create_signal(2);
-/// view! { <div class:hidden-div={move || count.get() < 3}>"Now you see me, now you don’t."</div> }
+/// view! { <div class:hidden-div={move || count.try_get().unwrap() < 3}>"Now you see me, now you don’t."</div> }
 /// # }
 /// ```
 ///
@@ -147,7 +147,7 @@ mod slot;
 /// # use halyard::prelude::*;
 /// # fn test() -> impl IntoView {
 /// let (count, set_count) = create_signal(2);
-/// view! { <div class:hidden-div-25={move || count.get() < 3}>"Now you see me, now you don’t."</div> }
+/// view! { <div class:hidden-div-25={move || count.try_get().unwrap() < 3}>"Now you see me, now you don’t."</div> }
 /// # }
 /// ```
 ///
@@ -169,7 +169,7 @@ mod slot;
 /// // this allows you to use CSS frameworks that include complex class names
 /// view! {
 ///   <div
-///     class=("is-[this_-_really]-necessary-42", move || count.get() < 3)
+///     class=("is-[this_-_really]-necessary-42", move || count.try_get().unwrap() < 3)
 ///   >
 ///     "Now you see me, now you don’t."
 ///   </div>
@@ -187,9 +187,9 @@ mod slot;
 /// view! {
 ///   <div
 ///     style="position: absolute"
-///     style:left=move || format!("{}px", x.get())
-///     style:top=move || format!("{}px", y.get())
-///     style=("background-color", move || format!("rgb({}, {}, 100)", x.get(), y.get()))
+///     style:left=move || format!("{}px", x.try_get().unwrap())
+///     style:top=move || format!("{}px", y.try_get().unwrap())
+///     style=("background-color", move || format!("rgb({}, {}, 100)", x.try_get().unwrap(), y.try_get().unwrap()))
 ///   >
 ///     "Moves when coordinates change"
 ///   </div>
@@ -259,7 +259,7 @@ mod slot;
 ///         <div>
 ///             <button on:click=clear>"Clear"</button>
 ///             <button on:click=decrement>"-1"</button>
-///             <span>"Value: " {move || value.get().to_string()} "!"</span>
+///             <span>"Value: " {move || value.try_get().unwrap().to_string()} "!"</span>
 ///             <button on:click=increment>"+1"</button>
 ///         </div>
 ///     }
@@ -415,7 +415,7 @@ pub fn include_view(tokens: TokenStream) -> TokenStream {
 ///     // return the user interface, which will be automatically updated
 ///     // when signal values change
 ///     view! {
-///       <p>"Your name is " {name} " and you are " {move || age.get()} " years old."</p>
+///       <p>"Your name is " {name} " and you are " {age} " years old."</p>
 ///     }
 /// }
 ///
@@ -985,6 +985,9 @@ pub fn slice(input: TokenStream) -> TokenStream {
 /// let inner_count = memo!(outer_signal.inner.inner_count);
 /// let inner_name = memo!(outer_signal.inner.inner_name);
 /// ```
+///
+/// The memo is made with `Memo::new_try`: while the signal's value is gone, it has no value
+/// either.
 #[proc_macro]
 pub fn memo(input: TokenStream) -> TokenStream {
     memo::memo_impl(input)
@@ -1043,14 +1046,14 @@ pub fn lazy(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
 ///
 /// ```rust
 /// # use halyard_macro::{lazy, lazy_preload};
-/// # use halyard::prelude::Get;
+/// # use halyard::prelude::TryGet;
 ///
 /// #[lazy]
 /// fn lazy_func() {}
 ///
 /// fn preload_lazy() -> &'static str {
 ///     let is_loaded = lazy_preload!(lazy_func);
-///     if is_loaded.get() {
+///     if is_loaded.try_get() == Some(true) {
 ///         "Loaded"
 ///     } else {
 ///         "Loading..."

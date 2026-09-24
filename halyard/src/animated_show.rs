@@ -2,11 +2,12 @@ use crate::dom::helpers::TimeoutHandle;
 use crate::{children::ChildrenFn, component, control_flow::Show, IntoView};
 use core::time::Duration;
 use halyard_macro::view;
+use halyard_reactive_graph::traits::TryGet;
 use halyard_reactive_graph::{
     effect::RenderEffect,
     owner::{on_cleanup, StoredValue},
     signal::RwSignal,
-    traits::{Get, GetUntracked, GetValue, Set, SetValue},
+    traits::{Set, SetValue, TryGetUntracked, TryGetValue},
     wrappers::read::Signal,
 };
 use halyard_tachys::prelude::*;
@@ -76,12 +77,10 @@ pub fn AnimatedShow(
     hide_delay: Duration,
 ) -> impl IntoView {
     let handle: StoredValue<Option<TimeoutHandle>> = StoredValue::new(None);
-    let cls = RwSignal::new(if when.get_untracked() {
-        show_class
-    } else {
-        hide_class
-    });
-    let show = RwSignal::new(when.get_untracked());
+    // a `when` that is gone already shows nothing
+    let shown = when.try_get_untracked() == Some(true);
+    let cls = RwSignal::new(if shown { show_class } else { hide_class });
+    let show = RwSignal::new(shown);
 
     let eff = RenderEffect::new(move |_| {
         // `when` is gone once its owner is disposed: then there is nothing left to animate
@@ -126,8 +125,8 @@ pub fn AnimatedShow(
     });
 
     view! {
-        <Show when=move || show.get() fallback=|| ()>
-            <div class=move || cls.get()>{children()}</div>
+        <Show when=show fallback=|| ()>
+            <div class=cls>{children()}</div>
         </Show>
     }
 }

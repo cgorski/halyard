@@ -211,16 +211,17 @@ macro_rules! style_reactive {
         impl<$($gen),*> IntoStyle for $name<$($gen),*>
         where
             $v: IntoStyle + Clone + Send + Sync + 'static,
-            <$v as IntoStyle>::State: 'static,
+            Option<$v>: IntoStyle,
+            <Option<$v> as IntoStyle>::State: 'static,
             $($where_clause)*
         {
             type AsyncOutput = Self;
-            type State = RenderEffect<<$v as IntoStyle>::State>;
+            type State = RenderEffect<<Option<$v> as IntoStyle>::State>;
             type Cloneable = Self;
             type CloneableOwned = Self;
 
             fn to_html(self, style: &mut String) {
-                let value = self.get();
+                let value = halyard_reactive_graph::gone::render_value(&self);
                 value.to_html(style);
             }
 
@@ -228,18 +229,18 @@ macro_rules! style_reactive {
                 self,
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
-                (move || self.get()).hydrate::<FROM_SERVER>(el)
+                (move || halyard_reactive_graph::gone::render_value(&self)).hydrate::<FROM_SERVER>(el)
             }
 
             fn build(
                 self,
                 el: &crate::renderer::types::Element,
             ) -> Self::State {
-                (move || self.get()).build(el)
+                (move || halyard_reactive_graph::gone::render_value(&self)).build(el)
             }
 
             fn rebuild(self, state: &mut Self::State) {
-                (move || self.get()).rebuild(state)
+                (move || halyard_reactive_graph::gone::render_value(&self)).rebuild(state)
             }
 
             fn into_cloneable(self) -> Self::Cloneable {
@@ -260,7 +261,7 @@ macro_rules! style_reactive {
                 *state = RenderEffect::new_with_value(
                     move |prev| {
                         if let Some(mut state) = prev {
-                            <$v>::reset(&mut state);
+                            <Option<$v>>::reset(&mut state);
                             state
                         } else {
                             unreachable!()
@@ -275,15 +276,16 @@ macro_rules! style_reactive {
         impl<$($gen),*> IntoStyleValue for $name<$($gen),*>
         where
             $v: IntoStyleValue + Send + Sync + Clone + 'static,
+            Option<$v>: IntoStyleValue,
             $($where_clause)*
         {
             type AsyncOutput = Self;
-            type State = (Arc<str>, RenderEffect<<$v as IntoStyleValue>::State>);
+            type State = (Arc<str>, RenderEffect<<Option<$v> as IntoStyleValue>::State>);
             type Cloneable = $name<$($gen),*>;
             type CloneableOwned = $name<$($gen),*>;
 
             fn to_html(self, name: &str, style: &mut String) {
-                IntoStyleValue::to_html(move || self.get(), name, style)
+                IntoStyleValue::to_html(move || halyard_reactive_graph::gone::render_value(&self), name, style)
             }
 
             fn build(
@@ -291,7 +293,7 @@ macro_rules! style_reactive {
                 style: &crate::renderer::dom::CssStyleDeclaration,
                 name: &str,
             ) -> Self::State {
-                IntoStyleValue::build(move || self.get(), style, name)
+                IntoStyleValue::build(move || halyard_reactive_graph::gone::render_value(&self), style, name)
             }
 
             fn rebuild(
@@ -301,7 +303,7 @@ macro_rules! style_reactive {
                 state: &mut Self::State,
             ) {
                 IntoStyleValue::rebuild(
-                    move || self.get(),
+                    move || halyard_reactive_graph::gone::render_value(&self),
                     style,
                     name,
                     state,
@@ -313,7 +315,7 @@ macro_rules! style_reactive {
                 style: &crate::renderer::dom::CssStyleDeclaration,
                 name: &str,
             ) -> Self::State {
-                IntoStyleValue::hydrate(move || self.get(), style, name)
+                IntoStyleValue::hydrate(move || halyard_reactive_graph::gone::render_value(&self), style, name)
             }
 
             fn into_cloneable(self) -> Self::Cloneable {
@@ -342,7 +344,7 @@ mod stable {
         computed::{ArcMemo, Memo},
         owner::Storage,
         signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
-        traits::Get,
+        traits::{IsDisposed, TryGet},
         wrappers::read::{ArcSignal, Signal},
     };
     use std::sync::Arc;
@@ -351,7 +353,7 @@ mod stable {
         RwSignal,
         <V, S>,
         V,
-        RwSignal<V, S>: Get<Value = V>,
+        RwSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -359,7 +361,7 @@ mod stable {
         ReadSignal,
         <V, S>,
         V,
-        ReadSignal<V, S>: Get<Value = V>,
+        ReadSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -367,7 +369,7 @@ mod stable {
         Memo,
         <V, S>,
         V,
-        Memo<V, S>: Get<Value = V>,
+        Memo<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -375,7 +377,7 @@ mod stable {
         Signal,
         <V, S>,
         V,
-        Signal<V, S>: Get<Value = V>,
+        Signal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
@@ -383,14 +385,14 @@ mod stable {
         MaybeSignal,
         <V, S>,
         V,
-        MaybeSignal<V, S>: Get<Value = V>,
+        MaybeSignal<V, S>: TryGet<Value = V> + IsDisposed,
         S: Storage<V> + Storage<Option<V>>,
         S: Send + Sync + 'static,
     );
-    style_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: Get<Value = V>);
-    style_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: Get<Value = V>);
-    style_reactive!(ArcMemo, <V>, V, ArcMemo<V>: Get<Value = V>);
-    style_reactive!(ArcSignal, <V>, V, ArcSignal<V>: Get<Value = V>);
+    style_reactive!(ArcRwSignal, <V>, V, ArcRwSignal<V>: TryGet<Value = V> + IsDisposed);
+    style_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: TryGet<Value = V> + IsDisposed);
+    style_reactive!(ArcMemo, <V>, V, ArcMemo<V>: TryGet<Value = V> + IsDisposed);
+    style_reactive!(ArcSignal, <V>, V, ArcSignal<V>: TryGet<Value = V> + IsDisposed);
 }
 
 /*

@@ -6,7 +6,7 @@ use crate::{
     owner::{StoredValue, SyncStorage},
     signal::guards::WriteGuard,
     traits::{
-        DefinedAt, GetValue, IsDisposed, Notify, ReadUntracked, Track,
+        DefinedAt, IsDisposed, Notify, Track, TryGetValue, TryReadUntracked,
         UntrackableGuard, Write,
     },
 };
@@ -39,6 +39,7 @@ pub struct ArcMappedSignal<T> {
     notify: Arc<dyn Fn() + Send + Sync>,
     track: Arc<dyn Fn() + Send + Sync>,
 }
+crate::impl_strong!([T] ArcMappedSignal<T>);
 
 impl<T> Clone for ArcMappedSignal<T> {
     fn clone(&self) -> Self {
@@ -139,7 +140,7 @@ impl<T> Track for ArcMappedSignal<T> {
     }
 }
 
-impl<T> ReadUntracked for ArcMappedSignal<T> {
+impl<T> TryReadUntracked for ArcMappedSignal<T> {
     type Value = DoubleDeref<Box<dyn Deref<Target = T>>>;
 
     fn try_read_untracked(&self) -> Option<Self::Value> {
@@ -159,7 +160,7 @@ where
 {
     type Value = T;
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
         let mut guard = self.guard()?;
@@ -240,6 +241,19 @@ pub struct MappedSignal<T, S = SyncStorage> {
     defined_at: &'static Location<'static>,
     inner: StoredValue<ArcMappedSignal<T>, S>,
 }
+crate::impl_weak!([T, S] MappedSignal<T, S>);
+
+impl<T, S> MappedSignal<T, S> {
+    /// A handle whose value is gone (what an accessor of a gone handle returns).
+    #[track_caller]
+    pub(crate) fn disposed() -> Self {
+        Self {
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at: Location::caller(),
+            inner: StoredValue::disposed(),
+        }
+    }
+}
 
 impl<T> MappedSignal<T> {
     /// Wraps a signal with the given mapping functions for shared and exclusive references.
@@ -253,11 +267,14 @@ impl<T> MappedSignal<T> {
         T: Send + Sync + 'static,
         U: Send + Sync + 'static,
     {
+        // a signal mapped from a gone one is gone too
+        let Some(this) = inner.upgrade() else {
+            return Self::disposed();
+        };
         Self {
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: Location::caller(),
             inner: {
-                let this = ArcRwSignal::from(inner);
                 StoredValue::new_with_storage(ArcMappedSignal::new(
                     this, map, map_mut,
                 ))
@@ -318,7 +335,7 @@ where
     }
 }
 
-impl<T> ReadUntracked for MappedSignal<T>
+impl<T> TryReadUntracked for MappedSignal<T>
 where
     T: 'static,
 {
@@ -337,7 +354,7 @@ where
 {
     type Value = T;
 
-    fn try_write_untracked(
+    fn try_write_in_place(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
         let mut guard = self.inner.try_get_value()?.guard()?;

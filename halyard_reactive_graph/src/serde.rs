@@ -4,7 +4,7 @@ use crate::{
     computed::{ArcMemo, Memo},
     owner::Storage,
     signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
-    traits::With,
+    traits::TryWith,
     wrappers::read::{Signal, SignalTypes},
 };
 use serde::{ser::Error as _, Deserialize, Serialize};
@@ -14,7 +14,7 @@ use serde::{ser::Error as _, Deserialize, Serialize};
 /// value to serialize: that is a serialization error, not a panic.
 fn serialize_value<R, S>(reactive: &R, serializer: S) -> Result<S::Ok, S::Error>
 where
-    R: With + ?Sized,
+    R: TryWith + ?Sized,
     R::Value: Serialize,
     S: serde::Serializer,
 {

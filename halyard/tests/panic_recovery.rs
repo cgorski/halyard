@@ -37,7 +37,7 @@ fn for_enumerate_outside_any_owner_renders_its_rows() {
     let html = view! {
         <ul>
             <ForEnumerate each=|| ["a", "b"] key=|s| *s let(index, s)>
-                <li>{move || index.get()}":"{s}</li>
+                <li>{move || index.try_get().unwrap()}":"{s}</li>
             </ForEnumerate>
         </ul>
     }
@@ -81,7 +81,7 @@ async fn suspense_reading_a_local_resource_without_shared_context_renders_the_fa
     let local = LocalResource::new(|| async { 1 });
     let app = view! {
         <Suspense fallback=|| "loading">
-            {move || local.get().map(|n| n.to_string())}
+            {move || local.try_get().unwrap().map(|n| n.to_string())}
         </Suspense>
     };
     let html = app.to_html_stream_in_order().collect::<String>().await;
@@ -102,7 +102,7 @@ async fn transition_reading_a_local_resource_without_shared_context_renders_the_
     let local = LocalResource::new(|| async { 1 });
     let app = view! {
         <Transition fallback=|| "loading">
-            {move || local.get().map(|n| n.to_string())}
+            {move || local.try_get().unwrap().map(|n| n.to_string())}
         </Transition>
     };
     let html = app.to_html_stream_in_order().collect::<String>().await;

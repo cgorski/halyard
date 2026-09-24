@@ -8,6 +8,9 @@ use halyard_macro::component;
 use halyard_reactive_graph::hydration_context::SerializedDataId;
 use halyard_reactive_graph::or_poisoned::OrPoisoned;
 use halyard_reactive_graph::throw_error::ErrorHookFuture;
+use halyard_reactive_graph::traits::{
+    StrongWriteValue, TryRead, WithUntracked,
+};
 use halyard_reactive_graph::{
     computed::{
         suspense::{LocalResourceNotifier, SuspenseContext},
@@ -16,10 +19,7 @@ use halyard_reactive_graph::{
     effect::RenderEffect,
     owner::{provide_context, use_context, ArcStoredValue, Owner},
     signal::ArcRwSignal,
-    traits::{
-        Dispose, Get, Read, ReadUntracked, Track, With, WithUntracked,
-        WriteValue,
-    },
+    traits::{Dispose, Get, Track, TryReadUntracked, With},
 };
 use halyard_tachys::{
     either::Either,
@@ -56,14 +56,14 @@ use std::sync::{Arc, Mutex};
 ///
 /// let (cat_count, set_cat_count) = signal::<u32>(1);
 ///
-/// let cats = Resource::new(move || cat_count.get(), |count| fetch_cats(count));
+/// let cats = Resource::new(move || cat_count.try_get().unwrap(), |count| fetch_cats(count));
 ///
 /// view! {
 ///   <div>
 ///     <Suspense fallback=move || view! { <p>"Loading (Suspense Fallback)..."</p> }>
 ///       // you can access a resource synchronously
 ///       {move || {
-///           cats.get().map(|data| {
+///           cats.try_get().unwrap().map(|data| {
 ///             data
 ///               .into_iter()
 ///               .map(|src| {

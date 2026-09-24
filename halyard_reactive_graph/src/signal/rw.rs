@@ -9,10 +9,9 @@ use crate::{
     owner::{ArenaItem, FromLocal, LocalStorage, Storage, SyncStorage},
     signal::guards::UntrackedWriteGuard,
     traits::{
-        DefinedAt, Dispose, IntoInner, IsDisposed, Notify, ReadUntracked,
+        DefinedAt, Dispose, IntoInner, IsDisposed, Notify, TryReadUntracked,
         UntrackableGuard, Write,
     },
-    unwrap_signal,
 };
 use core::fmt::Debug;
 use std::{
@@ -37,17 +36,17 @@ use std::{
 /// - [`.get()`](crate::traits::Get) clones the current value of the signal.
 ///   If you call it within an effect, it will cause that effect to subscribe
 ///   to the signal, and to re-run whenever the value of the signal changes.
-///   - [`.get_untracked()`](crate::traits::GetUntracked) clones the value of
+///   - [`.get_untracked()`](crate::traits::TryGetUntracked) clones the value of
 ///     the signal without reactively tracking it.
 /// - [`.read()`](crate::traits::Read) returns a guard that allows accessing the
 ///   value of the signal by reference. If you call it within an effect, it will
 ///   cause that effect to subscribe to the signal, and to re-run whenever the
 ///   value of the signal changes.
-///   - [`.read_untracked()`](crate::traits::ReadUntracked) gives access to the
+///   - [`.read_untracked()`](crate::traits::TryReadUntracked) gives access to the
 ///     current value of the signal without reactively tracking it.
 /// - [`.with()`](crate::traits::With) allows you to reactively access the signal’s
 ///   value without cloning by applying a callback function.
-///   - [`.with_untracked()`](crate::traits::WithUntracked) allows you to access
+///   - [`.with_untracked()`](crate::traits::TryWithUntracked) allows you to access
 ///     the signal’s value by applying a callback function without reactively
 ///     tracking it.
 /// - [`.to_stream()`](crate::traits::ToStream) converts the signal to an `async`
@@ -101,6 +100,19 @@ pub struct RwSignal<T, S = SyncStorage> {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     defined_at: &'static Location<'static>,
     inner: ArenaItem<ArcRwSignal<T>, S>,
+}
+crate::impl_weak!([T, S] RwSignal<T, S>);
+
+impl<T, S> RwSignal<T, S> {
+    /// A handle whose value is gone (what an accessor of a gone handle returns).
+    #[track_caller]
+    pub(crate) fn disposed() -> Self {
+        Self {
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at: Location::caller(),
+            inner: ArenaItem::disposed(),
+        }
+    }
 }
 
 impl<T, S> Dispose for RwSignal<T, S> {
@@ -376,7 +388,7 @@ where
     }
 }
 
-impl<T, S> ReadUntracked for RwSignal<T, S>
+impl<T, S> TryReadUntracked for RwSignal<T, S>
 where
     T: 'static,
     S: Storage<ArcRwSignal<T>>,
@@ -397,6 +409,13 @@ where
     fn notify(&self) {
         if let Some(inner) = self.inner.try_get_value() {
             inner.notify();
+        } else {
+            crate::gone::report_gone(
+                crate::gone::Attempt::Write,
+                "RwSignal",
+                self.defined_at(),
+                std::panic::Location::caller(),
+            );
         }
     }
 }
@@ -421,8 +440,8 @@ where
     /// thread is using it (the write is inside the signal's own `with` or `update`, or a
     /// guard of it is alive), which would never end. That is logged once.
     #[allow(refining_impl_trait)]
-    fn try_write_untracked(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
-        self.inner.try_get_value()?.try_write_untracked()
+    fn try_write_in_place(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
+        self.inner.try_get_value()?.try_write_in_place()
     }
 
     fn try_commit_value(&self, value: T) -> Option<T> {
@@ -488,16 +507,16 @@ where
     }
 }
 
-impl<T, S> From<RwSignal<T, S>> for ArcRwSignal<T>
+impl<T, S> RwSignal<T, S>
 where
     T: 'static,
     S: Storage<ArcRwSignal<T>>,
 {
+    /// Returns a strong (reference-counted) handle to the value, which keeps it alive,
+    /// or `None` if the value is gone (like [`std::sync::Weak::upgrade`]). The reverse,
+    /// a downgrade, is `From<ArcRwSignal>`.
     #[track_caller]
-    fn from(value: RwSignal<T, S>) -> Self {
-        value
-            .inner
-            .try_get_value()
-            .unwrap_or_else(unwrap_signal!(value))
+    pub fn upgrade(&self) -> Option<ArcRwSignal<T>> {
+        self.inner.try_get_value()
     }
 }

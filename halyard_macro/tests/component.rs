@@ -145,13 +145,13 @@ pub fn IntoReactiveValueTestComponentSignal(
     move || {
         view! {
             <div>
-                <p>{arg1.get()}</p>
-                <p>{arg2.get()}</p>
-                <p>{arg3.get()}</p>
-                <p>{arg4.get()}</p>
-                <p>{arg5.get()}</p>
-                <p>{arg6.get()}</p>
-                <p>{arg7.get()}</p>
+                <p>{arg1.try_get().unwrap()}</p>
+                <p>{arg2.try_get().unwrap()}</p>
+                <p>{arg3.try_get().unwrap()}</p>
+                <p>{arg4.try_get().unwrap()}</p>
+                <p>{arg5.try_get().unwrap()}</p>
+                <p>{arg6.try_get().unwrap()}</p>
+                <p>{arg7.try_get().unwrap()}</p>
                 <p>{arg8.get()}</p>
                 <p>{arg9.get()}</p>
                 <p>{arg10.get()}</p>
@@ -159,10 +159,10 @@ pub fn IntoReactiveValueTestComponentSignal(
                 <p>{arg12.get()}</p>
                 <p>{arg13.get()}</p>
                 <p>{arg14.get()}</p>
-                <p>{arg15.get()}</p>
-                <p>{arg16_purposely_omitted.get()}</p>
-                <p>{arg17.get()}</p>
-                <p>{arg18.get()}</p>
+                <p>{arg15.try_get().unwrap()}</p>
+                <p>{arg16_purposely_omitted.try_get().unwrap()}</p>
+                <p>{arg17.try_get().unwrap()}</p>
+                <p>{arg18.try_get().unwrap()}</p>
             </div>
         }
     }
@@ -182,14 +182,14 @@ pub fn IntoReactiveValueTestComponentCallback(
     move || {
         view! {
             <div>
-                <p>{arg1.run(())}</p>
-                <p>{arg2.run(1)}</p>
-                <p>{arg3.run((2,))}</p>
-                <p>{arg4.run((3, "three".into()))}</p>
-                <p>{arg5.run(())}</p>
-                <p>{arg6.run(1)}</p>
-                <p>{arg7.run((2,))}</p>
-                <p>{arg8.run((3, "three".into()))}</p>
+                <p>{arg1.try_run(()).unwrap()}</p>
+                <p>{arg2.try_run(1).unwrap()}</p>
+                <p>{arg3.try_run((2,)).unwrap()}</p>
+                <p>{arg4.try_run((3, "three".into())).unwrap()}</p>
+                <p>{arg5.try_run(()).unwrap()}</p>
+                <p>{arg6.try_run(1).unwrap()}</p>
+                <p>{arg7.try_run((2,)).unwrap()}</p>
+                <p>{arg8.try_run((3, "three".into())).unwrap()}</p>
             </div>
         }
     }

@@ -2,8 +2,7 @@ use crate::{
     diagnostics::is_suppressing_resource_load,
     owner::{ArenaItem, FromLocal, LocalStorage, Storage, SyncStorage},
     signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
-    traits::{DefinedAt, Dispose, GetUntracked, Set, Update},
-    unwrap_signal,
+    traits::{DefinedAt, Dispose, Set, TryGetUntracked, Update},
 };
 use std::{fmt::Debug, future::Future, panic::Location, pin::Pin, sync::Arc};
 
@@ -41,7 +40,7 @@ use std::{fmt::Debug, future::Future, panic::Location, pin::Pin, sync::Arc};
 /// add_todo.dispatch("Profit!!!".to_string());
 ///
 /// let submissions = add_todo.submissions();
-/// assert_eq!(submissions.with(Vec::len), 3);
+/// assert_eq!(submissions.try_with(Vec::len), Some(3));
 /// # });
 /// ```
 pub struct MultiAction<I, O, S = SyncStorage> {
@@ -165,23 +164,23 @@ where
     ///
     /// let submissions = add_todo.submissions();
     /// let pending_submissions = move || {
-    ///   submissions.with(|subs| subs.iter().filter(|sub| sub.pending().get()).count())
+    ///   submissions.try_with(|subs| subs.iter().filter(|sub| sub.pending().get()).count()).unwrap()
     /// };
     ///
     /// add_todo.dispatch("Buy milk".to_string());
-    /// assert_eq!(submissions.with(Vec::len), 1);
+    /// assert_eq!(submissions.try_with(Vec::len), Some(1));
     /// assert_eq!(pending_submissions(), 1);
     ///
     /// add_todo.dispatch("???".to_string());
     /// add_todo.dispatch("Profit!!!".to_string());
     ///
-    /// assert_eq!(submissions.with(Vec::len), 3);
+    /// assert_eq!(submissions.try_with(Vec::len), Some(3));
     /// assert_eq!(pending_submissions(), 3);
     ///
     /// // when submissions resolve, they are not removed from the set
     /// // however, their `pending` signal is now `false`, and this can be used to filter them
     /// # halyard_reactive_graph::executor::Executor::tick().await;
-    /// assert_eq!(submissions.with(Vec::len), 3);
+    /// assert_eq!(submissions.try_with(Vec::len), Some(3));
     /// assert_eq!(pending_submissions(), 0);
     /// # });
     /// ```
@@ -216,16 +215,16 @@ where
     ///
     /// let submissions = add_todo.submissions();
     /// let pending_submissions = move || {
-    ///   submissions.with(|subs| subs.iter().filter(|sub| sub.pending().get()).count())
+    ///   submissions.try_with(|subs| subs.iter().filter(|sub| sub.pending().get()).count()).unwrap()
     /// };
     ///
     /// add_todo.dispatch("Buy milk".to_string());
-    /// assert_eq!(submissions.with(Vec::len), 1);
+    /// assert_eq!(submissions.try_with(Vec::len), Some(1));
     /// assert_eq!(pending_submissions(), 1);
     ///
     /// add_todo.dispatch_sync(42);
     ///
-    /// assert_eq!(submissions.with(Vec::len), 2);
+    /// assert_eq!(submissions.try_with(Vec::len), Some(2));
     /// assert_eq!(pending_submissions(), 1);
     /// # });
     /// ```
@@ -263,14 +262,22 @@ where
     /// add_todo.dispatch("???".to_string());
     /// add_todo.dispatch("Profit!!!".to_string());
     ///
-    /// assert_eq!(submissions.with(Vec::len), 3);
+    /// assert_eq!(submissions.try_with(Vec::len), Some(3));
     /// # });
     /// ```
     pub fn submissions(&self) -> ReadSignal<Vec<ArcSubmission<I, O>>> {
-        self.inner
-            .try_with_value(|inner| inner.submissions())
-            .unwrap_or_else(unwrap_signal!(self))
-            .into()
+        match self.inner.try_with_value(|inner| inner.submissions()) {
+            Some(inner) => inner.into(),
+            None => {
+                crate::gone::report_gone(
+                    crate::gone::Attempt::Read,
+                    "MultiAction",
+                    self.defined_at(),
+                    Location::caller(),
+                );
+                ReadSignal::disposed()
+            }
+        }
     }
 }
 
@@ -304,18 +311,26 @@ where
     /// add_todo.dispatch("???".to_string());
     /// add_todo.dispatch("Profit!!!".to_string());
     ///
-    /// assert_eq!(version.get(), 0);
+    /// assert_eq!(version.try_get(), Some(0));
     /// # halyard_reactive_graph::executor::Executor::tick().await;
     ///
     /// // when they've all resolved
-    /// assert_eq!(version.get(), 3);
+    /// assert_eq!(version.try_get(), Some(3));
     /// # });
     /// ```
     pub fn version(&self) -> RwSignal<usize> {
-        self.inner
-            .try_with_value(|inner| inner.version())
-            .unwrap_or_else(unwrap_signal!(self))
-            .into()
+        match self.inner.try_with_value(|inner| inner.version()) {
+            Some(inner) => inner.into(),
+            None => {
+                crate::gone::report_gone(
+                    crate::gone::Attempt::Read,
+                    "MultiAction",
+                    self.defined_at(),
+                    Location::caller(),
+                );
+                RwSignal::disposed()
+            }
+        }
     }
 }
 
@@ -501,7 +516,7 @@ where
             };
 
             self.submissions
-                .try_update(|subs| subs.push(submission.clone()));
+                .update(|subs| subs.push(submission.clone()));
 
             let version = self.version.clone();
 
@@ -515,7 +530,7 @@ where
                 submission.input.try_set(None);
                 submission.pending.try_set(false);
                 // wrapping: every submission changes the version
-                version.try_update(|n| *n = n.wrapping_add(1));
+                version.update(|n| *n = n.wrapping_add(1));
             })
         }
     }
@@ -570,9 +585,9 @@ where
         };
 
         self.submissions
-            .try_update(|subs| subs.push(submission.clone()));
+            .update(|subs| subs.push(submission.clone()));
         // wrapping: every submission changes the version
-        self.version.try_update(|n| *n = n.wrapping_add(1));
+        self.version.update(|n| *n = n.wrapping_add(1));
     }
 }
 
@@ -820,7 +835,7 @@ impl<I, O, S> Copy for Submission<I, O, S> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{owner::Owner, traits::WithUntracked};
+    use crate::{owner::Owner, traits::TryWithUntracked};
 
     /// Adding a submission bumps the version; at its limit that overflowed (a panic in debug
     /// builds). It wraps, so the version still changes.

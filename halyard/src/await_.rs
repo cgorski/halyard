@@ -1,7 +1,7 @@
 use crate::server::ArcOnceResource;
 use crate::{prelude::Suspend, suspense_component::Suspense, IntoView};
 use halyard_macro::{component, view};
-use halyard_reactive_graph::prelude::ReadUntracked;
+use halyard_reactive_graph::traits::ReadUntracked;
 use serde::{de::DeserializeOwned, Serialize};
 
 #[component]

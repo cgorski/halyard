@@ -30,7 +30,7 @@ use halyard::{
 ///     provide_meta_context();
 ///     let (prefers_dark, set_prefers_dark) = signal(false);
 ///     let body_class = move || {
-///         if prefers_dark.get() {
+///         if prefers_dark.try_get().unwrap() {
 ///             "dark".to_string()
 ///         } else {
 ///             "light".to_string()

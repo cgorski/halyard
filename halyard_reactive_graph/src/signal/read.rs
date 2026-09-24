@@ -6,8 +6,7 @@ use super::{
 use crate::{
     graph::SubscriberSet,
     owner::{ArenaItem, FromLocal, LocalStorage, Storage, SyncStorage},
-    traits::{DefinedAt, Dispose, IntoInner, IsDisposed, ReadUntracked},
-    unwrap_signal,
+    traits::{DefinedAt, Dispose, IntoInner, IsDisposed, TryReadUntracked},
 };
 use core::fmt::Debug;
 use std::{
@@ -29,17 +28,17 @@ use std::{
 /// - [`.get()`](crate::traits::Get) clones the current value of the signal.
 ///   If you call it within an effect, it will cause that effect to subscribe
 ///   to the signal, and to re-run whenever the value of the signal changes.
-///   - [`.get_untracked()`](crate::traits::GetUntracked) clones the value of
+///   - [`.get_untracked()`](crate::traits::TryGetUntracked) clones the value of
 ///     the signal without reactively tracking it.
 /// - [`.read()`](crate::traits::Read) returns a guard that allows accessing the
 ///   value of the signal by reference. If you call it within an effect, it will
 ///   cause that effect to subscribe to the signal, and to re-run whenever the
 ///   value of the signal changes.
-///   - [`.read_untracked()`](crate::traits::ReadUntracked) gives access to the
+///   - [`.read_untracked()`](crate::traits::TryReadUntracked) gives access to the
 ///     current value of the signal without reactively tracking it.
 /// - [`.with()`](crate::traits::With) allows you to reactively access the signal’s
 ///   value without cloning by applying a callback function.
-///   - [`.with_untracked()`](crate::traits::WithUntracked) allows you to access
+///   - [`.with_untracked()`](crate::traits::TryWithUntracked) allows you to access
 ///     the signal’s value by applying a callback function without reactively
 ///     tracking it.
 /// - [`.to_stream()`](crate::traits::ToStream) converts the signal to an `async`
@@ -53,14 +52,27 @@ use std::{
 /// let (count, set_count) = signal(0);
 ///
 /// // calling .get() clones and returns the value
-/// assert_eq!(count.get(), 0);
+/// assert_eq!(count.try_get(), Some(0));
 /// // calling .read() accesses the value by reference
-/// assert_eq!(count.read(), 0);
+/// assert_eq!(count.try_read().unwrap(), 0);
 /// ```
 pub struct ReadSignal<T, S = SyncStorage> {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     pub(crate) defined_at: &'static Location<'static>,
     pub(crate) inner: ArenaItem<ArcReadSignal<T>, S>,
+}
+crate::impl_weak!([T, S] ReadSignal<T, S>);
+
+impl<T, S> ReadSignal<T, S> {
+    /// A handle whose value is gone (what an accessor of a gone handle returns).
+    #[track_caller]
+    pub(crate) fn disposed() -> Self {
+        Self {
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at: Location::caller(),
+            inner: ArenaItem::disposed(),
+        }
+    }
 }
 
 impl<T, S> Dispose for ReadSignal<T, S> {
@@ -147,7 +159,7 @@ where
     }
 }
 
-impl<T, S> ReadUntracked for ReadSignal<T, S>
+impl<T, S> TryReadUntracked for ReadSignal<T, S>
 where
     T: 'static,
     S: Storage<ArcReadSignal<T>>,
@@ -187,16 +199,16 @@ where
     }
 }
 
-impl<T, S> From<ReadSignal<T, S>> for ArcReadSignal<T>
+impl<T, S> ReadSignal<T, S>
 where
     T: 'static,
     S: Storage<ArcReadSignal<T>>,
 {
+    /// Returns a strong (reference-counted) handle to the value, which keeps it alive,
+    /// or `None` if the value is gone (like [`std::sync::Weak::upgrade`]). The reverse,
+    /// a downgrade, is `From<ArcReadSignal>`.
     #[track_caller]
-    fn from(value: ReadSignal<T, S>) -> Self {
-        value
-            .inner
-            .try_get_value()
-            .unwrap_or_else(unwrap_signal!(value))
+    pub fn upgrade(&self) -> Option<ArcReadSignal<T>> {
+        self.inner.try_get_value()
     }
 }

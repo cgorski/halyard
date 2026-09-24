@@ -1,4 +1,5 @@
 use crate::executor::Executor;
+use crate::gone::Attempt;
 use crate::{
     computed::{ArcMemo, Memo, ScopedFuture},
     diagnostics::is_suppressing_resource_load,
@@ -7,10 +8,9 @@ use crate::{
     send_wrapper_ext::SendOption,
     signal::{ArcMappedSignal, ArcRwSignal, MappedSignal, RwSignal},
     traits::{
-        DefinedAt, Dispose, Get, GetUntracked, GetValue, Set, Update,
-        WithUntracked,
+        DefinedAt, Dispose, Set, TryGet, TryGetUntracked, TryGetValue,
+        TryWithUntracked, Update,
     },
-    unwrap_signal,
 };
 use futures::{channel::oneshot, select, FutureExt};
 use send_wrapper::SendWrapper;
@@ -166,7 +166,7 @@ where
     /// # tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     ///
     /// // after it resolves
-    /// assert_eq!(act2.value().get(), Some("I'M IN A DOCTEST".to_string()));
+    /// assert_eq!(act2.value().try_get(), Some(Some("I'M IN A DOCTEST".to_string())));
     ///
     /// async fn yell(n: String) -> String {
     ///     n.to_uppercase()
@@ -260,6 +260,12 @@ impl ActionAbortHandle {
     /// request library actually cancels a request when its `Future` is dropped.
     pub fn abort(self) {
         let _ = self.0.send(());
+    }
+
+    /// A handle with nothing to abort: what dispatching to a gone action returns.
+    fn inert() -> Self {
+        let (sender, _) = oneshot::channel();
+        Self(sender)
     }
 }
 
@@ -608,26 +614,26 @@ where
 /// let version = save_data.version();
 ///
 /// // before we do anything
-/// assert_eq!(input.get(), None); // no argument yet
-/// assert_eq!(pending.get(), false); // isn't pending a response
-/// assert_eq!(result_of_call.get(), None); // there's no "last value"
-/// assert_eq!(version.get(), 0);
+/// assert_eq!(input.try_get(), Some(None)); // no argument yet
+/// assert_eq!(pending.try_get(), Some(false)); // isn't pending a response
+/// assert_eq!(result_of_call.try_get(), Some(None)); // there's no "last value"
+/// assert_eq!(version.try_get(), Some(0));
 ///
 /// // dispatch the action
 /// save_data.dispatch("My todo".to_string());
 ///
 /// // when we're making the call
-/// assert_eq!(input.get(), Some("My todo".to_string()));
-/// assert_eq!(pending.get(), true); // is pending
-/// assert_eq!(result_of_call.get(), None); // has not yet gotten a response
+/// assert_eq!(input.try_get(), Some(Some("My todo".to_string())));
+/// assert_eq!(pending.try_get(), Some(true)); // is pending
+/// assert_eq!(result_of_call.try_get(), Some(None)); // has not yet gotten a response
 ///
 /// # halyard_reactive_graph::executor::Executor::tick().await;
 ///
 /// // after call has resolved
-/// assert_eq!(input.get(), None); // input clears out after resolved
-/// assert_eq!(pending.get(), false); // no longer pending
-/// assert_eq!(result_of_call.get(), Some(42));
-/// assert_eq!(version.get(), 1);
+/// assert_eq!(input.try_get(), Some(None)); // input clears out after resolved
+/// assert_eq!(pending.try_get(), Some(false)); // no longer pending
+/// assert_eq!(result_of_call.try_get(), Some(Some(42)));
+/// assert_eq!(version.try_get(), Some(1));
 /// # });
 /// ```
 ///
@@ -663,6 +669,23 @@ impl<I, O> Dispose for Action<I, O> {
 
 impl<I, O> Action<I, O>
 where
+    I: 'static,
+    O: 'static,
+{
+    /// Reports, once per call site, that this action is gone.
+    #[track_caller]
+    fn report_gone(&self, attempt: Attempt) {
+        crate::gone::report_gone(
+            attempt,
+            "Action",
+            self.defined_at(),
+            Location::caller(),
+        );
+    }
+}
+
+impl<I, O> Action<I, O>
+where
     I: Send + Sync + 'static,
     O: Send + Sync + 'static,
 {
@@ -690,7 +713,7 @@ where
     /// });
     ///
     /// act.dispatch(3);
-    /// assert_eq!(act.input().get(), Some(3));
+    /// assert_eq!(act.input().try_get(), Some(Some(3)));
     ///
     /// // Remember that async functions already return a future if they are
     /// // not `await`ed. You can save keystrokes by leaving out the `async move`
@@ -700,7 +723,7 @@ where
     /// # tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     ///
     /// // after it resolves
-    /// assert_eq!(act2.value().get(), Some("I'M IN A DOCTEST".to_string()));
+    /// assert_eq!(act2.value().try_get(), Some(Some("I'M IN A DOCTEST".to_string())));
     ///
     /// async fn yell(n: String) -> String {
     ///     n.to_uppercase()
@@ -824,20 +847,22 @@ where
     ///
     /// let version = act.version();
     /// act.dispatch(3);
-    /// assert_eq!(version.get(), 0);
+    /// assert_eq!(version.try_get(), Some(0));
     ///
     /// # tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     /// // after it resolves
-    /// assert_eq!(version.get(), 1);
+    /// assert_eq!(version.try_get(), Some(1));
     /// # });
     /// ```
     #[track_caller]
     pub fn version(&self) -> RwSignal<usize> {
-        let inner = self
-            .inner
-            .try_with_value(|inner| inner.version())
-            .unwrap_or_else(unwrap_signal!(self));
-        inner.into()
+        match self.inner.try_with_value(|inner| inner.version()) {
+            Some(inner) => inner.into(),
+            None => {
+                self.report_gone(Attempt::Read);
+                RwSignal::disposed()
+            }
+        }
     }
 
     /// Whether the action has been dispatched and is currently waiting to resolve.
@@ -854,22 +879,24 @@ where
     /// });
     ///
     /// let pending = act.pending();
-    /// assert_eq!(pending.get(), false);
+    /// assert_eq!(pending.try_get(), Some(false));
     /// act.dispatch(3);
-    /// assert_eq!(pending.get(), true);
+    /// assert_eq!(pending.try_get(), Some(true));
     ///
     /// # tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     /// // after it resolves
-    /// assert_eq!(pending.get(), false);
+    /// assert_eq!(pending.try_get(), Some(false));
     /// # });
     /// ```
     #[track_caller]
     pub fn pending(&self) -> Memo<bool> {
-        let inner = self
-            .inner
-            .try_with_value(|inner| inner.pending())
-            .unwrap_or_else(unwrap_signal!(self));
-        inner.into()
+        match self.inner.try_with_value(|inner| inner.pending()) {
+            Some(inner) => inner.into(),
+            None => {
+                self.report_gone(Attempt::Read);
+                Memo::disposed()
+            }
+        }
     }
 }
 
@@ -893,21 +920,24 @@ where
     /// });
     ///
     /// let input = act.input();
-    /// assert_eq!(input.get(), None);
+    /// assert_eq!(input.try_get(), Some(None));
     /// act.dispatch(3);
-    /// assert_eq!(input.get(), Some(3));
+    /// assert_eq!(input.try_get(), Some(Some(3)));
     ///
     /// # tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     /// // after it resolves
-    /// assert_eq!(input.get(), None);
+    /// assert_eq!(input.try_get(), Some(None));
     /// # });
     /// ```
     #[track_caller]
     pub fn input(&self) -> MappedSignal<Option<I>> {
-        self.inner
-            .try_with_value(|inner| inner.input())
-            .unwrap_or_else(unwrap_signal!(self))
-            .into()
+        match self.inner.try_with_value(|inner| inner.input()) {
+            Some(inner) => inner.into(),
+            None => {
+                self.report_gone(Attempt::Read);
+                MappedSignal::disposed()
+            }
+        }
     }
 
     /// The current argument that was dispatched to the async function. This value will
@@ -918,10 +948,13 @@ where
     #[deprecated = "You can now use .input() for any value, whether it's \
                     thread-safe or not."]
     pub fn input_local(&self) -> MappedSignal<Option<I>> {
-        self.inner
-            .try_with_value(|inner| inner.input())
-            .unwrap_or_else(unwrap_signal!(self))
-            .into()
+        match self.inner.try_with_value(|inner| inner.input()) {
+            Some(inner) => inner.into(),
+            None => {
+                self.report_gone(Attempt::Read);
+                MappedSignal::disposed()
+            }
+        }
     }
 }
 
@@ -946,24 +979,27 @@ where
     /// });
     ///
     /// let value = act.value();
-    /// assert_eq!(value.get(), None);
+    /// assert_eq!(value.try_get(), Some(None));
     /// act.dispatch(3);
-    /// assert_eq!(value.get(), None);
+    /// assert_eq!(value.try_get(), Some(None));
     ///
     /// # tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     /// // after it resolves
-    /// assert_eq!(value.get(), Some(6));
+    /// assert_eq!(value.try_get(), Some(Some(6)));
     /// // dispatch another value, and it still holds the old value
     /// act.dispatch(3);
-    /// assert_eq!(value.get(), Some(6));
+    /// assert_eq!(value.try_get(), Some(Some(6)));
     /// # });
     /// ```
     #[track_caller]
     pub fn value(&self) -> MappedSignal<Option<O>> {
-        self.inner
-            .try_with_value(|inner| inner.value())
-            .unwrap_or_else(unwrap_signal!(self))
-            .into()
+        match self.inner.try_with_value(|inner| inner.value()) {
+            Some(inner) => inner.into(),
+            None => {
+                self.report_gone(Attempt::Read);
+                MappedSignal::disposed()
+            }
+        }
     }
 
     /// The most recent return value of the `async` function. This will be `None` before
@@ -978,10 +1014,13 @@ where
     where
         O: Send + Sync,
     {
-        self.inner
-            .try_with_value(|inner| inner.value())
-            .unwrap_or_else(unwrap_signal!(self))
-            .into()
+        match self.inner.try_with_value(|inner| inner.value()) {
+            Some(inner) => inner.into(),
+            None => {
+                self.report_gone(Attempt::Read);
+                MappedSignal::disposed()
+            }
+        }
     }
 }
 
@@ -993,10 +1032,13 @@ where
     /// Calls the `async` function with a reference to the input type as its argument.
     #[track_caller]
     pub fn dispatch(&self, input: I) -> ActionAbortHandle {
-        self.inner
-            .try_get_value()
-            .map(|inner| inner.dispatch(input))
-            .unwrap_or_else(unwrap_signal!(self))
+        match self.inner.try_get_value() {
+            Some(inner) => inner.dispatch(input),
+            None => {
+                self.report_gone(Attempt::Write);
+                ActionAbortHandle::inert()
+            }
+        }
     }
 }
 
@@ -1008,10 +1050,13 @@ where
     /// Calls the `async` function with a reference to the input type as its argument.
     #[track_caller]
     pub fn dispatch_local(&self, input: I) -> ActionAbortHandle {
-        self.inner
-            .try_get_value()
-            .map(|inner| inner.dispatch_local(input))
-            .unwrap_or_else(unwrap_signal!(self))
+        match self.inner.try_get_value() {
+            Some(inner) => inner.dispatch_local(input),
+            None => {
+                self.report_gone(Attempt::Write);
+                ActionAbortHandle::inert()
+            }
+        }
     }
 }
 
@@ -1154,7 +1199,7 @@ impl<I, O> Copy for Action<I, O> {}
 /// });
 ///
 /// act.dispatch(3);
-/// assert_eq!(act.input().get(), Some(3));
+/// assert_eq!(act.input().try_get(), Some(Some(3)));
 ///
 /// // Remember that async functions already return a future if they are
 /// // not `await`ed. You can save keystrokes by leaving out the `async move`
@@ -1164,7 +1209,7 @@ impl<I, O> Copy for Action<I, O> {}
 /// # tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 ///
 /// // after it resolves
-/// assert_eq!(act2.value().get(), Some("I'M IN A DOCTEST".to_string()));
+/// assert_eq!(act2.value().try_get(), Some(Some("I'M IN A DOCTEST".to_string())));
 ///
 /// async fn yell(n: String) -> String {
 ///     n.to_uppercase()

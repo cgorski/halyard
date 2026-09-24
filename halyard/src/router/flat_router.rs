@@ -11,11 +11,12 @@ use crate::router::{
 use futures::FutureExt;
 use halyard::attr::{any_attribute::AnyAttribute, Attribute};
 use halyard_reactive_graph::executor::Executor;
+use halyard_reactive_graph::traits::ReadUntracked;
 use halyard_reactive_graph::{
     computed::{ArcMemo, ScopedFuture},
     owner::{provide_context, Owner},
     signal::ArcRwSignal,
-    traits::{GetUntracked, ReadUntracked, Set},
+    traits::{Set, TryGetUntracked},
     transition::AsyncTransition,
     wrappers::write::SignalSetter,
 };
@@ -275,7 +276,8 @@ where
 
                 let is_back = location
                     .as_ref()
-                    .map(|nav| nav.is_back().get_untracked())
+                    // a location that is gone is not navigating back
+                    .and_then(|nav| nav.is_back().try_get_untracked())
                     .unwrap_or(false);
                 Executor::spawn_local(owner.with(|| {
                     provide_context(url);

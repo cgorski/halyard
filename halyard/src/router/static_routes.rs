@@ -6,7 +6,8 @@ use crate::router::{
 };
 use futures::{channel::oneshot, stream, Stream, StreamExt};
 use halyard::task::spawn;
-use halyard_reactive_graph::{owner::Owner, traits::GetUntracked};
+use halyard_reactive_graph::owner::Owner;
+use halyard_reactive_graph::traits::GetUntracked;
 use std::{
     fmt::{Debug, Display},
     future::Future,

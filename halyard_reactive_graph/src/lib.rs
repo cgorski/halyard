@@ -46,6 +46,22 @@
 //! which changes can begin from many different entry points. It is not particularly useful in
 //! "run-once" programs like a CLI.
 //!
+//! ## Weak and strong handles
+//!
+//! Handles follow the standard library's `Rc`/`Weak`. A `Copy` handle ([`RwSignal`](signal::RwSignal),
+//! [`Memo`](computed::Memo), [`Signal`](wrappers::read::Signal), [`StoredValue`](owner::StoredValue),
+//! ...) lives in its owner's arena and does not keep its value alive: it is **weak**. Reading
+//! through it returns an `Option` ([`try_get`](traits::TryGet), [`try_with`](traits::TryWith),
+//! ...), a write to a value that is gone does nothing (reported once), and rendering it in a
+//! view renders nothing once its value is gone. A reference-counted handle
+//! ([`ArcRwSignal`](signal::ArcRwSignal), [`ArcMemo`](computed::ArcMemo), ...) keeps its value
+//! alive: it is **strong**, and reading through it is total ([`get`](traits::Get),
+//! [`with`](traits::With), [`read`](traits::Read)). `upgrade()` turns a weak handle into a strong
+//! one (`None` if the value is gone), and `downgrade()` (or `From`) the reverse. To derive
+//! from weak handles, use [`map`](traits::Map::map)/[`memo`](traits::Map::memo) (also over a
+//! tuple of handles), [`Signal::derive_try`](wrappers::read::Signal::derive_try) or
+//! [`Memo::new_try`](computed::Memo::new_try).
+//!
 //! ## Design Principles and Assumptions
 //! - **Effects are expensive.** The library is built on the assumption that the side effects
 //!   (making a network request, rendering something to the DOM, writing to disk) are orders of
@@ -84,8 +100,11 @@ pub mod diagnostics;
 pub mod effect;
 mod error;
 pub mod executor;
+#[doc(hidden)]
+pub mod gone;
 pub mod graph;
 pub mod hydration_context;
+mod map;
 pub mod or_poisoned;
 pub mod owner;
 mod reentry;
