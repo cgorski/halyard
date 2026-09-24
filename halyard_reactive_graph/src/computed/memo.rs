@@ -40,20 +40,20 @@ use std::{fmt::Debug, hash::Hash, panic::Location};
 /// # fn really_expensive_computation(value: i32) -> i32 { value };
 /// let (value, set_value) = signal(0);
 ///
-/// // 🆗 we could create a derived signal with a simple function
-/// let double_value = move || value.try_get().unwrap() * 2;
+/// // 🆗 we could create a derived signal with `map`
+/// let double_value = value.map(|value| value * 2);
 /// set_value.set(2);
-/// assert_eq!(double_value(), 4);
+/// assert_eq!(double_value.try_get(), Some(4));
 ///
 /// // but imagine the computation is really expensive
-/// let expensive = move || really_expensive_computation(value.try_get().unwrap()); // lazy: doesn't run until called
+/// let expensive = value.map(|value| really_expensive_computation(*value)); // lazy: doesn't run until read
 /// Effect::new(move |_| {
 ///   // 🆗 run #1: calls `really_expensive_computation` the first time
-///   println!("expensive = {}", expensive());
+///   println!("expensive = {:?}", expensive.try_get());
 /// });
 /// Effect::new(move |_| {
 ///   // ❌ run #2: this calls `really_expensive_computation` a second time!
-///   let value = expensive();
+///   let value = expensive.try_get();
 ///   // do something else...
 /// });
 ///
@@ -62,11 +62,13 @@ use std::{fmt::Debug, hash::Hash, panic::Location};
 /// let memoized = Memo::new_try(move |_| Some(really_expensive_computation(value.try_get()?)));
 /// Effect::new(move |_| {
 ///   // 🆗 reads the current value of the memo
-///   println!("memoized = {}", memoized.try_get().unwrap());
+///   if let Some(memoized) = memoized.try_get() {
+///     println!("memoized = {memoized}");
+///   }
 /// });
 /// Effect::new(move |_| {
 ///   // ✅ reads the current value **without re-running the calculation**
-///   let value = memoized.try_get().unwrap();
+///   let value = memoized.try_get();
 ///   // do something else...
 /// });
 /// # });
@@ -224,6 +226,8 @@ where
     ///
     /// Unlike [`Memo::new`](), this receives ownership of the previous value. As a result, it
     /// must return both the new value and a `bool` that is `true` if the value has changed.
+    /// While the function runs the memo has no value, so a read of it from inside its own
+    /// function gives `None` (from the `try_*` forms).
     ///
     /// This is lazy: the function will not be called until the memo's value is read for the first
     /// time.
@@ -265,9 +269,9 @@ where
     where
         T: PartialEq,
     {
-        let inner = ArcMemo::new_owning_try(move |prev: Option<T>| {
-            let new_value = fun(prev.as_ref());
-            let changed = prev.as_ref() != new_value.as_ref();
+        let inner = ArcMemo::new_try(move |prev: Option<&T>| {
+            let new_value = fun(prev);
+            let changed = prev != new_value.as_ref();
             (new_value, changed)
         });
         inner.inner.set_fallible();
@@ -360,6 +364,7 @@ where
     type Value =
         ReadGuard<T, Mapped<Plain<Option<<S as Storage<T>>::Wrapped>>, T>>;
 
+    #[track_caller]
     fn try_read_untracked(&self) -> Option<Self::Value> {
         self.inner.try_get_value()?.try_read_untracked()
     }

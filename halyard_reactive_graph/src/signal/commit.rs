@@ -7,7 +7,7 @@
 //! the signal (reading it, updating it, holding a guard of it) is deferred in the thread's
 //! record ([`crate::reentry`]) and applied, in order, when the outermost use ends.
 
-use super::{guards::UntrackedWriteGuard, ArcWriteSignal};
+use super::ArcWriteSignal;
 use crate::{
     error::{Access, GraphError, ReportOnce},
     graph::ReactiveNode,
@@ -284,30 +284,24 @@ impl<T: 'static> ArcWriteSignal<T> {
         }
     }
 
-    /// `set`: replaces the value and notifies subscribers, or defers that while this thread
-    /// uses the signal.
-    pub(crate) fn set_value(&self, value: T) {
+    /// `set` (and `set_untracked`, without `notify`): replaces the value and notifies
+    /// subscribers, or defers that while this thread uses the signal.
+    pub(crate) fn set_value(&self, value: T, notify: bool) {
         match reentry::begin_write(self.id(), &self.turn, false) {
             Begin::Started(writing) => {
-                self.commit(&writing, value, true);
+                self.commit(&writing, value, notify);
                 // the writes deferred by subscribers are applied here
                 drop(writing);
             }
-            Begin::InUse => self.defer(
-                Deferred::Set {
-                    value,
-                    notify: true,
-                },
-                false,
-            ),
-            Begin::Unavailable => self.set_unrecorded(value),
+            Begin::InUse => self.defer(Deferred::Set { value, notify }, false),
+            Begin::Unavailable => self.set_unrecorded(value, notify),
         }
     }
 
     /// Writes without this thread's record, which is gone (the thread is shutting down, and
     /// its thread-locals with it): only if neither the turn nor the value is busy, never
     /// waiting, since this thread's own use can no longer be told apart.
-    fn set_unrecorded(&self, mut value: T) {
+    fn set_unrecorded(&self, mut value: T, notify: bool) {
         let turn = match self.turn.try_lock() {
             Ok(turn) => turn,
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
@@ -334,7 +328,9 @@ impl<T: 'static> ArcWriteSignal<T> {
         // the previous value, or the one that could not be written
         drop(value);
         if swapped {
-            self.mark_subscribers();
+            if notify {
+                self.mark_subscribers();
+            }
         } else {
             report_dropped(
                 "the thread is shutting down and the signal is busy",
@@ -408,57 +404,56 @@ impl<T: 'static> ArcWriteSignal<T> {
                     }
                 };
                 let (changed, out) = fun(&mut value);
-                if changed {
-                    self.set_unrecorded(value);
-                }
+                self.set_unrecorded(value, changed);
                 Some(out)
             }
         }
     }
 
-    /// `try_update`: runs `fun` on the value in place, holding its lock; `None` if this
-    /// thread uses the signal already.
-    pub(crate) fn update_in_place<U>(
+    /// A mapped signal's write: swaps `part` with the part of the value that `map_mut`
+    /// selects (`part` then holds the previous part, to drop), and notifies subscribers if
+    /// `notify`. Only the swap runs under the value's lock (`map_mut` is a plain function, a
+    /// field projection, not a closure), so the value is never lent out. `false` if the
+    /// write cannot be made: this thread is using the signal already (inside its `with` or
+    /// `update`, or while a guard of it is alive; that is logged once), or it is shutting
+    /// down.
+    pub(crate) fn swap_part<P>(
         &self,
-        fun: impl FnOnce(&mut T) -> (bool, U),
-    ) -> Option<U> {
-        let writing = self.begin_in_place()?;
-        // keeps this thread's use of the signal, and its turn, until the notification below
-        // is done; the writes deferred meanwhile are applied when it is dropped
-        let _using = Held::new(writing.id());
-        let mut guard = UntrackedWriteGuard::for_write(
-            Arc::clone(&self.value),
-            writing,
-            self.defined_at(),
-        )?;
-        let (changed, out) = fun(&mut guard);
-        drop(guard);
-        if changed {
-            self.mark_subscribers();
-        }
-        Some(out)
-    }
-
-    fn begin_in_place(&self) -> Option<Writing> {
-        match reentry::begin_write(self.id(), &self.turn, false) {
-            Begin::Started(writing) => Some(writing),
+        part: &mut P,
+        map_mut: fn(&mut T) -> &mut P,
+        notify: bool,
+    ) -> bool {
+        let writing = match reentry::begin_write(self.id(), &self.turn, false) {
+            Begin::Started(writing) => writing,
             Begin::InUse => {
                 report_reentered(Access::Write, self.defined_at());
-                None
+                return false;
             }
-            Begin::Unavailable => None,
+            Begin::Unavailable => return false,
+        };
+        let committed = if SINGLE_THREADED {
+            match self.value.try_write() {
+                Ok(guard) => Some(guard),
+                Err(TryLockError::Poisoned(poisoned)) => {
+                    Some(poisoned.into_inner())
+                }
+                Err(TryLockError::WouldBlock) => None,
+            }
+        } else {
+            Some(self.value.write().or_poisoned())
+        };
+        let Some(mut committed) = committed else {
+            report_reentered(Access::Write, self.defined_at());
+            return false;
+        };
+        mem::swap(map_mut(&mut committed), part);
+        drop(committed);
+        if notify {
+            self.mark_subscribers();
         }
-    }
-
-    /// `try_write_in_place`: a guard that changes the value in place; `None` if this thread
-    /// uses the signal already.
-    pub(crate) fn in_place_guard(&self) -> Option<UntrackedWriteGuard<T>> {
-        let writing = self.begin_in_place()?;
-        UntrackedWriteGuard::for_write(
-            Arc::clone(&self.value),
-            writing,
-            self.defined_at(),
-        )
+        // the writes deferred by subscribers are applied here
+        drop(writing);
+        true
     }
 
     /// `try_write`: a guard holding a copy of the value, committed when it is dropped.
@@ -502,7 +497,7 @@ enum GuardAccess {
 /// it holds a copy of the value, which it commits (notifying subscribers, unless
 /// [untracked](UntrackableGuard::untrack)) when it is dropped. No lock is held while it is
 /// alive: the signal can be read (giving the committed value) and written (the write is
-/// deferred until the guard has committed).
+/// deferred until the guard has committed). A guard dropped by a panic commits nothing.
 pub struct SignalWriteGuard<T: Clone + 'static> {
     // dropped first: after the commit, the previous value
     value: T,
@@ -542,6 +537,10 @@ impl<T: Clone + 'static> UntrackableGuard for SignalWriteGuard<T> {
 
 impl<T: Clone + 'static> Drop for SignalWriteGuard<T> {
     fn drop(&mut self) {
+        // dropped by a panic, the change may be half made: the value stays as it was
+        if std::thread::panicking() {
+            return;
+        }
         // `value` cannot be moved out of `&mut self`: committed now, it is swapped in;
         // deferred (only when the write is re-entrant), a copy of it is kept
         match &self.access {

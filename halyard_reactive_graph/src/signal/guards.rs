@@ -4,13 +4,11 @@ pub use super::commit::SignalWriteGuard;
 use crate::{
     computed::BlockingLock,
     error::{Access, GraphError, ReportOnce},
-    reentry::{
-        self, held_by_this_thread, lock_id, Held, Writing, SINGLE_THREADED,
-    },
+    reentry::{self, lock_id, Held, SINGLE_THREADED},
     traits::{Notify, UntrackableGuard},
 };
 use core::fmt::Debug;
-use guardian::{ArcRwLockReadGuardian, ArcRwLockWriteGuardian};
+use guardian::ArcRwLockReadGuardian;
 use std::{
     any::Any,
     borrow::Borrow,
@@ -143,9 +141,10 @@ impl<T: 'static> Plain<T> {
     /// still gives its value.
     ///
     /// Natively this waits while another thread writes the value. It returns `None` (and
-    /// logs that, once) if this thread is changing the value in place (the read is inside
-    /// its own in-place update), which would never end; and in the browser, if the lock is
-    /// busy at all (only this thread could hold it).
+    /// logs that, once) if this thread holds the value's write lock, which would never end;
+    /// and in the browser, if the lock is busy at all (only this thread could hold it).
+    /// No lock is held for writing while other code runs (a write swaps a new value in), so
+    /// neither happens in practice.
     pub fn try_new(inner: Arc<RwLock<T>>) -> Option<Self> {
         Self::try_new_at(inner, None)
     }
@@ -159,6 +158,10 @@ impl<T: 'static> Plain<T> {
         let state = reentry::state(lock);
         if state.is_some_and(|state| state.write_locks > 0) {
             report_reentered(Access::Read, defined_at);
+            reentry::refuse_here(reentry::Refusal {
+                defined_at,
+                why: "this thread holds its write lock",
+            });
             return None;
         }
         let held = Held::new(lock);
@@ -183,6 +186,12 @@ impl<T: 'static> Plain<T> {
             }
             None => {
                 report_reentered(Access::Read, defined_at);
+                if SINGLE_THREADED {
+                    reentry::refuse_here(reentry::Refusal {
+                        defined_at,
+                        why: "its lock is held by the code that is running now",
+                    });
+                }
                 return None;
             }
         };
@@ -245,12 +254,19 @@ impl<T: 'static> AsyncPlain<T> {
     /// Takes a reference-counted async read guard on the given lock.
     ///
     /// Natively this waits for a writer to finish. In the browser, where a busy lock can only
-    /// be held by the code that is running now (a read inside the value's own `update`),
-    /// this returns `None`, and that is logged once.
+    /// be held by the code that is running now, this returns `None`, and that is logged once.
     pub fn try_new(inner: &Arc<async_lock::RwLock<T>>) -> Option<Self> {
         let guard = inner.blocking_read_arc();
         if guard.is_none() {
             report_reentered(Access::Read, None);
+            let write_locked_here = reentry::state(lock_id(&**inner))
+                .is_some_and(|state| state.write_locks > 0);
+            if SINGLE_THREADED || write_locked_here {
+                reentry::refuse_here(reentry::Refusal {
+                    defined_at: None,
+                    why: "its lock is held by the code that is running now",
+                });
+            }
         }
         guard.map(|guard| Self::recorded(guard, inner))
     }
@@ -460,97 +476,87 @@ where
     }
 }
 
-/// A guard that provides mutable access to a signal's inner value, but does not notify of any
-/// changes.
+/// A write guard over a copy of a value: the copy is changed while the guard lives, and
+/// committed (by replacing the value) when it is dropped. No lock is held while it is alive,
+/// so the value can still be read (giving the committed value); nothing is ever lent out for
+/// a change in place. Returned by [`Write::try_write`](crate::traits::Write::try_write) for
+/// values that are not signals, and by
+/// [`WriteValue::try_write_value`](crate::traits::WriteValue::try_write_value).
 ///
-/// It changes the value in place: while it is alive, the value cannot be read on this thread
-/// (reads give `None` from their `try_*` forms), and writes to it from this thread are
-/// deferred until it is dropped.
-pub struct UntrackedWriteGuard<T: 'static> {
-    guard: ArcRwLockWriteGuardian<T>,
-    // after `guard`: the lock is released before it stops being recorded as held
-    _held: Held,
-    // last: a signal's writer turn, released (after applying the writes deferred meanwhile)
-    // once the lock is
-    _writing: Option<Writing>,
+/// Whether the commit notifies subscribers depends on the value (a stored value has none);
+/// [`untrack`](UntrackableGuard::untrack) turns the notification off. A guard dropped by a
+/// panic commits nothing: the value stays as it was.
+pub struct CopyWriteGuard<T: 'static> {
+    // dropped after the commit: then the previous value
+    value: T,
+    notify: bool,
+    commit: Option<Box<Commit<T>>>,
 }
 
-impl<T: 'static> Debug for UntrackedWriteGuard<T> {
+/// Swaps the copy in (it then holds the previous value), notifying if asked; says whether it
+/// could.
+type Commit<T> = dyn FnOnce(&mut T, bool) -> bool;
+
+impl<T: 'static> CopyWriteGuard<T> {
+    /// A guard over `value` (a copy of the committed value); `commit` swaps it in when the
+    /// guard is dropped (`value` then holds the previous value, dropped last), notifying if
+    /// its second argument is `true`, and says whether it could.
+    pub(crate) fn new(
+        value: T,
+        commit: impl FnOnce(&mut T, bool) -> bool + 'static,
+    ) -> Self {
+        Self {
+            value,
+            notify: true,
+            commit: Some(Box::new(commit)),
+        }
+    }
+
+    /// Commits now, as dropping the guard does, and says whether the value could be stored.
+    pub(crate) fn commit(mut self) -> bool {
+        self.commit
+            .take()
+            .is_some_and(|commit| commit(&mut self.value, self.notify))
+    }
+}
+
+impl<T: 'static> Debug for CopyWriteGuard<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UntrackedWriteGuard")
+        f.debug_struct("CopyWriteGuard")
+            .field("notify", &self.notify)
             .finish_non_exhaustive()
     }
 }
 
-impl<T: 'static> UntrackedWriteGuard<T> {
-    /// Creates a write guard from the given lock, or `None` if it is in use (it does not
-    /// wait). A lock poisoned by a panic still gives its value.
-    ///
-    /// If this thread is the one using it (the write is inside the value's own `with` or
-    /// `update`), that is logged, once.
-    pub fn try_new(inner: Arc<RwLock<T>>) -> Option<Self> {
-        Self::try_new_at(inner, None)
-    }
-
-    /// [`UntrackedWriteGuard::try_new`], naming where the value was created if the write is
-    /// re-entrant.
-    pub(crate) fn try_new_at(
-        inner: Arc<RwLock<T>>,
-        defined_at: Option<&'static Location<'static>>,
-    ) -> Option<Self> {
-        let lock = lock_id(&*inner);
-        match ArcRwLockWriteGuardian::try_take(inner) {
-            Some(taken) => Some(Self {
-                guard: taken.unwrap_or_else(PoisonError::into_inner),
-                _held: Held::write_lock(lock),
-                _writing: None,
-            }),
-            None => {
-                if SINGLE_THREADED || held_by_this_thread(lock) {
-                    report_reentered(Access::Write, defined_at);
-                }
-                None
-            }
-        }
-    }
-
-    /// Takes a write guard on a signal's value, for the write `writing` that has just begun
-    /// (this thread holds nothing else of the value): waits while other threads read it.
-    pub(crate) fn for_write(
-        inner: Arc<RwLock<T>>,
-        writing: Writing,
-        defined_at: Option<&'static Location<'static>>,
-    ) -> Option<Self> {
-        let taken = if SINGLE_THREADED {
-            match ArcRwLockWriteGuardian::try_take(inner) {
-                Some(taken) => taken,
-                None => {
-                    report_reentered(Access::Write, defined_at);
-                    return None;
-                }
-            }
-        } else {
-            ArcRwLockWriteGuardian::take(inner)
-        };
-        Some(Self {
-            guard: taken.unwrap_or_else(PoisonError::into_inner),
-            _held: Held::write_lock(writing.id()),
-            _writing: Some(writing),
-        })
-    }
-}
-
-impl<T> Deref for UntrackedWriteGuard<T> {
+impl<T> Deref for CopyWriteGuard<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.guard.deref()
+        &self.value
     }
 }
 
-impl<T> DerefMut for UntrackedWriteGuard<T> {
+impl<T> DerefMut for CopyWriteGuard<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.guard.deref_mut()
+        &mut self.value
+    }
+}
+
+impl<T> UntrackableGuard for CopyWriteGuard<T> {
+    fn untrack(&mut self) {
+        self.notify = false;
+    }
+}
+
+impl<T> Drop for CopyWriteGuard<T> {
+    fn drop(&mut self) {
+        // dropped by a panic, the change may be half made: the value stays as it was
+        if std::thread::panicking() {
+            return;
+        }
+        if let Some(commit) = self.commit.take() {
+            _ = commit(&mut self.value, self.notify);
+        }
     }
 }
 

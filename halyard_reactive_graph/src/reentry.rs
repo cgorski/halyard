@@ -3,10 +3,17 @@
 //!
 //! A reactive value's lock can be busy for two reasons. Another thread holds it (on the
 //! server): waiting is right, it will be released. Or this thread holds it, because user code
-//! running inside `with`/`update`/`with_value`/`update_value` (or holding a guard from `read`
-//! or `write`) reached the same value again: waiting would never end (a deadlock natively; in
-//! the browser, std's single-threaded lock aborts the whole app). So every access records
-//! here, per thread, which value it uses, and a conflict is detected before any lock is tried.
+//! running inside `with`/`with_value` (or holding a guard from `read`), or a memo's function,
+//! reached the same value again: waiting would never end (a deadlock natively; in the
+//! browser, std's single-threaded lock aborts the whole app). So every access records here,
+//! per thread, which value it uses, and a conflict is detected before any lock is tried.
+//!
+//! No value is lent out for a change in place: a write holds the value's lock only to swap a
+//! new value in, with no user code running, so a read never finds its value missing because
+//! of a write. A read can find nothing to give only while a memo's value is being computed;
+//! when that is on this thread (a memo read inside its own first computation), the read
+//! leaves a note ([`refuse_here`]) so that a strong read aborts instead of waiting for
+//! itself (see [`crate::gone::wait_for`]).
 //!
 //! For signals the record also carries what makes re-entrant writes total:
 //! - the *writer turn*: a signal's writes (from `set`, `update`, a write guard) serialize
@@ -20,9 +27,10 @@
 use guardian::ArcMutexGuardian;
 use std::{
     any::Any,
-    cell::RefCell,
+    cell::{Cell, RefCell},
     marker::PhantomData,
     ops::{Deref, DerefMut},
+    panic::Location,
     rc::{Rc, Weak},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
@@ -30,6 +38,36 @@ use std::{
 thread_local! {
     /// The values this thread is using: one entry per value, while it is in use.
     static ACCESSES: RefCell<Vec<Entry>> = const { RefCell::new(Vec::new()) };
+
+    /// The last read refused because of this thread's own use of the value (see
+    /// [`refuse_here`]).
+    static REFUSED_HERE: Cell<Option<Refusal>> = const { Cell::new(None) };
+}
+
+/// A read that found nothing to read because of what this thread itself is doing with the
+/// value, so that waiting for it could never end: a memo read inside its own computation
+/// while it has no value (its first computation), or a value whose lock this thread holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    /// Where the value was created, if known (debug builds).
+    pub(crate) defined_at: Option<&'static Location<'static>>,
+    /// What this thread is doing with it.
+    pub(crate) why: &'static str,
+}
+
+/// Notes that a read was refused because of this thread's own use of the value. A strong
+/// read ([`crate::gone::wait_for`]) looks for this note to tell a cycle on this thread,
+/// which has no possible value, from another thread's use, which ends.
+pub(crate) fn refuse_here(refusal: Refusal) {
+    _ = REFUSED_HERE.try_with(|refused| refused.set(Some(refusal)));
+}
+
+/// Takes the note left by [`refuse_here`], if any.
+pub(crate) fn take_refusal() -> Option<Refusal> {
+    REFUSED_HERE
+        .try_with(|refused| refused.take())
+        .ok()
+        .flatten()
 }
 
 /// This thread's use of one value.
@@ -38,12 +76,16 @@ struct Entry {
     /// The accesses alive on this thread: read guards, write locks, writes in progress,
     /// write guards.
     depth: usize,
-    /// How many of them hold the value's write lock (an in-place change): the value cannot be
+    /// How many of them hold the value's write lock (only while a new value is swapped in,
+    /// with no user code running): the value cannot be
     /// read on this thread until they end.
     write_locks: usize,
     /// How many of them are working on a copy of the value that they will commit (an
     /// `update` closure that is running, a write guard that is alive).
     snapshots: usize,
+    /// How many of them are computations of the value (a memo's function running on this
+    /// thread): a read of the value from inside is a cycle.
+    computing: usize,
     /// This thread's turn to write the value, from its first write until `depth` is 0.
     turn: Option<ArcMutexGuardian<()>>,
     /// Writes made while the value was in use here, to apply when `depth` returns to 0.
@@ -61,6 +103,7 @@ impl Entry {
             depth: 0,
             write_locks: 0,
             snapshots: 0,
+            computing: 0,
             turn: None,
             pending: None,
             shared_read: None,
@@ -77,6 +120,8 @@ pub(crate) enum Kind {
     WriteLock,
     /// A write working on a copy of the value.
     Snapshot,
+    /// A computation of the value (a memo's function) running on this thread.
+    Compute,
 }
 
 /// Writes deferred until the outermost access to a value ends (signals implement it).
@@ -103,6 +148,7 @@ pub(crate) struct State {
     pub(crate) depth: usize,
     pub(crate) write_locks: usize,
     pub(crate) snapshots: usize,
+    pub(crate) computing: usize,
     pub(crate) has_turn: bool,
 }
 
@@ -144,6 +190,7 @@ pub(crate) fn state(id: usize) -> Option<State> {
                 depth: entry.depth,
                 write_locks: entry.write_locks,
                 snapshots: entry.snapshots,
+                computing: entry.computing,
                 has_turn: entry.turn.is_some(),
             })
             .unwrap_or_default()
@@ -153,6 +200,11 @@ pub(crate) fn state(id: usize) -> Option<State> {
 /// Whether an access alive on this thread uses the value.
 pub(crate) fn held_by_this_thread(id: usize) -> bool {
     state(id).is_some_and(|state| state.in_use())
+}
+
+/// Whether a computation of the value (a memo's function) is running on this thread.
+pub(crate) fn computing_here(id: usize) -> bool {
+    state(id).is_some_and(|state| state.computing > 0)
 }
 
 fn count(entry: &mut Entry, kind: Kind, up: bool) {
@@ -168,6 +220,7 @@ fn count(entry: &mut Entry, kind: Kind, up: bool) {
         Kind::Read => {}
         Kind::WriteLock => entry.write_locks = step(entry.write_locks),
         Kind::Snapshot => entry.snapshots = step(entry.snapshots),
+        Kind::Compute => entry.computing = step(entry.computing),
     }
 }
 
@@ -317,6 +370,11 @@ impl Held {
     /// An access working on a copy of the value, to commit later.
     pub(crate) fn snapshot(id: usize) -> Self {
         Self::of(id, Kind::Snapshot)
+    }
+
+    /// A computation of the value (a memo's function) running on this thread.
+    pub(crate) fn compute(id: usize) -> Self {
+        Self::of(id, Kind::Compute)
     }
 
     fn of(id: usize, kind: Kind) -> Self {
@@ -539,6 +597,7 @@ mod tests {
                 depth: 1,
                 write_locks: 0,
                 snapshots: 1,
+                computing: 0,
                 has_turn: true
             })
         );

@@ -27,8 +27,12 @@ use std::{
 /// # tokio::task::LocalSet::new().run_until(async move {
 /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
-/// let a = RwSignal::new(0);
-/// let is_selected = Selector::new(move || a.try_get().unwrap());
+/// # use halyard_reactive_graph::signal::ArcRwSignal;
+/// let a = ArcRwSignal::new(0);
+/// let is_selected = Selector::new({
+///     let a = a.clone();
+///     move || a.get()
+/// });
 /// let total_notifications = StoredValue::new(0);
 /// Effect::new_isomorphic({
 ///     let is_selected = is_selected.clone();

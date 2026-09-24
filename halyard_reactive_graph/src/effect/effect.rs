@@ -52,7 +52,9 @@ use std::{
 /// // ✅ use effects to interact between reactive state and the outside world
 /// Effect::new(move || {
 ///   // on the next “tick” prints "Value: 0" and subscribes to `a`
-///   println!("Value: {}", a.try_get().unwrap());
+///   if let Some(a) = a.try_get() {
+///     println!("Value: {a}");
+///   }
 /// });
 ///
 /// # assert_eq!(a.try_get(), Some(0));
@@ -64,7 +66,9 @@ use std::{
 /// Effect::new(move || {
 ///   // this technically works but can cause unnecessary re-renders
 ///   // and easily lead to problems like infinite loops
-///   b.set(a.try_get().unwrap() + 1);
+///   if let Some(a) = a.try_get() {
+///     b.set(a + 1);
+///   }
 /// });
 /// # }).await;
 /// # });
@@ -225,7 +229,7 @@ impl Effect<LocalStorage> {
     /// let (num, set_num) = signal(0);
     ///
     /// let effect = Effect::watch(
-    ///     move || num.try_get().unwrap(),
+    ///     move || num.try_get(),
     ///     move |num, prev_num, _| {
     ///         // log::debug!("Number: {}; Prev: {:?}", num, prev_num);
     ///     },
@@ -258,7 +262,7 @@ impl Effect<LocalStorage> {
     /// let (cb_num, set_cb_num) = signal(0);
     ///
     /// Effect::watch(
-    ///     move || num.try_get().unwrap(),
+    ///     move || num.try_get(),
     ///     move |num, _, _| {
     ///         // log::debug!("Number: {}; Cb: {}", num, cb_num.get());
     ///     },
@@ -296,7 +300,7 @@ impl Effect<LocalStorage> {
     /// let (num, set_num) = signal(0);
     ///
     /// Effect::watch(
-    ///     move || num.try_get().unwrap(),
+    ///     move || num.try_get(),
     ///     move |num, prev_num, _| {
     ///         // log::debug!("Number: {}; Prev: {:?}", num, prev_num);
     ///     },

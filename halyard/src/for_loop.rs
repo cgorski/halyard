@@ -53,7 +53,7 @@ fn list_owner(component: &str) -> Owner {
 ///         // renders each item to a view
 ///         children=move |counter: Counter| {
 ///           view! {
-///             <button>"Value: " {move || counter.count.try_get().unwrap()}</button>
+///             <button>"Value: " {counter.count}</button>
 ///           }
 ///         }
 ///       />
@@ -85,7 +85,7 @@ fn list_owner(component: &str) -> Owner {
 ///           key=|counter| counter.id
 ///           let(counter)
 ///         >
-///             <button>"Value: " {move || counter.count.try_get().unwrap()}</button>
+///             <button>"Value: " {counter.count}</button>
 ///         </For>
 ///     </div>
 ///   }
@@ -194,7 +194,7 @@ where
 ///         // renders each item to a view
 ///         children={move |index: ReadSignal<usize>, counter: Counter| {
 ///           view! {
-///             <button>{index} ". Value: " {move || counter.count.try_get().unwrap()}</button>
+///             <button>{index} ". Value: " {counter.count}</button>
 ///           }
 ///         }}
 ///       />

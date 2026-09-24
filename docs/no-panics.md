@@ -40,7 +40,11 @@ a disposed signal read after an `await`, or from a re-entrant lock.
 after `c426d9a3`, 93 on 2026-09-24 (in `halyard_macro` 42, `halyard_tachys` 31, the vendored
 `halyard_rstml` 17, `halyard_reactive_graph` 3, `halyard` 0). CI fails if a crate's count
 rises. The 36 `unwrap_signal!` sites, which clippy does not see (a macro expanded into every
-accessor), are gone with B (2026-09-24). The table is the first count, plus what clippy cannot see. It names the crates of
+accessor), are gone with B (2026-09-24). One deliberate `std::process::abort()` remains, and
+is the only one: in `gone::wait_for`, for a strong read of a memo inside its own first
+computation, which has no possible value (B3; documented on `Strong` and in "As
+implemented"). The ratchet counts clippy's panic lints, so it does not count it; no other
+path reaches it. The table is the first count, plus what clippy cannot see. It names the crates of
 that time: `halyard_router`, `halyard_dom`, `halyard_axum` and `halyard_integration_utils`
 are modules of `halyard` now (`router`, `dom`, `axum`, `integration_utils`), and
 `halyard_server_fn_macro` was removed with server functions.
@@ -128,12 +132,14 @@ aborts, deadlocks or panics. The rule, for applications as for halyard itself:
    committed (or deferred, as above) when it is dropped. Nothing is locked while it lives,
    so the signal can still be read (the committed value) and written (deferred).
    `write()` needs `T: Clone`.
-4. **Values that are not `Clone` change in place.** `set` works for every value, like any
-   write. `try_update`, `update_untracked` and the untracked guard (`write_untracked`)
-   change the value in place, under its lock: started while this thread is using the
-   signal, they return `None` without running; while they run, the signal cannot be read
-   on this thread (the `try_*` reads give `None`, logged once). Do not read a signal from
-   inside its own in-place update.
+4. **No value is lent out for a change in place** (since B3, 2026-09-24; see "As
+   implemented" under B). Every write is a replacement (`set`, `set_untracked`, `try_set`),
+   which works for every value, or a change to a copy committed afterwards (`update`,
+   `maybe_update`, `update_untracked`, `try_update`, the `write()` guard), which needs
+   `T: Clone`. A value that is not `Clone` is changed with `set` only. The in-place forms
+   (`try_update` in place, `try_maybe_update`, `try_update_untracked`, `write_untracked`)
+   are gone: while they ran, a read of the same value on the same thread had nothing to
+   give.
 5. **Threads serialize their writes.** Each signal has a *writer turn*, a mutex that is
    not the value's lock: one thread writes at a time, so concurrent updates never lose one
    another's changes. Reads never wait for an update's closure; they wait only while
@@ -146,11 +152,11 @@ thread waits for itself. Writes from other threads wait for their turn as before
 
 In short, for application code: read a signal anywhere, write it anywhere; a write never
 takes effect in the middle of this thread's read of the same signal, and an update's
-closure sees the value as it was committed. Stored values (`StoredValue`) are not signals:
-their closures run on the borrowed value, and reaching the same value again from there is
-refused (`None` from the `try_*` forms). Resources and async derived values change in
-place; reaching one again from inside its own update is refused rather than waited for
-(natively it used to deadlock).
+closure sees the value as it was committed. Stored values (`StoredValue`), resources and
+async derived values are written the same way (a replacement, or a copy that replaces the
+value); a write made from inside the same value's `with_value`/`with` (while this thread
+holds a read guard of it) is refused and logged rather than waited for (natively it used to
+deadlock).
 
 ## Decision needed: reading a disposed signal
 
@@ -247,7 +253,8 @@ methods in `traits.rs`, 4 in `trait_options.rs`, 6 `From` conversions to `Arc` f
 3. **`Signal` and `ArcSignal` wrap derived closures** as well as handles. A closure that
    reads weak handles is fallible, so `Signal::derive_try(|| Some(a.try_get()? + 1))`
    joins `Signal::derive`, and `ArcSignal` is built only from strong sources.
-4. **Strong reads and in-place writes.** Under "Re-entrant access", an in-place update
+4. **Strong reads and in-place writes** (superseded: since B3 nothing changes a value in
+   place, see "As implemented"). Under "Re-entrant access", an in-place update
    (`try_update`, `update_untracked`, `write_untracked`) lends out the value: a read of the
    same signal on the same thread inside it has nothing to return. For strong reads to be
    total, the in-place forms exist only on weak handles (where every read is a `try_*`);
@@ -401,27 +408,64 @@ mechanical, a view closure becoming the handle, a handler read gaining a `let ..
 
 The design above is implemented as written, with these changes and details:
 
-- **Strong reads are total except in a cycle.** A weak and a strong handle can share a
-  value (`upgrade`, `downgrade`), so a strong read inside the value's own in-place change
-  (made through the weak handle, obstacle 4) has nothing to read; nor has a memo read inside
-  its own computation, or (on a server) a memo that another thread is recomputing. Rather
-  than a panic or a default, the total forms (`get`, `with`, `read`, their `_untracked` and
-  `Value` forms, `write`, `write_value`) are built on the `try_*` form and, if it is `None`,
-  report once and wait for the value (`gone::wait_for`). Only the cross-thread case can end;
-  the same-thread cases are cycles in the application's code, documented on `Strong`.
-  Refusing in-place changes while strong handles exist would close the first case, but needs
-  a count of strong handles that the arena's own copies do not hold; not done.
+- **Strong reads are total; one read aborts** (B3, 2026-09-24). The total forms (`get`,
+  `with`, `read`, their `_untracked` and `Value` forms, `write`, `write_value`) are built on
+  the `try_*` form. At first (B2), if that was `None` they reported once and waited,
+  spinning on `std::thread::yield_now`. That ends when another thread is computing the value,
+  but never in the two same-thread cases, and in the browser `yield_now` does nothing: the
+  tab froze at full CPU. The cases, and what closes each:
+  1. *A strong read while the value is changed in place through a weak handle to it* (the
+     in-place forms of obstacle 4). **No value is lent out for a change in place any more**:
+     the in-place forms are removed everywhere (signals, mapped signals, `StoredValue` and
+     `ArcStoredValue`, resources, `AsyncDerived`, `NodeRef`, the traits `UpdateInPlace`,
+     `UpdateUntracked`, `WriteUntracked` and the hook `Write::try_write_in_place`). Every
+     write is a replacement or a copy (the rule in "Re-entrant access", 4). A write holds the
+     value's lock only to swap the new value in; the previous value is dropped after the
+     lock is released. A mapped signal swaps its part in the same way (only its projection,
+     a plain `fn`, runs under the lock), so the signal's value need not be `Clone`.
+  2. *A memo read inside its own computation.* A memo made with `new`, `new_with_compare`
+     or `new_try` now computes while holding a read guard on its previous value, which
+     stays its value: a read of the memo from inside its function shares that guard and
+     gives the previous value, the same rule as a signal read inside its own `update`. It is
+     reported once as a cycle (where the memo was created and where it was read). A memo
+     does not subscribe to itself (that edge would be marked again by every change).
+  3. *What neither leaves:* a memo read inside its own **first** computation, when it has no
+     previous value (and any computation of a memo made with `new_owning`, whose function
+     owns the previous value). The `try_*` reads give `None` there. A strong read has no
+     possible value: `wait_for` tells this thread's use from another thread's through the
+     per-thread record (the read that finds nothing leaves a note, `reentry::refuse_here`),
+     reports an error naming where the value was created and where it was read, and calls
+     `std::process::abort()`. Like unbounded recursion, it is a cycle in the program's logic,
+     documented on `Strong` (section "Aborts"). This is the only abort in halyard. In the
+     browser there is no other thread, so every read that reaches `wait_for` is this case;
+     natively, a read that another thread holds up still waits, and ends.
+
+  Tests: `tests/strong_reads.rs` (a strong read inside every write form through a weak
+  handle, a mapped signal, a stored value and an async derived value gets the committed
+  value; a memo reading itself on recompute gets its previous value, strong and weak; a memo
+  recomputed by one thread while another reads it; the abort, in a child process), and
+  `gone.rs` (a strong read waits for another thread).
+- **Internal in-place changes.** Where halyard itself must change a value that is not
+  `Clone` (the channel ends of `<Suspense>` inside an `<ErrorBoundary>`, a lazy route's
+  data), it keeps it in a private `Arc<Mutex<_>>` that no handle reaches, and moves it in
+  and out with no other code running under the lock. `ArcAsyncDerived` stores a loaded value
+  the same way (a swap).
+- **Guards and panics.** A write guard (`write()`, `write_value()`) dropped by a panic
+  commits nothing: the value stays as it was. Since no closure runs under a value's lock,
+  user code can no longer poison a signal's or a stored value's lock (a mapped signal's
+  projection is the one exception).
 - **Traits.** `TryReadUntracked`, `TryRead`, `TryWithUntracked`, `TryWith`,
   `TryGetUntracked`, `TryGet`, `TryReadValue`, `TryWithValue`, `TryGetValue` for every
   readable handle; `Read`, `ReadUntracked`, `With`, `WithUntracked`, `Get`, `GetUntracked`,
   `ReadValue`, `WithValue`, `GetValue`, `StrongWrite` (`write`) and `StrongWriteValue`
   (`write_value`) only for `Strong` types. The sealed markers `Strong` and `Weak` are
   implemented with `impl_strong!`/`impl_weak!` (doc hidden, so that `halyard` and
-  `halyard_tachys` can mark their handles). The in-place forms are `UpdateInPlace`
-  (`try_update`, `try_maybe_update`), `UpdateUntracked` (`try_update_untracked`) and
-  `WriteUntracked` (`try_write_untracked`), for `Weak` types only; the `Write` hook they use
-  is `try_write_in_place` (doc hidden). Closures and plain values do not get `Get`: a
-  closure is called, a plain value is used as it is.
+  `halyard_tachys` can mark their handles). Writes (since B3): `Update` (`update`,
+  `maybe_update`, `update_untracked`, `try_update`, all on a copy), `Set` (`set`,
+  `set_untracked`, `try_set`), and `UpdateValue`/`SetValue`/`WriteValue` likewise for stored
+  values; the `Write` hooks are `try_write` (a guard over a copy), `try_commit_value` (a
+  replacement) and `try_update_snapshot` (doc hidden). Closures and plain values do not get
+  `Get`: a closure is called, a plain value is used as it is.
 - **`downgrade()`** is added to the `Arc` signal, memo, stored-value and async-derived types
   (next to the `From` conversions), since obstacle 4 recommends it.
 - **Derived values.** `Map::map`/`Map::memo` over a handle or a tuple of up to 8 handles
@@ -480,4 +524,8 @@ they can be swapped later.
       nothing when gone, `upgrade`), strong `Arc` handles (total reads), no
       `unwrap_signal!` left; halyard's own call sites, tests, doc examples and example
       converted ("As implemented" lists the departures from the design)
+- [x] B3: no value is lent out for a change in place (the in-place write forms removed
+      everywhere; writes replace or change a copy); a memo read inside its own
+      recomputation gives its previous value; `wait_for` never spins on its own thread (the
+      first-computation self-read aborts: the one documented abort, "As implemented")
 - [ ] Changes 1 to 7 above (2 remains for `StoredValue` closures and the DOM layer)

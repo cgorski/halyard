@@ -7,7 +7,7 @@ use crate::{
     },
 };
 use core::fmt::Debug;
-use std::{hash::Hash, ops::DerefMut, panic::Location};
+use std::{hash::Hash, panic::Location};
 
 /// An arena-allocated setter for a reactive signal.
 ///
@@ -191,18 +191,9 @@ where
         self.inner.try_get_value()?.snapshot_guard()
     }
 
-    /// Changes the value in place. Waits while another thread writes it; `None` if this
-    /// thread is using it (the write is inside the signal's own `with` or `update`, or a
-    /// guard of it is alive), which would never end. That is logged once.
-    fn try_write_in_place(
-        &self,
-    ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.inner.try_get_value()?.in_place_guard()
-    }
-
-    fn try_commit_value(&self, value: T) -> Option<T> {
+    fn try_commit_value(&self, value: T, notify: bool) -> Option<T> {
         match self.inner.try_get_value() {
-            Some(inner) => inner.try_commit_value(value),
+            Some(inner) => inner.try_commit_value(value, notify),
             None => Some(value),
         }
     }
@@ -215,12 +206,5 @@ where
         T: Clone,
     {
         self.inner.try_get_value()?.try_update_snapshot(fun)
-    }
-
-    fn try_update_in_place<U>(
-        &self,
-        fun: impl FnOnce(&mut T) -> (bool, U),
-    ) -> Option<U> {
-        self.inner.try_get_value()?.try_update_in_place(fun)
     }
 }

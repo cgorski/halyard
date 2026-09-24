@@ -68,7 +68,7 @@ use std::{marker::PhantomData, sync::Arc};
 /// let (opt_value, set_opt_value) = signal(None::<i32>);
 ///
 /// view! {
-///     <ShowLet some=move || opt_value.try_get().unwrap().map(|v| v * 2) let:value>
+///     <ShowLet some=move || opt_value.try_get().flatten().map(|v| v * 2) let:value>
 ///         "We have a value: " {value}
 ///     </ShowLet>
 /// }

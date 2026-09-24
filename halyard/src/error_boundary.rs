@@ -6,11 +6,11 @@ use halyard_reactive_graph::hydration_context::{
 };
 use halyard_reactive_graph::or_poisoned::OrPoisoned;
 use halyard_reactive_graph::throw_error::{Error, ErrorHook, ErrorId};
-use halyard_reactive_graph::traits::{StrongWriteValue, WithUntracked};
+use halyard_reactive_graph::traits::WithUntracked;
 use halyard_reactive_graph::{
     computed::ArcMemo,
     effect::RenderEffect,
-    owner::{provide_context, ArcStoredValue, Owner},
+    owner::{provide_context, Owner},
     signal::ArcRwSignal,
     traits::{Get, Update, With},
 };
@@ -130,8 +130,26 @@ where
     )
 }
 
-pub(crate) type ErrorBoundarySuspendedChildren =
-    ArcStoredValue<Vec<oneshot::Receiver<()>>>;
+/// The suspenses inside an error boundary that have not resolved yet, each as the receiving
+/// end of a channel it sends on when it does. The receivers are not `Clone`, so they are moved
+/// in and out of a private slot (no other code runs under its lock) rather than kept in a
+/// stored value, whose writes need a copy.
+#[derive(Clone, Default)]
+pub(crate) struct ErrorBoundarySuspendedChildren(
+    Arc<Mutex<Vec<oneshot::Receiver<()>>>>,
+);
+
+impl ErrorBoundarySuspendedChildren {
+    /// Adds a suspense that has not resolved yet.
+    pub(crate) fn push(&self, resolved: oneshot::Receiver<()>) {
+        self.0.lock().or_poisoned().push(resolved);
+    }
+
+    /// Takes all of them out.
+    pub(crate) fn take_all(&self) -> Vec<oneshot::Receiver<()>> {
+        mem::take(&mut *self.0.lock().or_poisoned())
+    }
+}
 
 struct ErrorBoundaryView<Chil, FalFn> {
     hook: Arc<dyn ErrorHook>,
@@ -405,8 +423,7 @@ where
             extra_attrs.clone(),
         );
 
-        let suspense_children =
-            mem::take(&mut *self.suspended_children.write_value());
+        let suspense_children = self.suspended_children.take_all();
 
         // not waiting for any suspended children: just render
         if suspense_children.is_empty() {

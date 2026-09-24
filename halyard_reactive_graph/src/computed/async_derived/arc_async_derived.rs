@@ -11,6 +11,7 @@ use crate::{
     channel::channel,
     computed::suspense::SuspenseContext,
     diagnostics::SpecialNonReactiveFuture,
+    error::Access,
     graph::{
         AnySource, AnySubscriber, ReactiveNode, Source, SourceSet, Subscriber,
         SubscriberSet, ToAnySource, ToAnySubscriber, WithObserver,
@@ -19,7 +20,9 @@ use crate::{
     reentry::{lock_id, Recorded},
     send_wrapper_ext::SendOption,
     signal::{
-        guards::{AsyncPlain, Mapped, MappedMut, ReadGuard, WriteGuard},
+        guards::{
+            report_reentered, AsyncPlain, CopyWriteGuard, Mapped, ReadGuard,
+        },
         ArcTrigger,
     },
     traits::{
@@ -61,15 +64,23 @@ use std::{
 /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 ///
-/// let signal1 = RwSignal::new(0);
-/// let signal2 = RwSignal::new(0);
-/// let derived = ArcAsyncDerived::new(move || async move {
-///   // reactive values can be tracked anywhere in the `async` block
-///   let value1 = signal1.try_get().unwrap();
-///   tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-///   let value2 = signal2.try_get().unwrap();
+/// # use halyard_reactive_graph::signal::ArcRwSignal;
+/// // strong handles: the values are read after an `.await`, when a weak handle's could be gone
+/// let signal1 = ArcRwSignal::new(0);
+/// let signal2 = ArcRwSignal::new(0);
+/// let derived = ArcAsyncDerived::new({
+///   let (signal1, signal2) = (signal1.clone(), signal2.clone());
+///   move || {
+///     let (signal1, signal2) = (signal1.clone(), signal2.clone());
+///     async move {
+///       // reactive values can be tracked anywhere in the `async` block
+///       let value1 = signal1.get();
+///       tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+///       let value2 = signal2.get();
 ///
-///   value1 + value2
+///       value1 + value2
+///     }
+///   }
 /// });
 ///
 /// // the value can be accessed synchronously as `Option<T>`
@@ -451,7 +462,10 @@ impl<T: 'static> ArcAsyncDerived<T> {
         loading: Arc<AtomicBool>,
         ready_tx: Option<oneshot::Sender<()>>,
     ) {
-        *value.write().await.deref_mut() = new_value;
+        let mut new_value = new_value;
+        mem::swap(&mut *value.write().await, &mut new_value);
+        // the previous value, dropped once the lock is released
+        drop(new_value);
         Self::notify_subs(&wakers, &inner, &loading, ready_tx);
     }
 
@@ -713,24 +727,85 @@ impl<T: 'static> Notify for ArcAsyncDerived<T> {
 impl<T: 'static> Write for ArcAsyncDerived<T> {
     type Value = Option<T>;
 
-    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        let value = self.value.blocking_write()?;
-        self.bump_version();
-
-        Some(MappedMut::new(
-            WriteGuard::new(self.clone(), value),
-            |v| v.deref(),
-            |v| v.deref_mut(),
-        ))
+    /// A guard over a copy of the value, which replaces it (notifying subscribers) when it
+    /// is dropped.
+    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
+    where
+        Self::Value: Clone,
+    {
+        self.copy_guard()
     }
 
-    fn try_write_in_place(
+    fn try_commit_value(
         &self,
-    ) -> Option<impl DerefMut<Target = Self::Value>> {
-        let value = self.value.blocking_write()?;
-        self.bump_version();
+        value: Self::Value,
+        notify: bool,
+    ) -> Option<Self::Value> {
+        let mut value = value;
+        if self.swap_value(&mut value, notify) {
+            // the previous value
+            drop(value);
+            None
+        } else {
+            Some(value)
+        }
+    }
 
-        Some(MappedMut::new(value, |v| v.deref(), |v| v.deref_mut()))
+    fn try_update_snapshot<U>(
+        &self,
+        fun: impl FnOnce(&mut Self::Value) -> (bool, U),
+    ) -> Option<U>
+    where
+        Self::Value: Clone,
+    {
+        let mut value = self.copy_value()?;
+        let (changed, out) = fun(&mut value);
+        self.swap_value(&mut value, changed).then_some(out)
+    }
+}
+
+impl<T: 'static> ArcAsyncDerived<T> {
+    /// A guard over a copy of the value, which replaces it (notifying subscribers) when it
+    /// is dropped.
+    pub(crate) fn copy_guard(&self) -> Option<CopyWriteGuard<Option<T>>>
+    where
+        Option<T>: Clone,
+    {
+        let value = self.copy_value()?;
+        let this = self.clone();
+        Some(CopyWriteGuard::new(value, move |value, notify| {
+            this.swap_value(value, notify)
+        }))
+    }
+
+    /// A copy of the current value (without registering it with a suspense).
+    fn copy_value(&self) -> Option<Option<T>>
+    where
+        Option<T>: Clone,
+    {
+        AsyncPlain::try_new(&self.value).map(|plain| (**plain).clone())
+    }
+
+    /// Swaps `value` in as the value (`value` then holds the previous one, to drop once the
+    /// lock is released), notifying subscribers if `notify`. Only the swap runs under the
+    /// lock: the value is never lent out. `false` if this thread is using the value (a read
+    /// guard of it is alive), which is logged once.
+    pub(crate) fn swap_value(
+        &self,
+        value: &mut Option<T>,
+        notify: bool,
+    ) -> bool {
+        let Some(mut stored) = self.value.blocking_write() else {
+            report_reentered(Access::Write, self.defined_at());
+            return false;
+        };
+        self.bump_version();
+        mem::swap(stored.deref_mut().deref_mut(), value);
+        drop(stored);
+        if notify {
+            self.notify();
+        }
+        true
     }
 }
 

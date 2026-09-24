@@ -38,7 +38,9 @@ use std::{
 /// // ✅ use effects to interact between reactive state and the outside world
 /// let _drop_guard = ImmediateEffect::new(move || {
 ///   // on the next “tick” prints "Value: 0" and subscribes to `a`
-///   println!("Value: {}", a.try_get().unwrap());
+///   if let Some(a) = a.try_get() {
+///     println!("Value: {a}");
+///   }
 /// });
 ///
 /// // The effect runs immediately and subscribes to `a`, in the process it prints "Value: 0"

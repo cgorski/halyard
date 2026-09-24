@@ -1,8 +1,11 @@
-use halyard::prelude::ArcStoredValue;
-use halyard_reactive_graph::traits::StrongWriteValue;
+use halyard_reactive_graph::or_poisoned::OrPoisoned;
 use halyard_tachys::either::*;
 use halyard_tachys::view::any_view::{AnyView, IntoAny};
-use std::{future::Future, marker::PhantomData};
+use std::{
+    future::Future,
+    marker::PhantomData,
+    sync::{Arc, Mutex},
+};
 
 pub trait ChooseView
 where
@@ -30,12 +33,16 @@ where
     T: Send + Sync + LazyRoute,
 {
     async fn choose(self) -> AnyView {
-        let data = self.data.write_value().take().unwrap_or_else(T::data);
+        let preloaded = self.data.lock().or_poisoned().take();
+        let data = preloaded.unwrap_or_else(T::data);
         T::view(data).await
     }
 
     async fn preload(&self) {
-        *self.data.write_value() = Some(T::data());
+        let data = T::data();
+        let replaced = self.data.lock().or_poisoned().replace(data);
+        // dropped once the lock is released
+        drop(replaced);
         T::preload().await;
     }
 }
@@ -53,14 +60,17 @@ pub trait LazyRoute: Send + 'static {
 #[derive(Debug)]
 pub struct Lazy<T> {
     ty: PhantomData<T>,
-    data: ArcStoredValue<Option<T>>,
+    /// The route's data, made by `preload` and taken by `choose`. It is not `Clone`, so it is
+    /// moved in and out of a private slot (no other code runs under its lock) rather than
+    /// kept in a stored value, whose writes need a copy.
+    data: Arc<Mutex<Option<T>>>,
 }
 
 impl<T> Clone for Lazy<T> {
     fn clone(&self) -> Self {
         Self {
             ty: self.ty,
-            data: self.data.clone(),
+            data: Arc::clone(&self.data),
         }
     }
 }
@@ -75,7 +85,7 @@ impl<T> Default for Lazy<T> {
     fn default() -> Self {
         Self {
             ty: Default::default(),
-            data: ArcStoredValue::new(None),
+            data: Arc::new(Mutex::new(None)),
         }
     }
 }

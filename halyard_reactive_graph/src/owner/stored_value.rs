@@ -3,7 +3,7 @@ use super::{
     SyncStorage,
 };
 use crate::{
-    signal::guards::{Plain, ReadGuard, UntrackedWriteGuard},
+    signal::guards::{CopyWriteGuard, Plain, ReadGuard},
     traits::{
         DefinedAt, Dispose, IntoInner, IsDisposed, TryReadValue, WriteValue,
     },
@@ -22,17 +22,22 @@ use std::{
 /// types, it is not reactive; accessing it does not cause effects to subscribe, and
 /// updating it does not notify anything else.
 ///
-/// ## Re-entry
+/// ## Writes and re-entry
 ///
-/// [`with_value`](crate::traits::TryWithValue::with_value) and
-/// [`update_value`](crate::traits::UpdateValue::update_value) run their closure on the
+/// The value is never lent out for a change in place:
+/// [`set_value`](crate::traits::SetValue::set_value) replaces it (any value), and
+/// [`update_value`](crate::traits::UpdateValue::update_value) and the
+/// [`try_write_value`](crate::traits::WriteValue::try_write_value) guard change a copy
+/// (the value must be `Clone`), which then replaces it. Inside `update_value`, reading the
+/// same stored value gives the value as it was.
+///
+/// [`try_with_value`](crate::traits::TryWithValue::try_with_value) runs its closure on the
 /// borrowed value. From inside that closure, this same stored value cannot be replaced or
 /// updated (the change is refused: `try_set_value` hands the value back, `try_update_value`
-/// returns `None`), nor read inside `update_value` (`try_get_value` returns `None`); the
-/// first such access is logged. To run a stored closure that may change the value it is
-/// stored in, take a clone and call that:
+/// returns `None`); the first such access is logged. To run a stored closure that may change
+/// the value it is stored in, take a clone and call that:
 /// `if let Some(f) = stored.try_get_value() { f() }` (this is what
-/// [`Callback::run`](crate::callback::Callable::run) does).
+/// [`Callback::try_run`](crate::callback::Callable::try_run) does).
 /// See also [the traits](crate::traits#re-entry).
 pub struct StoredValue<T, S = SyncStorage> {
     value: ArenaItem<ArcStoredValue<T>, S>,
@@ -170,10 +175,19 @@ where
 {
     type Value = T;
 
-    fn try_write_value(&self) -> Option<UntrackedWriteGuard<T>> {
+    fn try_write_value(&self) -> Option<CopyWriteGuard<T>>
+    where
+        T: Clone,
+    {
         self.value
             .try_get_value()
             .and_then(|inner| inner.try_write_value())
+    }
+
+    fn try_swap_value(&self, value: &mut T) -> bool {
+        self.value
+            .try_get_value()
+            .is_some_and(|inner| inner.try_swap_value(value))
     }
 }
 

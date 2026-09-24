@@ -65,6 +65,17 @@ pub(crate) enum GraphError {
     MemoBorrowed {
         defined_at: Option<&'static Location<'static>>,
     },
+    /// A memo was read inside its own computation: a cycle.
+    #[error(
+        "a memo{} was read at {at} inside its own computation (a cycle); the read gives the \
+         memo's previous value (none during its first computation: `try_*` reads give \
+         `None` there)",
+        created(.defined_at)
+    )]
+    MemoReadItself {
+        defined_at: Option<&'static Location<'static>>,
+        at: &'static Location<'static>,
+    },
     /// An `ImmediateEffect::new_mut` effect was triggered while its function was running.
     #[error(
         "an ImmediateEffect{} made with `new_mut` was triggered again while its function was \
@@ -120,9 +131,9 @@ impl Access {
         match self {
             Access::Read => "the read gives nothing (its `try_*` form returns `None`)",
             Access::Write => {
-                "the in-place write is refused (its `try_*` form returns `None`), instead of \
-                 waiting forever; a signal's `set`, `update` and write guard are deferred \
-                 until this thread's use of it ends"
+                "the write is refused (its `try_*` form returns `None`), instead of waiting \
+                 forever; a signal's `set`, `update` and write guard are deferred until this \
+                 thread's use of it ends"
             }
         }
     }
@@ -206,7 +217,7 @@ mod tests {
             )),
             "{write}"
         );
-        assert!(write.contains("the in-place write is refused"), "{write}");
+        assert!(write.contains("the write is refused"), "{write}");
 
         let read = GraphError::Reentered {
             access: Access::Read,

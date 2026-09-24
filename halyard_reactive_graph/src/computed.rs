@@ -71,10 +71,14 @@ pub use selector::*;
 ///
 /// # if false { // don't run effects in doctest
 /// Effect::new(move |_| {
-///     println!("name is {}", name.try_get().unwrap());
+///     if let Some(name) = name.try_get() {
+///         println!("name is {name}");
+///     }
 /// });
 /// Effect::new(move |_| {
-///     println!("count is {}", count.try_get().unwrap());
+///     if let Some(count) = count.try_get() {
+///         println!("count is {count}");
+///     }
 /// });
 /// # }
 ///

@@ -1,10 +1,12 @@
-use super::inner::MemoInner;
+use super::inner::{MemoFn, MemoInner};
 use crate::{
+    error::{GraphError, ReportOnce},
     graph::{
         AnySource, AnySubscriber, ReactiveNode, Source, Subscriber,
         ToAnySource, ToAnySubscriber,
     },
     owner::{Storage, StorageAccess, SyncStorage},
+    reentry::{self, computing_here, lock_id, Refusal},
     signal::{
         guards::{Mapped, Plain, ReadGuard},
         ArcReadSignal, ArcRwSignal,
@@ -37,21 +39,33 @@ use std::{
 /// As with an [`Effect`](crate::effect::Effect), the argument to the memo function is the previous value,
 /// i.e., the current value of the memo, which will be `None` for the initial calculation.
 ///
+/// A read of the memo from inside its own function (a cycle) gives that previous value, and
+/// is reported once. During the first computation there is none: a strong read there has no
+/// possible value, and aborts (see [`Strong`](crate::traits::Strong)).
+///
 /// ## Examples
 /// ```
 /// # use halyard_reactive_graph::prelude::*; let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # use halyard_reactive_graph::computed::*;
 /// # use halyard_reactive_graph::signal::signal;
 /// # fn really_expensive_computation(value: i32) -> i32 { value };
-/// let (value, set_value) = signal(0);
+/// # use halyard_reactive_graph::signal::arc_signal;
+/// // an `ArcMemo` is strong: it reads strong handles, which keep their values alive
+/// let (value, set_value) = arc_signal(0);
 ///
 /// // 🆗 we could create a derived signal with a simple function
-/// let double_value = move || value.try_get().unwrap() * 2;
+/// let double_value = {
+///     let value = value.clone();
+///     move || value.get() * 2
+/// };
 /// set_value.set(2);
 /// assert_eq!(double_value(), 4);
 ///
 /// // but imagine the computation is really expensive
-/// let expensive = move || really_expensive_computation(value.try_get().unwrap()); // lazy: doesn't run until called
+/// let expensive = {
+///     let value = value.clone();
+///     move || really_expensive_computation(value.get()) // lazy: doesn't run until called
+/// };
 /// // 🆗 run #1: calls `really_expensive_computation` the first time
 /// println!("expensive = {}", expensive());
 /// // ❌ run #2: this calls `really_expensive_computation` a second time!
@@ -59,7 +73,7 @@ use std::{
 ///
 /// // instead, we create a memo
 /// // 🆗 run #1: the calculation runs once immediately
-/// let memoized = ArcMemo::new(move |_| really_expensive_computation(value.try_get().unwrap()));
+/// let memoized = ArcMemo::new(move |_| really_expensive_computation(value.get()));
 /// // 🆗 reads the current value of the memo
 /// println!("memoized = {}", memoized.get());
 /// // ✅ reads the current value **without re-running the calculation**
@@ -149,17 +163,21 @@ where
         fun: impl Fn(Option<&T>) -> T + Send + Sync + 'static,
         changed: fn(Option<&T>, Option<&T>) -> bool,
     ) -> Self {
-        Self::new_owning(move |prev: Option<T>| {
-            let new_value = fun(prev.as_ref());
-            let changed = changed(prev.as_ref(), Some(&new_value));
-            (new_value, changed)
-        })
+        Self::from_fn(MemoFn::Borrowing(Arc::new(move |prev: Option<&T>| {
+            let new_value = fun(prev);
+            let changed = changed(prev, Some(&new_value));
+            (Some(new_value), changed)
+        })))
     }
 
     /// Creates a new memo by passing a function that computes the value.
     ///
     /// Unlike [`ArcMemo::new`](), this receives ownership of the previous value. As a result, it
     /// must return both the new value and a `bool` that is `true` if the value has changed.
+    ///
+    /// While the function runs, the memo has no value (the function owns it): a strong read
+    /// of the memo from inside its own function has no possible value, and aborts (see
+    /// [`Strong`](crate::traits::Strong)).
     ///
     /// This is lazy: the function will not be called until the memo's value is read for the first
     /// time.
@@ -171,19 +189,24 @@ where
     pub fn new_owning(
         fun: impl Fn(Option<T>) -> (T, bool) + Send + Sync + 'static,
     ) -> Self {
-        Self::new_owning_try(move |prev| {
+        Self::from_fn(MemoFn::Owning(Arc::new(move |prev| {
             let (value, changed) = fun(prev);
             (Some(value), changed)
-        })
+        })))
     }
 
     /// A memo whose function may give no value (`None`): then reads give `None` until a
     /// source changes. Only for [`Memo::new_try`](crate::computed::Memo::new_try): a strong
     /// memo always has a value.
     #[track_caller]
-    pub(crate) fn new_owning_try(
-        fun: impl Fn(Option<T>) -> (Option<T>, bool) + Send + Sync + 'static,
+    pub(crate) fn new_try(
+        fun: impl Fn(Option<&T>) -> (Option<T>, bool) + Send + Sync + 'static,
     ) -> Self {
+        Self::from_fn(MemoFn::Borrowing(Arc::new(fun)))
+    }
+
+    #[track_caller]
+    fn from_fn(fun: MemoFn<T>) -> Self {
         let caller = Location::caller();
         let defined_at =
             cfg!(any(debug_assertions, halyard_debuginfo)).then_some(caller);
@@ -193,7 +216,7 @@ where
                 Weak::clone(weak) as Weak<dyn Subscriber + Send + Sync>,
             );
 
-            MemoInner::new(Arc::new(fun), subscriber, defined_at)
+            MemoInner::new(fun, subscriber, defined_at)
         });
         Self {
             #[cfg(any(debug_assertions, halyard_debuginfo))]
@@ -352,28 +375,58 @@ where
     }
 }
 
+/// A memo read inside its own computation (logged once).
+static MEMO_READ_ITSELF: ReportOnce = ReportOnce::new();
+
 impl<T: 'static, S> TryReadUntracked for ArcMemo<T, S>
 where
     S: Storage<T>,
 {
     type Value = ReadGuard<T, Mapped<Plain<Option<S::Wrapped>>, T>>;
 
+    #[track_caller]
     fn try_read_untracked(&self) -> Option<Self::Value> {
-        self.update_if_necessary();
+        let at = crate::gone::take_strong_read_site()
+            .unwrap_or_else(Location::caller);
+        // Read inside its own computation on this thread (a cycle): the memo's value is the
+        // previous one, which the computation holds a read guard on (shared with this read);
+        // during the first computation, or that of a memo made with `new_owning`, there is
+        // none.
+        let computing = computing_here(lock_id(&*self.inner.value));
+        if computing {
+            MEMO_READ_ITSELF.report(|| GraphError::MemoReadItself {
+                defined_at: self.defined_at(),
+                at,
+            });
+        } else {
+            self.update_if_necessary();
+        }
 
         let value = Plain::try_new_at(
             Arc::clone(&self.inner.value),
             self.defined_at(),
         )?;
-        // The value is missing only while it is being recomputed (it is handed to the
-        // memo's function), by another thread or by the function itself reading the memo.
-        // The guard just taken keeps it from being taken away while it lives, so the
+        if value.is_none() {
+            // The value is missing while it is being computed: by this thread, which has no
+            // previous value to give (a strong read cannot wait for that: see
+            // `gone::wait_for`), or by another thread (a memo made with `new_owning`, or its
+            // first computation). A memo made with `Memo::new_try` also has none while its
+            // function gives `None`.
+            if computing {
+                reentry::refuse_here(Refusal {
+                    defined_at: self.defined_at(),
+                    why: "it is a memo read inside its own computation, which has no \
+                          previous value to give (its first computation, or a memo \
+                          made with `new_owning`, whose function owns the previous value)",
+                });
+            }
+            return None;
+        }
+        // The guard just taken keeps the value from being replaced while it lives, so the
         // mapping below always finds it.
-        value.is_some().then(|| {
-            ReadGuard::new(Mapped::new_with_guard(value, |t| {
-                t.as_ref().unwrap().as_borrowed()
-            }))
-        })
+        Some(ReadGuard::new(Mapped::new_with_guard(value, |t| {
+            t.as_ref().unwrap().as_borrowed()
+        })))
     }
 }
 

@@ -111,9 +111,9 @@ impl Observer {
 /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// let (a, set_a) = signal(0);
 /// let (b, set_b) = signal(0);
-/// let c = Memo::new(move |_| {
+/// let c = Memo::new_try(move |_| {
 ///     // this memo will *only* update when `a` changes
-///     a.try_get().unwrap() + untrack(move || b.try_get().unwrap())
+///     Some(a.try_get()? + untrack(move || b.try_get())?)
 /// });
 ///
 /// assert_eq!(c.try_get(), Some(0));

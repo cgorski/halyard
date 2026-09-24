@@ -644,7 +644,7 @@ pub mod read {
         ///
         /// // this function takes any kind of wrapped signal
         /// fn above_3(arg: &Signal<i32>) -> bool {
-        ///     arg.try_get().unwrap() > 3
+        ///     arg.try_get().is_some_and(|arg| arg > 3)
         /// }
         ///
         /// assert_eq!(above_3(&count.into()), false);
@@ -1522,15 +1522,14 @@ pub mod read {
     /// # use halyard_reactive_graph::computed::Memo;
     /// # use halyard_reactive_graph::prelude::*;
     /// let (count, set_count) = signal(2);
-    /// let double_count = MaybeSignal::derive(move || count.try_get().unwrap() * 2);
+    /// let double_count: MaybeSignal<i32> = count.map(|count| count * 2).into();
     /// let memoized_double_count = Memo::new_try(move |_| Some(count.try_get()? * 2));
     /// let static_value = 5;
     ///
     /// // this function takes either a reactive or non-reactive value
     /// fn above_3(arg: &MaybeSignal<i32>) -> bool {
-    ///     // ✅ calling the signal clones and returns the value
-    ///     //    it is a shorthand for arg.get()
-    ///     arg.try_get().unwrap() > 3
+    ///     // ✅ `try_get` clones and returns the value (`None` if it is gone)
+    ///     arg.try_get().is_some_and(|arg| arg > 3)
     /// }
     ///
     /// assert_eq!(above_3(&static_value.into()), true);
@@ -1815,15 +1814,15 @@ pub mod read {
     /// # use halyard_reactive_graph::prelude::*;
     /// let (count, set_count) = signal(Some(2));
     /// let double = |n| n * 2;
-    /// let double_count = MaybeProp::derive(move || count.try_get().unwrap().map(double));
+    /// let double_count: MaybeProp<i32> = count.map(move |count| count.map(double)).into();
     /// let memoized_double_count = Memo::new_try(move |_| Some(count.try_get()?.map(double)));
     /// let static_value = 5;
     ///
     /// // this function takes either a reactive or non-reactive value
     /// fn above_3(arg: &MaybeProp<i32>) -> bool {
-    ///     // ✅ calling the signal clones and returns the value
-    ///     //    it is a shorthand for arg.get()q
-    ///     arg.try_get().unwrap().map(|arg| arg > 3).unwrap_or(false)
+    ///     // ✅ `try_get` clones and returns the value (`None` if it is gone; the value is
+    ///     //    an `Option` too)
+    ///     arg.try_get().flatten().is_some_and(|arg| arg > 3)
     /// }
     ///
     /// assert_eq!(above_3(&None::<i32>.into()), false);
@@ -2345,6 +2344,18 @@ pub mod write {
             match self.inner {
                 SignalSetterTypes::Default => {}
                 SignalSetterTypes::Write(w) => w.set(new_value),
+                SignalSetterTypes::Mapped(s) => {
+                    s.try_with_value(|setter| setter(new_value));
+                }
+            }
+        }
+
+        /// For a setter made from a closure, calls the closure (which decides whether to
+        /// notify).
+        fn set_untracked(&self, new_value: Self::Value) {
+            match self.inner {
+                SignalSetterTypes::Default => {}
+                SignalSetterTypes::Write(w) => w.set_untracked(new_value),
                 SignalSetterTypes::Mapped(s) => {
                     s.try_with_value(|setter| setter(new_value));
                 }

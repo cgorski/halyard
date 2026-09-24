@@ -25,7 +25,7 @@ use halyard_reactive_graph::{
 };
 use std::{
     future::{pending, Future, IntoFuture},
-    ops::{Deref, DerefMut},
+    ops::Deref,
     panic::Location,
 };
 
@@ -213,10 +213,22 @@ where
         self.data.try_write()
     }
 
-    fn try_write_in_place(
+    fn try_commit_value(
         &self,
-    ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.data.try_write_in_place()
+        value: Self::Value,
+        notify: bool,
+    ) -> Option<Self::Value> {
+        self.data.try_commit_value(value, notify)
+    }
+
+    fn try_update_snapshot<U>(
+        &self,
+        fun: impl FnOnce(&mut Self::Value) -> (bool, U),
+    ) -> Option<U>
+    where
+        Self::Value: Clone,
+    {
+        self.data.try_update_snapshot(fun)
     }
 }
 
@@ -460,10 +472,22 @@ where
         self.data.try_write()
     }
 
-    fn try_write_in_place(
+    fn try_commit_value(
         &self,
-    ) -> Option<impl DerefMut<Target = Self::Value>> {
-        self.data.try_write_in_place()
+        value: Self::Value,
+        notify: bool,
+    ) -> Option<Self::Value> {
+        self.data.try_commit_value(value, notify)
+    }
+
+    fn try_update_snapshot<U>(
+        &self,
+        fun: impl FnOnce(&mut Self::Value) -> (bool, U),
+    ) -> Option<U>
+    where
+        Self::Value: Clone,
+    {
+        self.data.try_update_snapshot(fun)
     }
 }
 

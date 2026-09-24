@@ -138,7 +138,7 @@ mod slot;
 /// # use halyard::prelude::*;
 /// # fn test() -> impl IntoView {
 /// let (count, set_count) = create_signal(2);
-/// view! { <div class:hidden-div={move || count.try_get().unwrap() < 3}>"Now you see me, now you don’t."</div> }
+/// view! { <div class:hidden-div={move || count.try_get().is_some_and(|count| count < 3)}>"Now you see me, now you don’t."</div> }
 /// # }
 /// ```
 ///
@@ -147,7 +147,7 @@ mod slot;
 /// # use halyard::prelude::*;
 /// # fn test() -> impl IntoView {
 /// let (count, set_count) = create_signal(2);
-/// view! { <div class:hidden-div-25={move || count.try_get().unwrap() < 3}>"Now you see me, now you don’t."</div> }
+/// view! { <div class:hidden-div-25={move || count.try_get().is_some_and(|count| count < 3)}>"Now you see me, now you don’t."</div> }
 /// # }
 /// ```
 ///
@@ -169,7 +169,7 @@ mod slot;
 /// // this allows you to use CSS frameworks that include complex class names
 /// view! {
 ///   <div
-///     class=("is-[this_-_really]-necessary-42", move || count.try_get().unwrap() < 3)
+///     class=("is-[this_-_really]-necessary-42", move || count.try_get().is_some_and(|count| count < 3))
 ///   >
 ///     "Now you see me, now you don’t."
 ///   </div>
@@ -187,9 +187,9 @@ mod slot;
 /// view! {
 ///   <div
 ///     style="position: absolute"
-///     style:left=move || format!("{}px", x.try_get().unwrap())
-///     style:top=move || format!("{}px", y.try_get().unwrap())
-///     style=("background-color", move || format!("rgb({}, {}, 100)", x.try_get().unwrap(), y.try_get().unwrap()))
+///     style:left=move || x.try_get().map(|x| format!("{x}px"))
+///     style:top=move || y.try_get().map(|y| format!("{y}px"))
+///     style=("background-color", move || (x, y).try_get().map(|(x, y)| format!("rgb({x}, {y}, 100)")))
 ///   >
 ///     "Moves when coordinates change"
 ///   </div>
@@ -259,7 +259,7 @@ mod slot;
 ///         <div>
 ///             <button on:click=clear>"Clear"</button>
 ///             <button on:click=decrement>"-1"</button>
-///             <span>"Value: " {move || value.try_get().unwrap().to_string()} "!"</span>
+///             <span>"Value: " {value} "!"</span>
 ///             <button on:click=increment>"+1"</button>
 ///         </div>
 ///     }

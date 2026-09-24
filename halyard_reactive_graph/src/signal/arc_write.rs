@@ -1,4 +1,3 @@
-use super::guards::UntrackedWriteGuard;
 use crate::{
     graph::SubscriberSet,
     prelude::{IsDisposed, Notify},
@@ -165,16 +164,8 @@ impl<T: 'static> Write for ArcWriteSignal<T> {
         self.snapshot_guard()
     }
 
-    /// Changes the value in place. Waits while another thread writes it; `None` if this
-    /// thread is using it (the write is inside the signal's own `with` or `update`, or a
-    /// guard of it is alive), which would never end. That is logged once.
-    #[allow(refining_impl_trait)]
-    fn try_write_in_place(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
-        self.in_place_guard()
-    }
-
-    fn try_commit_value(&self, value: T) -> Option<T> {
-        self.set_value(value);
+    fn try_commit_value(&self, value: T, notify: bool) -> Option<T> {
+        self.set_value(value, notify);
         None
     }
 
@@ -186,12 +177,5 @@ impl<T: 'static> Write for ArcWriteSignal<T> {
         T: Clone,
     {
         self.update_snapshot(fun)
-    }
-
-    fn try_update_in_place<U>(
-        &self,
-        fun: impl FnOnce(&mut T) -> (bool, U),
-    ) -> Option<U> {
-        self.update_in_place(fun)
     }
 }

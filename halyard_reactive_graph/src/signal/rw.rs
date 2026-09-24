@@ -7,7 +7,6 @@ use crate::{
     error::{GraphError, ReportOnce},
     graph::SubscriberSet,
     owner::{ArenaItem, FromLocal, LocalStorage, Storage, SyncStorage},
-    signal::guards::UntrackedWriteGuard,
     traits::{
         DefinedAt, Dispose, IntoInner, IsDisposed, Notify, TryReadUntracked,
         UntrackableGuard, Write,
@@ -436,17 +435,9 @@ where
         self.inner.try_get_value()?.writer().snapshot_guard()
     }
 
-    /// Changes the value in place. Waits while another thread writes it; `None` if this
-    /// thread is using it (the write is inside the signal's own `with` or `update`, or a
-    /// guard of it is alive), which would never end. That is logged once.
-    #[allow(refining_impl_trait)]
-    fn try_write_in_place(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
-        self.inner.try_get_value()?.try_write_in_place()
-    }
-
-    fn try_commit_value(&self, value: T) -> Option<T> {
+    fn try_commit_value(&self, value: T, notify: bool) -> Option<T> {
         match self.inner.try_get_value() {
-            Some(inner) => inner.try_commit_value(value),
+            Some(inner) => inner.try_commit_value(value, notify),
             None => Some(value),
         }
     }
@@ -459,13 +450,6 @@ where
         T: Clone,
     {
         self.inner.try_get_value()?.try_update_snapshot(fun)
-    }
-
-    fn try_update_in_place<U>(
-        &self,
-        fun: impl FnOnce(&mut T) -> (bool, U),
-    ) -> Option<U> {
-        self.inner.try_get_value()?.try_update_in_place(fun)
     }
 }
 

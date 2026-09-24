@@ -339,31 +339,25 @@ fn subscribers_are_notified_once_per_committed_change() {
     assert_eq!(value, 21);
 }
 
-/// A value that cannot be cloned has no `update`; `set` is deferred like any write, and
-/// `try_update` changes it in place, or returns `None` while this thread is using it.
+/// A value that cannot be cloned has no `update` (nothing is lent out for a change in
+/// place): it is replaced with `set`, which is deferred like any write.
 #[test]
-fn a_value_that_cannot_be_cloned_is_set_or_updated_in_place() {
+fn a_value_that_cannot_be_cloned_is_replaced() {
     #[derive(Debug, PartialEq)]
     struct Token(u32);
 
-    let (inside, in_place, after) =
-        finishes("a value that is not Clone", || {
-            let token = RwSignal::new(Token(1));
-            let inside = token
-                .try_with(|_| {
-                    token.set(Token(2));
-                    token.try_update(|t| t.0 += 1)
-                })
-                .unwrap();
-            let in_place = token.try_update(|t| {
-                t.0 += 1;
+    let (inside, after) = finishes("a value that is not Clone", || {
+        let token = RwSignal::new(Token(1));
+        let inside = token
+            .try_with(|t| {
+                token.set(Token(t.0 + 1));
                 t.0
-            });
-            (inside, in_place, token.try_with_untracked(|t| t.0).unwrap())
-        });
-    assert_eq!(inside, None, "not while this thread is reading it");
-    assert_eq!(in_place, Some(3), "the deferred set applied first");
-    assert_eq!(after, 3);
+            })
+            .unwrap();
+        (inside, token.try_with_untracked(|t| t.0).unwrap())
+    });
+    assert_eq!(inside, 1, "the set is deferred while this thread reads it");
+    assert_eq!(after, 2);
 }
 
 /// An `AsyncDerived` written from inside its own read waited for itself natively (a

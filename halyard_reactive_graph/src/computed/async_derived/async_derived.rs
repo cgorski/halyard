@@ -1,4 +1,4 @@
-use super::{ArcAsyncDerived, AsyncDerivedReadyFuture, BlockingLock};
+use super::{ArcAsyncDerived, AsyncDerivedReadyFuture};
 use crate::{
     graph::{
         AnySource, AnySubscriber, ReactiveNode, Source, Subscriber,
@@ -6,18 +6,14 @@ use crate::{
     },
     owner::{ArenaItem, FromLocal, LocalStorage, Storage, SyncStorage},
     send_wrapper_ext::SendOption,
-    signal::guards::{AsyncPlain, Mapped, MappedMut, ReadGuard, WriteGuard},
+    signal::guards::{AsyncPlain, Mapped, ReadGuard},
     traits::{
         DefinedAt, Dispose, IsDisposed, Notify, TryReadUntracked,
         UntrackableGuard, Write,
     },
 };
 use core::fmt::Debug;
-use std::{
-    future::Future,
-    ops::{Deref, DerefMut},
-    panic::Location,
-};
+use std::{future::Future, panic::Location};
 
 /// A reactive value that is derived by running an asynchronous computation in response to changes
 /// in its sources.
@@ -38,15 +34,23 @@ use std::{
 /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 ///
-/// let signal1 = RwSignal::new(0);
-/// let signal2 = RwSignal::new(0);
-/// let derived = AsyncDerived::new(move || async move {
-///   // reactive values can be tracked anywhere in the `async` block
-///   let value1 = signal1.try_get().unwrap();
-///   tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-///   let value2 = signal2.try_get().unwrap();
+/// # use halyard_reactive_graph::signal::ArcRwSignal;
+/// // strong handles: the values are read after an `.await`, when a weak handle's could be gone
+/// let signal1 = ArcRwSignal::new(0);
+/// let signal2 = ArcRwSignal::new(0);
+/// let derived = AsyncDerived::new({
+///   let (signal1, signal2) = (signal1.clone(), signal2.clone());
+///   move || {
+///     let (signal1, signal2) = (signal1.clone(), signal2.clone());
+///     async move {
+///       // reactive values can be tracked anywhere in the `async` block
+///       let value1 = signal1.get();
+///       tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+///       let value2 = signal2.get();
 ///
-///   value1 + value2
+///       value1 + value2
+///     }
+///   }
 /// });
 ///
 /// // the value can be accessed synchronously as `Option<T>`
@@ -357,26 +361,34 @@ where
 {
     type Value = Option<T>;
 
-    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        let inner = self.inner.try_get_value()?;
-        let guard = inner.value.blocking_write_arc()?;
-        inner.bump_version();
-
-        Some(MappedMut::new(
-            WriteGuard::new(*self, guard),
-            |v| v.deref(),
-            |v| v.deref_mut(),
-        ))
+    /// A guard over a copy of the value, which replaces it (notifying subscribers) when it
+    /// is dropped.
+    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
+    where
+        Self::Value: Clone,
+    {
+        self.inner.try_get_value()?.copy_guard()
     }
 
-    fn try_write_in_place(
+    fn try_commit_value(
         &self,
-    ) -> Option<impl DerefMut<Target = Self::Value>> {
-        let inner = self.inner.try_get_value()?;
-        let guard = inner.value.blocking_write_arc()?;
-        inner.bump_version();
+        value: Self::Value,
+        notify: bool,
+    ) -> Option<Self::Value> {
+        match self.inner.try_get_value() {
+            Some(inner) => inner.try_commit_value(value, notify),
+            None => Some(value),
+        }
+    }
 
-        Some(MappedMut::new(guard, |v| v.deref(), |v| v.deref_mut()))
+    fn try_update_snapshot<U>(
+        &self,
+        fun: impl FnOnce(&mut Self::Value) -> (bool, U),
+    ) -> Option<U>
+    where
+        Self::Value: Clone,
+    {
+        self.inner.try_get_value()?.try_update_snapshot(fun)
     }
 }
 
@@ -499,7 +511,7 @@ mod tests {
     use crate::or_poisoned::OrPoisoned;
     use crate::{
         owner::Owner,
-        traits::{Set, TryGetUntracked, UpdateUntracked},
+        traits::{Set, TryGetUntracked, Update},
     };
 
     fn set_version(derived: &AsyncDerived<u32>, version: usize) {
@@ -522,7 +534,7 @@ mod tests {
         assert_eq!(derived.try_get_untracked(), Some(Some(2)));
 
         set_version(&derived, usize::MAX);
-        derived.try_update_untracked(|value| *value = Some(3));
+        derived.update_untracked(|value| *value = Some(3));
         assert_eq!(derived.try_get_untracked(), Some(Some(3)));
     }
 }

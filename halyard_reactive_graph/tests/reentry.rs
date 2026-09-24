@@ -119,8 +119,10 @@ fn a_stored_closure_that_replaces_itself_finishes() {
     assert_eq!(after, Some(2), "a cloned run replaces it");
 }
 
-/// A stored closure that updates the value it is stored in from inside `update_value`: the
-/// nested update is refused (its `try_*` returns `None`), and the outer one applies.
+/// A stored value updated from inside its own `update_value` (the nested update used to be
+/// refused, since the outer one held the value's lock): both work on a copy of the value as
+/// it was, nothing waits and nothing is refused; the nested one is stored first, and the
+/// outer one, stored when it ends, replaces it.
 #[test]
 fn a_stored_value_updated_from_inside_its_own_update_finishes() {
     let (nested, value) =
@@ -133,8 +135,8 @@ fn a_stored_value_updated_from_inside_its_own_update_finishes() {
             });
             (nested, counter.try_get_value())
         });
-    assert_eq!(nested, Some(None), "the nested update is refused");
-    assert_eq!(value, Some(1));
+    assert_eq!(nested, Some(Some(())), "the nested update runs on a copy");
+    assert_eq!(value, Some(1), "the outer update, stored last, replaces it");
 }
 
 /// An effect whose closure writes a signal it is reading (`with` + `set`): the write blocked

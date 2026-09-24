@@ -143,7 +143,11 @@ not follow Leptos.
   the impossible states cannot be written. Reactive handles follow `Rc`/`Weak`: a `Copy`
   (arena) handle is weak, read with `try_get` (an `Option`) or put in the view as it is;
   a reference-counted handle is strong, read with `get` (`docs/no-panics.md`, "Design:
-  weak arena handles"). The inherited code does not meet this yet:
+  weak arena handles"). No value is lent out for a change in place: a write replaces the
+  value (`set`) or changes a copy (`update`, `write()`; `T: Clone`), so a strong read always
+  finds one. The one read with no possible value, a strong read of a memo inside its own
+  first computation, aborts like unbounded recursion (the only abort in halyard). The
+  inherited code does not meet this yet:
   `scripts/panic-ratchet.sh` counts every `unwrap`, `expect`, `panic!`, `unreachable!`,
   `todo!`, unchecked index and unchecked arithmetic per crate, CI fails if a count rises,
   and each crate's lints go to `deny` once its count reaches zero. The hydration and

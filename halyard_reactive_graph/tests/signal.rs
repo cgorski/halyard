@@ -22,7 +22,7 @@ fn update_arc_rw_signal() {
     assert_eq!(a.get(), 1);
     a.update(|n| *n += 1);
     assert_eq!(a.get(), 2);
-    a.downgrade().try_update_untracked(|n| *n += 1).unwrap();
+    a.update_untracked(|n| *n += 1);
     assert_eq!(a.get(), 3);
     a.set(4);
     assert_eq!(a.get(), 4);
@@ -44,7 +44,7 @@ fn update_arc_signal() {
     assert_eq!(a.get(), 1);
     set_a.update(|n| *n += 1);
     assert_eq!(a.get(), 2);
-    set_a.downgrade().try_update_untracked(|n| *n += 1).unwrap();
+    set_a.update_untracked(|n| *n += 1);
     assert_eq!(a.get(), 3);
     set_a.set(4);
     assert_eq!(a.get(), 4);
@@ -72,7 +72,7 @@ fn update_rw_signal() {
     assert_eq!(a.try_get(), Some(1));
     a.update(|n| *n += 1);
     assert_eq!(a.try_get(), Some(2));
-    a.try_update_untracked(|n| *n += 1).unwrap();
+    a.update_untracked(|n| *n += 1);
     assert_eq!(a.try_get(), Some(3));
     a.set(4);
     assert_eq!(a.try_get(), Some(4));
@@ -100,7 +100,7 @@ fn update_signal() {
     assert_eq!(a.try_get(), Some(1));
     set_a.update(|n| *n += 1);
     assert_eq!(a.try_get(), Some(2));
-    set_a.try_update_untracked(|n| *n += 1).unwrap();
+    set_a.update_untracked(|n| *n += 1);
     assert_eq!(a.try_get(), Some(3));
     set_a.set(4);
     assert_eq!(a.try_get(), Some(4));

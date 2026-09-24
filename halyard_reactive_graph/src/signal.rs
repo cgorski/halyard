@@ -100,12 +100,12 @@ pub fn arc_signal<T>(value: T) -> (ArcReadSignal<T>, ArcWriteSignal<T>) {
 /// set_count.update(|count: &mut i32| *count += 1);
 /// assert_eq!(count.try_get(), Some(2));
 ///
-/// // ✅ you can create "derived signals" with a Fn() -> T interface
-/// let double_count = move || count.try_get().unwrap() * 2; // signals are `Copy` so you can `move` them anywhere
+/// // ✅ you can create "derived signals" with `map` (put them in a view as they are)
+/// let double_count = count.map(|count| count * 2);
 /// set_count.set(0);
-/// assert_eq!(double_count(), 0);
+/// assert_eq!(double_count.try_get(), Some(0));
 /// set_count.set(1);
-/// assert_eq!(double_count(), 2);
+/// assert_eq!(double_count.try_get(), Some(2));
 /// ```
 #[inline(always)]
 #[track_caller]
@@ -159,12 +159,12 @@ pub fn signal_local<T: 'static>(
 /// set_count.update(|count: &mut i32| *count += 1);
 /// assert_eq!(count.try_get(), Some(2));
 ///
-/// // ✅ you can create "derived signals" with a Fn() -> T interface
-/// let double_count = move || count.try_get().unwrap() * 2; // signals are `Copy` so you can `move` them anywhere
+/// // ✅ you can create "derived signals" with `map` (put them in a view as they are)
+/// let double_count = count.map(|count| count * 2);
 /// set_count.set(0);
-/// assert_eq!(double_count(), 0);
+/// assert_eq!(double_count.try_get(), Some(0));
 /// set_count.set(1);
-/// assert_eq!(double_count(), 2);
+/// assert_eq!(double_count.try_get(), Some(2));
 /// ```
 #[inline(always)]
 #[track_caller]

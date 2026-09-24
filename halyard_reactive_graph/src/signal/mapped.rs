@@ -1,10 +1,9 @@
 use super::{
-    guards::{Mapped, MappedMutArc},
+    guards::{CopyWriteGuard, Mapped},
     ArcRwSignal, RwSignal,
 };
 use crate::{
     owner::{StoredValue, SyncStorage},
-    signal::guards::WriteGuard,
     traits::{
         DefinedAt, IsDisposed, Notify, Track, TryGetValue, TryReadUntracked,
         UntrackableGuard, Write,
@@ -24,6 +23,12 @@ use std::{
 /// and notifies *all* dependencies of the signal. This is not a mechanism for fine-grained reactive updates
 /// to more complex data structures. Instead, it allows you to provide a signal-like API for wrapped types
 /// without exposing the original type directly to users.
+///
+/// Writing it replaces the mapped part of the signal's value (`set`), or changes a copy of the
+/// part (`update`, `write()`; the part must be `Clone`), then swaps it in: the signal's value
+/// is never lent out, and it need not be `Clone`. A write made while this thread is using the
+/// signal (inside its `with` or `update`, or while a guard of it is alive) is refused and
+/// logged.
 pub struct ArcMappedSignal<T> {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     defined_at: &'static Location<'static>,
@@ -33,13 +38,17 @@ pub struct ArcMappedSignal<T> {
             + Send
             + Sync,
     >,
-    try_write: Arc<
-        dyn Fn() -> Option<Box<dyn UntrackableGuard<Target = T>>> + Send + Sync,
-    >,
+    /// Swaps a new part in (the argument then holds the previous part), notifying if asked;
+    /// `false` if the write could not be made.
+    swap: Arc<SwapPart<T>>,
     notify: Arc<dyn Fn() + Send + Sync>,
     track: Arc<dyn Fn() + Send + Sync>,
 }
 crate::impl_strong!([T] ArcMappedSignal<T>);
+
+/// Swaps a new part into the signal's value (the argument then holds the previous part),
+/// notifying if asked; `false` if the write could not be made.
+type SwapPart<T> = dyn Fn(&mut T, bool) -> bool + Send + Sync;
 
 impl<T> Clone for ArcMappedSignal<T> {
     fn clone(&self) -> Self {
@@ -47,7 +56,7 @@ impl<T> Clone for ArcMappedSignal<T> {
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: self.defined_at,
             try_read_untracked: self.try_read_untracked.clone(),
-            try_write: self.try_write.clone(),
+            swap: self.swap.clone(),
             notify: self.notify.clone(),
             track: self.track.clone(),
         }
@@ -78,17 +87,10 @@ impl<T> ArcMappedSignal<T> {
                     })
                 })
             },
-            try_write: {
+            swap: {
                 let this = inner.clone();
-                Arc::new(move || {
-                    // changes the signal's value in place: waits for another thread,
-                    // refuses (and logs) re-entry, like the signal's own in-place write
-                    let guard = this.writer().in_place_guard()?;
-                    let mapped = WriteGuard::new(
-                        this.clone(),
-                        MappedMutArc::new(guard, map, map_mut),
-                    );
-                    Some(Box::new(mapped))
+                Arc::new(move |part: &mut T, notify| {
+                    this.writer().swap_part(part, map_mut, notify)
                 })
             },
             notify: {
@@ -160,28 +162,53 @@ where
 {
     type Value = T;
 
-    fn try_write_in_place(
-        &self,
-    ) -> Option<impl DerefMut<Target = Self::Value>> {
-        let mut guard = self.guard()?;
-        guard.untrack();
-        Some(guard)
+    /// A guard over a copy of the mapped part, swapped into the signal's value when it is
+    /// dropped.
+    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
+    where
+        T: Clone,
+    {
+        self.copy_guard()
     }
 
-    /// Changes the mapped part of the signal's value in place (a mapped signal does not
-    /// copy the whole value).
-    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        self.guard()
+    fn try_commit_value(&self, value: T, notify: bool) -> Option<T> {
+        let mut value = value;
+        if (self.swap)(&mut value, notify) {
+            // the previous part
+            drop(value);
+            None
+        } else {
+            Some(value)
+        }
+    }
+
+    fn try_update_snapshot<U>(
+        &self,
+        fun: impl FnOnce(&mut T) -> (bool, U),
+    ) -> Option<U>
+    where
+        T: Clone,
+    {
+        let mut part = self.try_read_untracked().map(|part| (*part).clone())?;
+        let (changed, out) = fun(&mut part);
+        (self.swap)(&mut part, changed).then_some(out)
     }
 }
 
-impl<T> ArcMappedSignal<T> {
-    /// A guard changing the mapped part of the value in place, notifying when dropped.
-    fn guard(
-        &self,
-    ) -> Option<DoubleDeref<Box<dyn UntrackableGuard<Target = T>>>> {
-        let inner = (self.try_write)()?;
-        Some(DoubleDeref { inner })
+impl<T> ArcMappedSignal<T>
+where
+    T: 'static,
+{
+    /// A guard over a copy of the mapped part, swapped in when it is dropped.
+    fn copy_guard(&self) -> Option<CopyWriteGuard<T>>
+    where
+        T: Clone,
+    {
+        let part = self.try_read_untracked().map(|part| (*part).clone())?;
+        let swap = Arc::clone(&self.swap);
+        Some(CopyWriteGuard::new(part, move |part, notify| {
+            swap(part, notify)
+        }))
     }
 }
 
@@ -354,18 +381,30 @@ where
 {
     type Value = T;
 
-    fn try_write_in_place(
-        &self,
-    ) -> Option<impl DerefMut<Target = Self::Value>> {
-        let mut guard = self.inner.try_get_value()?.guard()?;
-        guard.untrack();
-        Some(guard)
+    /// A guard over a copy of the mapped part, swapped into the signal's value when it is
+    /// dropped.
+    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
+    where
+        T: Clone,
+    {
+        self.inner.try_get_value()?.copy_guard()
     }
 
-    /// Changes the mapped part of the signal's value in place (a mapped signal does not
-    /// copy the whole value).
-    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        self.inner.try_get_value()?.guard()
+    fn try_commit_value(&self, value: T, notify: bool) -> Option<T> {
+        match self.inner.try_get_value() {
+            Some(inner) => inner.try_commit_value(value, notify),
+            None => Some(value),
+        }
+    }
+
+    fn try_update_snapshot<U>(
+        &self,
+        fun: impl FnOnce(&mut T) -> (bool, U),
+    ) -> Option<U>
+    where
+        T: Clone,
+    {
+        self.inner.try_get_value()?.try_update_snapshot(fun)
     }
 }
 

@@ -1,12 +1,16 @@
 use crate::{
-    signal::guards::{Plain, ReadGuard, UntrackedWriteGuard},
+    error::Access,
+    or_poisoned::OrPoisoned,
+    reentry::{held_by_this_thread, lock_id, SINGLE_THREADED},
+    signal::guards::{report_reentered, CopyWriteGuard, Plain, ReadGuard},
     traits::{DefinedAt, IntoInner, IsDisposed, TryReadValue, WriteValue},
 };
 use std::{
     fmt::{Debug, Formatter},
     hash::Hash,
+    mem,
     panic::Location,
-    sync::{Arc, PoisonError, RwLock},
+    sync::{Arc, PoisonError, RwLock, TryLockError},
 };
 
 /// A reference-counted getter for any value non-reactively.
@@ -18,6 +22,10 @@ use std::{
 /// the reactive system. Unlike e.g. [`ArcRwSignal`](crate::signal::ArcRwSignal), it is not reactive;
 /// accessing it does not cause effects to subscribe, and
 /// updating it does not notify anything else.
+///
+/// Its value is never lent out for a change in place: `set_value` replaces it, and
+/// `update_value` and the `write_value` guard change a copy (the value must be `Clone`),
+/// which then replaces it. So a read of it is never refused while it is being changed.
 pub struct ArcStoredValue<T> {
     #[cfg(any(debug_assertions, halyard_debuginfo))]
     defined_at: &'static Location<'static>,
@@ -129,11 +137,42 @@ where
 {
     type Value = T;
 
-    fn try_write_value(&self) -> Option<UntrackedWriteGuard<T>> {
-        UntrackedWriteGuard::try_new_at(
-            Arc::clone(&self.value),
-            self.defined_at(),
-        )
+    fn try_write_value(&self) -> Option<CopyWriteGuard<T>>
+    where
+        T: Clone,
+    {
+        let value = self.try_read_value().map(|value| (*value).clone())?;
+        let this = self.clone();
+        Some(CopyWriteGuard::new(value, move |value, _| {
+            this.try_swap_value(value)
+        }))
+    }
+
+    fn try_swap_value(&self, value: &mut T) -> bool {
+        // no code but the swap runs under the lock, so this thread holds it only if it is
+        // using the value (inside its `with_value`, or holding a read guard): refused
+        if held_by_this_thread(lock_id(&*self.value)) {
+            report_reentered(Access::Write, self.defined_at());
+            return false;
+        }
+        let stored = if SINGLE_THREADED {
+            match self.value.try_write() {
+                Ok(guard) => Some(guard),
+                Err(TryLockError::Poisoned(poisoned)) => {
+                    Some(poisoned.into_inner())
+                }
+                Err(TryLockError::WouldBlock) => None,
+            }
+        } else {
+            // another thread is using it: wait
+            Some(self.value.write().or_poisoned())
+        };
+        let Some(mut stored) = stored else {
+            report_reentered(Access::Write, self.defined_at());
+            return false;
+        };
+        mem::swap(&mut *stored, value);
+        true
     }
 }
 

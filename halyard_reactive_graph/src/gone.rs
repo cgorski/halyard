@@ -1,11 +1,27 @@
 //! What happens when the value behind a handle cannot be reached: a weak (arena) handle whose
 //! value is gone is reported once per call site, and a strong read that finds its value in
-//! use waits for it (see [`Strong`](crate::traits::Strong)).
+//! use by another thread waits for it (see [`Strong`](crate::traits::Strong)); one that
+//! finds it in use by its own thread, where no value can ever come, aborts ([`wait_for`]).
 
-use std::{cell::RefCell, collections::HashSet, panic::Location};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    panic::Location,
+};
 
 thread_local! {
     static REPORTED: RefCell<HashSet<(usize, u8)>> = RefCell::new(HashSet::new());
+
+    /// Where the strong read that [`wait_for`] is attempting on this thread was made.
+    static STRONG_READ_AT: Cell<Option<&'static Location<'static>>> =
+        const { Cell::new(None) };
+}
+
+/// Where the strong read being attempted on this thread was made, if one is (a read through
+/// [`wait_for`] passes through closures, which lose the caller's location). Taken, so that
+/// the reads made further in (by a memo's function) do not see it.
+pub(crate) fn take_strong_read_site() -> Option<&'static Location<'static>> {
+    STRONG_READ_AT.try_with(|site| site.take()).ok().flatten()
 }
 
 /// What was attempted through a handle whose value could not be reached.
@@ -132,12 +148,18 @@ pub fn report_gone_read(
 
 /// The read of a strong handle: `attempt` until it gives the value.
 ///
-/// A strong handle keeps its value alive, so `attempt` fails only while the value is in use
-/// in a way that leaves nothing to read: changed in place on this thread (a read inside its
-/// own in-place change, reached through another handle to the same value), a memo read
-/// inside its own computation (a cycle), or, on a server, a memo being recomputed by another
-/// thread. The first two are cycles in the application's code; the read is reported once and
-/// waits.
+/// A strong handle keeps its value alive, and no value is ever lent out for a change in
+/// place, so `attempt` fails only while the value is being computed:
+/// - by another thread (a memo recomputed on a server): the read is reported once and waits
+///   for it, which ends;
+/// - by this thread, with no value to give: a memo read inside its own first computation
+///   (the same thread's per-thread record says so, see [`crate::reentry::refuse_here`]).
+///   That is a cycle in the program's logic with no possible value, like unbounded
+///   recursion: it is reported, naming where the value was created and where it is read,
+///   and the process aborts (`std::process::abort`). This is the only abort in halyard.
+///
+/// In the browser (`wasm32` without threads) there is no other thread to wait for: every
+/// read that gets here is the same-thread case.
 #[doc(hidden)]
 #[track_caller]
 pub fn wait_for<V>(
@@ -146,20 +168,124 @@ pub fn wait_for<V>(
 ) -> V {
     let at = Location::caller();
     loop {
-        if let Some(value) = attempt() {
+        // a note left by an earlier read that did not come through here
+        _ = crate::reentry::take_refusal();
+        let outer = STRONG_READ_AT.try_with(|site| site.replace(Some(at)));
+        let value = attempt();
+        if let Ok(outer) = outer {
+            _ = STRONG_READ_AT.try_with(|site| site.set(outer));
+        }
+        if let Some(value) = value {
             return value;
+        }
+        let refusal = crate::reentry::take_refusal();
+        if refusal.is_some() || crate::reentry::SINGLE_THREADED {
+            abort_on_cycle(at, defined_at, refusal);
         }
         if first_time(at, Attempt::Wait) {
             let defined = defined_at
                 .map(|defined_at| format!(" (defined at {defined_at})"))
                 .unwrap_or_default();
             crate::log_warning(format_args!(
-                "At {at}, a strong handle{defined} was read while its value \
-                 was in use: changed in place, or being computed, by the code \
-                 that reads it (a cycle), or recomputed by another thread. The \
-                 read waits for the value."
+                "At {at}, a strong handle{defined} was read while another \
+                 thread was computing its value. The read waits for it."
             ));
         }
         std::thread::yield_now();
+    }
+}
+
+/// The end of a strong read that can never get a value (see [`wait_for`]): reports it, then
+/// aborts the process.
+#[cold]
+fn abort_on_cycle(
+    at: &'static Location<'static>,
+    defined_at: Option<&'static Location<'static>>,
+    refusal: Option<crate::reentry::Refusal>,
+) -> ! {
+    let defined_at =
+        defined_at.or_else(|| refusal.and_then(|refusal| refusal.defined_at));
+    let created = defined_at
+        .map(|defined_at| format!("created at {defined_at}"))
+        .unwrap_or_else(|| {
+            "its creation site is known in debug builds only".to_owned()
+        });
+    let why = refusal.map_or(
+        "it is in use by the code that is running now, and there is no other thread \
+         that could release it",
+        |refusal| refusal.why,
+    );
+    let message = format!(
+        "[halyard] At {at}, a strong handle to a reactive value ({created}) was read, but \
+         the value can never be given: {why}. This is a cycle in the program's logic with no \
+         possible value (like unbounded recursion); the process aborts. A memo that reads \
+         itself gets its previous value on later computations, but has none during its \
+         first: read it through its weak handle (`try_get`), or restructure the computation."
+    );
+    #[cfg(feature = "tracing")]
+    tracing::error!("{message}");
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    web_sys::console::error_1(&message.as_str().into());
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    {
+        use std::io::Write;
+        // `eprintln!` panics if standard error is closed; with nowhere left to report, the
+        // process still aborts
+        _ = writeln!(std::io::stderr(), "{message}");
+    }
+    std::process::abort()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread,
+        time::Duration,
+    };
+
+    /// A strong read whose value another thread is computing (nothing on this thread says
+    /// otherwise) waits for it, and gets it.
+    #[test]
+    fn a_strong_read_waits_for_another_thread() {
+        let ready = Arc::new(AtomicBool::new(false));
+        let computing = thread::spawn({
+            let ready = Arc::clone(&ready);
+            move || {
+                thread::sleep(Duration::from_millis(20));
+                ready.store(true, Ordering::SeqCst);
+            }
+        });
+        let mut attempts = 0_u32;
+        let value = wait_for(None, || {
+            attempts = attempts.saturating_add(1);
+            ready.load(Ordering::SeqCst).then_some(7)
+        });
+        assert_eq!(value, 7);
+        assert!(attempts > 1, "it waited");
+        assert!(computing.join().is_ok());
+    }
+
+    /// A note left by a read that did not go through `wait_for` is not taken for this
+    /// read's own.
+    #[test]
+    fn a_stale_note_is_cleared_before_the_read() {
+        crate::reentry::refuse_here(crate::reentry::Refusal {
+            defined_at: None,
+            why: "an earlier read",
+        });
+        assert_eq!(wait_for(None, || Some(1)), 1);
+        let mut first = true;
+        let value = wait_for(None, || {
+            let value = (!first).then_some(2);
+            first = false;
+            value
+        });
+        assert_eq!(value, 2);
+        assert_eq!(crate::reentry::take_refusal(), None);
     }
 }

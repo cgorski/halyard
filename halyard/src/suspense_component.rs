@@ -8,16 +8,14 @@ use halyard_macro::component;
 use halyard_reactive_graph::hydration_context::SerializedDataId;
 use halyard_reactive_graph::or_poisoned::OrPoisoned;
 use halyard_reactive_graph::throw_error::ErrorHookFuture;
-use halyard_reactive_graph::traits::{
-    StrongWriteValue, TryRead, WithUntracked,
-};
+use halyard_reactive_graph::traits::{TryRead, WithUntracked};
 use halyard_reactive_graph::{
     computed::{
         suspense::{LocalResourceNotifier, SuspenseContext},
         ArcMemo, ScopedFuture,
     },
     effect::RenderEffect,
-    owner::{provide_context, use_context, ArcStoredValue, Owner},
+    owner::{provide_context, use_context, Owner},
     signal::ArcRwSignal,
     traits::{Dispose, Get, Track, TryReadUntracked, With},
 };
@@ -54,16 +52,18 @@ use std::sync::{Arc, Mutex};
 /// # if false { // don't run in doctests
 /// async fn fetch_cats(how_many: u32) -> Vec<String> { vec![] }
 ///
-/// let (cat_count, set_cat_count) = signal::<u32>(1);
+/// // a strong handle: the resource reads it whenever it refetches
+/// let (cat_count, set_cat_count) = arc_signal::<u32>(1);
 ///
-/// let cats = Resource::new(move || cat_count.try_get().unwrap(), |count| fetch_cats(count));
+/// let cats = Resource::new(move || cat_count.get(), |count| fetch_cats(count));
 ///
 /// view! {
 ///   <div>
 ///     <Suspense fallback=move || view! { <p>"Loading (Suspense Fallback)..."</p> }>
 ///       // you can access a resource synchronously
 ///       {move || {
-///           cats.try_get().unwrap().map(|data| {
+///           // `None` while loading
+///           cats.try_get().flatten().map(|data| {
 ///             data
 ///               .into_iter()
 ///               .map(|src| {
@@ -152,6 +152,16 @@ where
             owner.clone(),
         )
     })
+}
+
+/// The sender that tells the enclosing error boundary, once, that this suspense has resolved.
+/// It is not `Clone`, so it lives in a private slot (no other code runs under its lock) and is
+/// taken out, rather than kept in a stored value, whose writes need a copy.
+type ErrorBoundaryNotifier = Arc<Mutex<Option<oneshot::Sender<()>>>>;
+
+/// Takes the sender out of its slot (the lock is released before it is used).
+fn take_notifier(slot: &ErrorBoundaryNotifier) -> Option<oneshot::Sender<()>> {
+    slot.lock().or_poisoned().take()
 }
 
 fn nonce_or_not() -> Option<Arc<str>> {
@@ -349,12 +359,12 @@ where
         let tasks = self.tasks;
         let owner = self.owner;
 
-        let notify_error_boundary =
-            ArcStoredValue::new(self.error_boundary_parent.map(|children| {
+        let notify_error_boundary: ErrorBoundaryNotifier =
+            Arc::new(Mutex::new(self.error_boundary_parent.map(|children| {
                 let (tx, rx) = oneshot::channel();
-                children.write_value().push(rx);
+                children.push(rx);
                 tx
-            }));
+            })));
 
         // we need to wait for one of two things: either
         // 1. all tasks are finished loading, or
@@ -397,7 +407,7 @@ where
                                 _ = tx.send(());
                             }
                             if let Some(tx) =
-                                notify_error_boundary.write_value().take()
+                                take_notifier(&notify_error_boundary)
                             {
                                 _ = tx.send(());
                             }
@@ -424,7 +434,7 @@ where
                                     _ = tx.send(());
                                 }
                                 if let Some(tx) =
-                                    notify_error_boundary.write_value().take()
+                                    take_notifier(&notify_error_boundary)
                                 {
                                     _ = tx.send(());
                                 }
@@ -460,7 +470,7 @@ where
                     _ = local_rx => {
                         set_incomplete_chunk(self.id);
                         if let Some(tx) =
-                            notify_error_boundary.write_value().take()
+                            take_notifier(&notify_error_boundary)
                         {
                             let _ = tx.send(());
                         }
@@ -476,7 +486,7 @@ where
                                  resolved. Rendering the fallback instead."
                             );
                             if let Some(tx) =
-                                notify_error_boundary.write_value().take()
+                                take_notifier(&notify_error_boundary)
                             {
                                 let _ = tx.send(());
                             }
@@ -496,7 +506,7 @@ where
                             _ = local_rx => {
                                 set_incomplete_chunk(self.id);
                                 if let Some(tx) =
-                                    notify_error_boundary.write_value().take()
+                                    take_notifier(&notify_error_boundary)
                                 {
                                     let _ = tx.send(());
                                 }

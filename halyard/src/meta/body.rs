@@ -29,12 +29,11 @@ use halyard::{
 /// fn MyApp() -> impl IntoView {
 ///     provide_meta_context();
 ///     let (prefers_dark, set_prefers_dark) = signal(false);
+///     // no class once the signal is gone
 ///     let body_class = move || {
-///         if prefers_dark.try_get().unwrap() {
-///             "dark".to_string()
-///         } else {
-///             "light".to_string()
-///         }
+///         prefers_dark
+///             .try_get()
+///             .map(|dark| if dark { "dark" } else { "light" })
 ///     };
 ///
 ///     view! {

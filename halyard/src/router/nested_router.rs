@@ -27,7 +27,7 @@ use halyard_reactive_graph::{
     computed::{ArcMemo, ScopedFuture},
     owner::{provide_context, use_context, Owner},
     signal::{ArcRwSignal, ArcTrigger},
-    traits::{Get, Notify, Set, Track, TryGetUntracked, Write},
+    traits::{Get, Notify, Set, Track, TryGetUntracked},
     transition::AsyncTransition,
     wrappers::write::SignalSetter,
 };
@@ -169,10 +169,8 @@ where
 
         let new_match = self.routes.match_route(url_snapshot.path());
 
-        // replaced in place, untracked: no code runs while the value is lent out
-        if let Some(mut current_url) = state.current_url.try_write_in_place() {
-            *current_url = url_snapshot;
-        }
+        // replaced, untracked
+        state.current_url.set_untracked(url_snapshot);
 
         match new_match {
             None => {

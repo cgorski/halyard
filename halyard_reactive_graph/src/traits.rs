@@ -18,7 +18,7 @@
 //! | [`Track`]         | —     | Tracks changes to this value, adding it as a source of the current reactive observer. |
 //! | [`Notify`]       | —      | Notifies subscribers that this value has changed.                                     |
 //! | [`TryReadUntracked`] | Guard | Gives immutable access to the value of this signal.                                   |
-//! | [`Write`]     | Guard | Gives mutable access to the value of this signal.
+//! | [`Write`]     | Guard | Gives a guard over a copy of the value, committed when it is dropped; replaces the value.
 //!
 //! ## Derived Traits
 //!
@@ -33,9 +33,12 @@
 //! ### Update
 //! | Trait               | Mode          | Composition                       | Description
 //! |---------------------|---------------|-----------------------------------|------------
-//! | [`UpdateUntracked`] | `fn(&mut T)`  | [`Write`]                     | Applies closure to the current value to update it, but doesn't notify subscribers.
-//! | [`Update`]          | `fn(&mut T)`  | [`UpdateUntracked`] + [`Notify`] | Applies closure to the current value to update it, and notifies subscribers.
-//! | [`Set`]             | `T`           | [`Update`]                        | Sets the value to a new value, and notifies subscribers.
+//! | [`Update`]          | `fn(&mut T)`  | [`Write`] + [`Clone`]             | Applies closure to a copy of the value and commits it, notifying subscribers (`update_untracked`: without).
+//! | [`Set`]             | `T`           | [`Write`]                         | Replaces the value, and notifies subscribers (`set_untracked`: without).
+//!
+//! No value is ever lent out for a change in place: every write is a replacement ([`Set`])
+//! or a change to a copy committed afterwards ([`Update`], [`Write::try_write`]), which
+//! needs `T: Clone`. A value that is not `Clone` is changed by replacing it with `set`.
 //!
 //! ## Re-entry
 //!
@@ -53,19 +56,20 @@
 //!   writes deferred before it), and defers the result. So an `update` nested in an `update`
 //!   of the same signal starts from the same committed value as the outer one, and is
 //!   committed after it: its result replaces the outer one (the first time, that is logged).
-//! - The tracked [`Write`] guard of a signal holds a copy of the value, committed (or
-//!   deferred, as above) when it is dropped: no lock is held while it is alive.
-//! - The in-place forms ([`Update::try_update`], [`UpdateUntracked`],
-//!   [`Write::try_write_untracked`]) hold the value's lock while the closure runs or the
-//!   guard lives. Started while this thread is using the signal, they return `None`; while
-//!   they run, reading the signal on this thread gives `None` from the `try_*` forms (the
-//!   first time, that is logged).
+//! - The [`Write`] guard of a signal holds a copy of the value, committed (or deferred, as
+//!   above) when it is dropped: no lock is held while it is alive.
+//! - Nothing changes a value in place, so a read never finds its value lent out: inside any
+//!   write, reading the same value (through any handle to it) gives the committed value.
 //! - Writes from other threads wait for their turn: updates of one signal serialize, none is
 //!   lost. Reads never wait for an update's closure.
+//! - A memo read inside its own computation gives its previous value (reported once as a
+//!   cycle). During its first computation it has none: the `try_*` reads give `None`, and a
+//!   strong read aborts (see [`Strong`]).
 //!
 //! Stored values ([`TryWithValue`], [`UpdateValue`], [`TryReadValue`], [`WriteValue`]) are not
-//! signals: their closures run on the borrowed value, and reaching the same value again from
-//! there is refused (`None` from the `try_*` forms) and logged.
+//! signals, but are written the same way: `update_value` and the `write_value` guard work on
+//! a copy, and `set_value` replaces the value. A write made from inside the same value's
+//! `with_value` (while its read guard is alive) is refused and logged.
 //!
 //! ## Using the Traits
 //!
@@ -85,7 +89,7 @@ use crate::{
     effect::Effect,
     graph::{Observer, Source, Subscriber, ToAnySource},
     owner::Owner,
-    signal::{arc_signal, guards::UntrackedWriteGuard, ArcReadSignal},
+    signal::{arc_signal, guards::CopyWriteGuard, ArcReadSignal},
 };
 use futures::{Stream, StreamExt};
 use std::{
@@ -104,10 +108,21 @@ pub mod seal {
 /// so reading through it is total ([`Get`], [`With`], [`Read`] and their `_untracked` and
 /// `Value` forms).
 ///
-/// A read through a strong handle comes back empty only if the value is in use by the code
-/// that reads it: read inside its own in-place change (through another handle to the same
-/// value), or a memo read inside its own computation. Both are cycles; the read is reported
-/// once and waits. On a server, it also waits while another thread recomputes a memo.
+/// No value is ever lent out for a change in place, so a strong read always finds a value:
+/// inside an update of the same value (through any handle to it) it gives the committed
+/// value, and a memo read inside its own computation gives its previous value. On a server
+/// it may wait, briefly, while another thread computes a memo's value.
+///
+/// # Aborts
+///
+/// One read has no possible value: a strong read of a memo inside the memo's own **first**
+/// computation, when it has no previous value (or inside any computation of a memo made with
+/// `new_owning`, whose function owns the previous value). Like unbounded recursion, that is a
+/// cycle in the program's logic: it is reported, naming where the memo was created and where
+/// it is read, and the process aborts (`std::process::abort`). This is the only abort in
+/// halyard (docs/no-panics.md). Read a memo inside its own computation through its weak
+/// handle (`try_get`, which gives `None` there), or use the previous value that the memo's
+/// function receives.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is a weak handle: its value may be gone, so it has no \
                `get`, `with` or `read`",
@@ -122,14 +137,11 @@ pub mod seal {
 pub trait Strong: seal::Sealed {}
 
 /// A `Copy` arena (weak) handle: it does not keep its value alive, like
-/// [`std::sync::Weak`]. Reads return an `Option` (`try_*`), a write to a gone value does
-/// nothing (reported once), and only weak handles change a value in place
-/// ([`UpdateInPlace`], [`UpdateUntracked`], [`WriteUntracked`]).
+/// [`std::sync::Weak`]. Reads return an `Option` (`try_*`), and a write to a gone value does
+/// nothing (reported once).
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` is not a weak handle: in-place changes are only offered \
-               through weak handles",
-    note = "use `update` (it changes a copy) or `set`, or change the value in \
-            place through its weak handle (`.downgrade()`)"
+    message = "`{Self}` is not a weak (arena) handle",
+    note = "take a weak handle with `.downgrade()`"
 )]
 pub trait Weak: seal::Sealed {}
 
@@ -288,80 +300,43 @@ impl<T> UntrackableGuard for Box<dyn UntrackableGuard<Target = T>> {
     }
 }
 
-/// Gives mutable access to a signal's value through a guard type. When the guard is dropped, the
-/// signal's subscribers will be notified.
+/// Gives a guard through which a signal's value can be changed, and the hooks that every
+/// write is built on. When the guard is dropped, the change is committed and the signal's
+/// subscribers are notified.
 ///
-/// For signals, the tracked guard ([`try_write`](Write::try_write)) holds a copy of the
-/// value, committed when it is dropped, so no lock is held while it is alive; the untracked
-/// guard of a weak handle ([`WriteUntracked`]) changes the value in place (see the module
-/// docs, "Re-entry").
+/// No value is ever lent out for a change in place: the guard holds a copy of the value
+/// (so it needs `Value: Clone`), committed when it is dropped, and no lock is held while it
+/// is alive; [`Set`] replaces the value, and [`Update`] changes a copy (see the module docs,
+/// "Re-entry").
 pub trait Write: Sized + DefinedAt + Notify {
     /// The type of the signal's value.
     type Value: Sized + 'static;
 
-    /// Returns the guard, or `None` if the signal has already been disposed.
+    /// Returns the guard, over a copy of the value, or `None` if the value is gone.
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
     where
         Self::Value: Clone;
 
-    /// Returns a guard that changes the value in place and does not notify subscribers when
-    /// dropped, or `None` if the signal has already been disposed. The implementation hook
-    /// of [`WriteUntracked::try_write_untracked`], which only weak handles offer.
+    /// Replaces the value, notifying subscribers if `notify` ([`Set`] is built on it). Gives
+    /// the value back if it could not be written (the value is gone, or this thread is using
+    /// a value that cannot defer the write).
     #[doc(hidden)]
-    fn try_write_in_place(&self)
-        -> Option<impl DerefMut<Target = Self::Value>>;
-
-    /// Replaces the value and notifies subscribers ([`Set`] is built on it). Gives the value
-    /// back if it could not be written (the signal was disposed).
-    ///
-    /// The default writes through [`try_write_in_place`](Write::try_write_in_place);
-    /// signals defer the write while this thread is using the signal.
-    #[doc(hidden)]
-    fn try_commit_value(&self, value: Self::Value) -> Option<Self::Value> {
-        match self.try_write_in_place() {
-            Some(mut guard) => {
-                *guard = value;
-                drop(guard);
-                self.notify();
-                None
-            }
-            None => Some(value),
-        }
-    }
+    fn try_commit_value(
+        &self,
+        value: Self::Value,
+        notify: bool,
+    ) -> Option<Self::Value>;
 
     /// Runs `fun` on a copy of the value, outside every lock, and commits the result,
-    /// notifying subscribers if `fun` returns `(true, _)` ([`Update::update`] is built on
-    /// it). `None` if the signal was disposed.
-    ///
-    /// The default changes the value in place, like
-    /// [`try_update_in_place`](Write::try_update_in_place).
+    /// notifying subscribers if `fun` returns `(true, _)` ([`Update`] is built on it). `None`
+    /// if the value is gone or the result could not be committed.
     #[doc(hidden)]
     fn try_update_snapshot<U>(
         &self,
         fun: impl FnOnce(&mut Self::Value) -> (bool, U),
     ) -> Option<U>
     where
-        Self::Value: Clone,
-    {
-        self.try_update_in_place(fun)
-    }
-
-    /// Runs `fun` on the value in place, notifying subscribers if it returns `(true, _)`
-    /// ([`Update::try_update`] is built on it). `None` if the signal was disposed or this
-    /// thread is using it already.
-    #[doc(hidden)]
-    fn try_update_in_place<U>(
-        &self,
-        fun: impl FnOnce(&mut Self::Value) -> (bool, U),
-    ) -> Option<U> {
-        let mut guard = self.try_write_in_place()?;
-        let (changed, out) = fun(&mut *guard);
-        drop(guard);
-        if changed {
-            self.notify();
-        }
-        Some(out)
-    }
+        Self::Value: Clone;
 }
 
 /// Give read-only access to a signal's value by reference inside a closure,
@@ -607,64 +582,16 @@ impl<T: Write + Strong> StrongWrite for T {
     }
 }
 
-/// Updates the value of a signal by applying a function that updates it in place,
-/// without notifying subscribers. Only weak handles change a value in place (see [`Weak`]).
-pub trait UpdateUntracked: DefinedAt {
-    /// The type of the value contained in the signal.
-    type Value;
-
-    /// Updates the value by applying a function, returning the value returned by that function,
-    /// or `None` if the signal has already been disposed.
-    /// Does not notify subscribers that the signal has changed.
-    fn try_update_untracked<U>(
-        &self,
-        fun: impl FnOnce(&mut Self::Value) -> U,
-    ) -> Option<U>;
-}
-
-impl<T> UpdateUntracked for T
-where
-    T: Write + Weak,
-{
-    type Value = <Self as Write>::Value;
-
-    #[track_caller]
-    fn try_update_untracked<U>(
-        &self,
-        fun: impl FnOnce(&mut Self::Value) -> U,
-    ) -> Option<U> {
-        let mut guard = self.try_write_in_place()?;
-        Some(fun(&mut *guard))
-    }
-}
-
-/// Gives a guard that changes the value in place without notifying subscribers when it is
-/// dropped. Only weak handles change a value in place (see [`Weak`]).
-pub trait WriteUntracked: Write + Weak {
-    /// Returns the guard, or `None` if the value is gone or this thread is using it already.
-    #[track_caller]
-    fn try_write_untracked(
-        &self,
-    ) -> Option<impl DerefMut<Target = <Self as Write>::Value>>;
-}
-
-impl<T: Write + Weak> WriteUntracked for T {
-    #[track_caller]
-    fn try_write_untracked(
-        &self,
-    ) -> Option<impl DerefMut<Target = <Self as Write>::Value>> {
-        self.try_write_in_place()
-    }
-}
-
 /// Updates the value of a signal by applying a function that changes it, notifying its
 /// subscribers that the value has changed.
 ///
-/// [`update`](Update::update) and [`maybe_update`](Update::maybe_update) run the closure
-/// on a copy of the committed value, outside every lock, then commit the result. Inside
-/// the closure, reading the same signal gives its last committed value; writing it is
-/// deferred until the update has committed. They need `Value: Clone`. Through a weak handle
-/// whose value is gone, they do nothing (reported once).
+/// Every form runs its closure on a copy of the committed value, outside every lock, then
+/// commits the result: nothing is lent out for a change in place. Inside the closure,
+/// reading the same value (through any handle to it) gives its last committed value; writing
+/// it is deferred until the update has committed. They need `Value: Clone`; a value that is
+/// not `Clone` is changed by replacing it ([`Set`]). Through a weak handle whose value is
+/// gone, they do nothing (`update`, `maybe_update` and `update_untracked` report that once;
+/// `try_update` returns `None`).
 pub trait Update {
     /// The type of the value contained in the signal.
     type Value;
@@ -684,11 +611,37 @@ pub trait Update {
     }
 
     /// Updates the value of the signal, but only notifies subscribers if the function
-    /// returns `true`.
+    /// returns `true`. The result is committed either way.
     ///
     /// The closure runs on a copy of the committed value; see the trait docs.
     #[track_caller]
     fn maybe_update(&self, fun: impl FnOnce(&mut Self::Value) -> bool)
+    where
+        Self::Value: Clone;
+
+    /// Updates the value of the signal without notifying subscribers.
+    ///
+    /// The closure runs on a copy of the committed value; see the trait docs.
+    #[track_caller]
+    fn update_untracked(&self, fun: impl FnOnce(&mut Self::Value))
+    where
+        Self::Value: Clone,
+    {
+        self.maybe_update(|val| {
+            fun(val);
+            false
+        });
+    }
+
+    /// Updates the value of the signal and notifies subscribers, returning what the closure
+    /// returns, or `None` if the value is gone or the update could not be committed.
+    ///
+    /// The closure runs on a copy of the committed value; see the trait docs.
+    #[track_caller]
+    fn try_update<U>(
+        &self,
+        fun: impl FnOnce(&mut Self::Value) -> U,
+    ) -> Option<U>
     where
         Self::Value: Clone;
 }
@@ -715,62 +668,31 @@ where
             );
         }
     }
-}
 
-/// Changes the value of a signal in place, for any value (no copy), notifying its
-/// subscribers. Only weak handles change a value in place (see [`Weak`]).
-///
-/// The closure runs on the value itself and its result is returned. They return `None`
-/// without running the closure if the value is gone, or if this thread is using the signal
-/// already (inside its `with` or `update`, or while a guard of it is alive). While the
-/// closure runs, the same signal cannot be read on this thread (its `try_*` reads return
-/// `None`).
-pub trait UpdateInPlace {
-    /// The type of the value contained in the signal.
-    type Value;
-
-    /// Updates the value of the signal in place and notifies subscribers, returning the value
-    /// that is returned by the update function, or `None` if the signal has already been
-    /// disposed or this thread is using it already.
     #[track_caller]
     fn try_update<U>(
         &self,
         fun: impl FnOnce(&mut Self::Value) -> U,
-    ) -> Option<U> {
-        self.try_maybe_update(|val| (true, fun(val)))
-    }
-
-    /// Updates the value of the signal in place, notifying subscribers if the update function
-    /// returns `(true, _)`, and returns the value returned by the update function, or `None`
-    /// if the signal has already been disposed or this thread is using it already.
-    fn try_maybe_update<U>(
-        &self,
-        fun: impl FnOnce(&mut Self::Value) -> (bool, U),
-    ) -> Option<U>;
-}
-
-impl<T> UpdateInPlace for T
-where
-    T: Write + Weak,
-{
-    type Value = <Self as Write>::Value;
-
-    #[track_caller]
-    fn try_maybe_update<U>(
-        &self,
-        fun: impl FnOnce(&mut Self::Value) -> (bool, U),
-    ) -> Option<U> {
-        self.try_update_in_place(fun)
+    ) -> Option<U>
+    where
+        Self::Value: Clone,
+    {
+        self.try_update_snapshot(|val| (true, fun(val)))
     }
 }
 
-/// Updates the value of the signal by replacing it.
+/// Updates the value of the signal by replacing it. This works for every value, `Clone` or
+/// not.
 pub trait Set {
     /// The type of the value contained in the signal.
     type Value;
 
     /// Updates the value by replacing it, and notifies subscribers that it has changed.
     fn set(&self, value: Self::Value);
+
+    /// Updates the value by replacing it, without notifying subscribers. Through a weak
+    /// handle whose value is gone, does nothing (reported once).
+    fn set_untracked(&self, value: Self::Value);
 
     /// Updates the value by replacing it, and notifies subscribers that it has changed.
     ///
@@ -787,30 +709,14 @@ where
 
     #[track_caller]
     fn set(&self, value: Self::Value) {
-        let failed = self.try_commit_value(value).is_some();
+        let failed = self.try_commit_value(value, true).is_some();
+        report_failed_set::<Self>(self, failed, Location::caller());
+    }
 
-        if failed && self.is_disposed() {
-            crate::gone::report_gone(
-                crate::gone::Attempt::Write,
-                std::any::type_name::<Self>(),
-                self.defined_at(),
-                Location::caller(),
-            );
-            return;
-        }
-
-        #[cfg(any(debug_assertions, halyard_debuginfo))]
-        if failed {
-            let called_at = Location::caller();
-            let ty = std::any::type_name::<Self::Value>();
-
-            crate::log_warning(format_args!(
-                "At {called_at}, you tried to update a {ty}, but the update \
-                 failed. This can happen if this thread is using a value that \
-                 is not a signal (a resource or an async derived value) inside \
-                 its own update."
-            ));
-        };
+    #[track_caller]
+    fn set_untracked(&self, value: Self::Value) {
+        let failed = self.try_commit_value(value, false).is_some();
+        report_failed_set::<Self>(self, failed, Location::caller());
     }
 
     #[track_caller]
@@ -818,8 +724,45 @@ where
         if self.is_disposed() {
             Some(value)
         } else {
-            self.try_commit_value(value)
+            self.try_commit_value(value, true)
         }
+    }
+}
+
+/// Reports a `set` that could not be made: once per call site if the value is gone, and in
+/// debug builds otherwise.
+fn report_failed_set<T>(
+    this: &T,
+    failed: bool,
+    called_at: &'static Location<'static>,
+) where
+    T: Write + IsDisposed,
+{
+    if failed && this.is_disposed() {
+        crate::gone::report_gone(
+            crate::gone::Attempt::Write,
+            std::any::type_name::<T>(),
+            this.defined_at(),
+            called_at,
+        );
+        return;
+    }
+
+    #[cfg(any(debug_assertions, halyard_debuginfo))]
+    if failed {
+        let ty = std::any::type_name::<T::Value>();
+
+        crate::log_warning(format_args!(
+            "At {called_at}, you tried to update a {ty}, but the update \
+             failed. This can happen if this thread is using a value that \
+             is not a signal (a resource, an async derived or a mapped \
+             signal) while it writes it: inside its `with`, or while a guard \
+             of it is alive."
+        ));
+    }
+    #[cfg(not(any(debug_assertions, halyard_debuginfo)))]
+    {
+        _ = called_at;
     }
 }
 
@@ -992,28 +935,46 @@ where
 
 /// A variation of the [`Write`] trait that provides a signposted "always-non-reactive" API.
 /// E.g. for [`StoredValue`](`crate::owner::StoredValue`).
+///
+/// Nothing is lent out for a change in place: the guard holds a copy of the value, which
+/// replaces it when the guard is dropped.
 pub trait WriteValue: Sized + DefinedAt {
     /// The type of the value's value.
     type Value: Sized + 'static;
 
-    /// Returns a non-reactive write guard, or `None` if the value has already been disposed.
+    /// Returns a non-reactive guard over a copy of the value, which replaces the value when
+    /// it is dropped, or `None` if the value has already been disposed.
     #[track_caller]
-    fn try_write_value(&self) -> Option<UntrackedWriteGuard<Self::Value>>;
+    fn try_write_value(&self) -> Option<CopyWriteGuard<Self::Value>>
+    where
+        Self::Value: Clone;
+
+    /// Swaps `value` in as the value (`value` then holds the previous one, to drop).
+    /// `false` if the value is gone, or if this thread is using it (inside its own
+    /// `with_value`, or while a read guard of it is alive; that is logged once).
+    #[doc(hidden)]
+    fn try_swap_value(&self, value: &mut Self::Value) -> bool;
 }
 
 /// A variation of the [`Update`] trait that provides a signposted "always-non-reactive" API.
 /// E.g. for [`StoredValue`](`crate::owner::StoredValue`).
+///
+/// The closure runs on a copy of the value, which then replaces it: inside the closure,
+/// reading the same value gives the value as it was. Needs `Value: Clone`; a value that is
+/// not `Clone` is changed by replacing it ([`SetValue`]).
 pub trait UpdateValue: DefinedAt {
     /// The type of the value contained in the value.
     type Value;
 
-    /// Updates the value, returning the value that is
-    /// returned by the update function, or `None` if the value has already been disposed.
+    /// Updates the value, returning the value that is returned by the update function, or
+    /// `None` if the value has already been disposed or the result could not be stored.
     #[track_caller]
     fn try_update_value<U>(
         &self,
         fun: impl FnOnce(&mut Self::Value) -> U,
-    ) -> Option<U>;
+    ) -> Option<U>
+    where
+        Self::Value: Clone;
 
     /// Updates the value. Through a weak handle whose value is gone, does nothing (reported
     /// once).
@@ -1021,6 +982,7 @@ pub trait UpdateValue: DefinedAt {
     fn update_value(&self, fun: impl FnOnce(&mut Self::Value))
     where
         Self: IsDisposed,
+        Self::Value: Clone,
     {
         if self.try_update_value(fun).is_none() && self.is_disposed() {
             crate::gone::report_gone(
@@ -1043,14 +1005,19 @@ where
     fn try_update_value<U>(
         &self,
         fun: impl FnOnce(&mut Self::Value) -> U,
-    ) -> Option<U> {
+    ) -> Option<U>
+    where
+        Self::Value: Clone,
+    {
         let mut guard = self.try_write_value()?;
-        Some(fun(&mut *guard))
+        let out = fun(&mut guard);
+        guard.commit().then_some(out)
     }
 }
 
 /// A variation of the [`Set`] trait that provides a signposted "always-non-reactive" API.
-/// E.g. for [`StoredValue`](`crate::owner::StoredValue`).
+/// E.g. for [`StoredValue`](`crate::owner::StoredValue`). This works for every value,
+/// `Clone` or not.
 pub trait SetValue: DefinedAt {
     /// The type of the value contained in the value.
     type Value;
@@ -1088,8 +1055,10 @@ where
 
     fn try_set_value(&self, value: Self::Value) -> Option<Self::Value> {
         // Unlike most other traits, for these None actually means success:
-        if let Some(mut guard) = self.try_write_value() {
-            *guard = value;
+        let mut value = value;
+        if self.try_swap_value(&mut value) {
+            // the previous value
+            drop(value);
             None
         } else {
             Some(value)
@@ -1097,17 +1066,22 @@ where
     }
 }
 
-/// Returns a non-reactive write guard to the value of a strong handle
-/// ([`ArcStoredValue`](crate::owner::ArcStoredValue)).
+/// Returns a non-reactive write guard, over a copy of the value, to the value of a strong
+/// handle ([`ArcStoredValue`](crate::owner::ArcStoredValue)).
 pub trait StrongWriteValue: WriteValue + Strong {
     /// Returns the guard.
     #[track_caller]
-    fn write_value(&self) -> UntrackedWriteGuard<<Self as WriteValue>::Value>;
+    fn write_value(&self) -> CopyWriteGuard<<Self as WriteValue>::Value>
+    where
+        <Self as WriteValue>::Value: Clone;
 }
 
 impl<T: WriteValue + Strong> StrongWriteValue for T {
     #[track_caller]
-    fn write_value(&self) -> UntrackedWriteGuard<<Self as WriteValue>::Value> {
+    fn write_value(&self) -> CopyWriteGuard<<Self as WriteValue>::Value>
+    where
+        <Self as WriteValue>::Value: Clone,
+    {
         crate::gone::wait_for(self.defined_at(), || self.try_write_value())
     }
 }

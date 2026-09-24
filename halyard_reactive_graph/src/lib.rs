@@ -62,6 +62,23 @@
 //! tuple of handles), [`Signal::derive_try`](wrappers::read::Signal::derive_try) or
 //! [`Memo::new_try`](computed::Memo::new_try).
 //!
+//! ## Writes
+//!
+//! No value is ever lent out for a change in place. A write replaces the value
+//! ([`set`](traits::Set::set), [`set_untracked`](traits::Set::set_untracked),
+//! [`set_value`](traits::SetValue::set_value)), which works for any value, or changes a copy of
+//! it that is committed afterwards ([`update`](traits::Update::update),
+//! [`maybe_update`](traits::Update::maybe_update),
+//! [`update_untracked`](traits::Update::update_untracked),
+//! [`try_update`](traits::Update::try_update),
+//! [`update_value`](traits::UpdateValue::update_value), and the guards of
+//! [`write`](traits::StrongWrite::write) and [`write_value`](traits::StrongWriteValue::write_value)),
+//! which needs `T: Clone`. A value that is not `Clone` is changed with `set`. So a read, weak or
+//! strong, never finds its value lent out: inside a write of the same value it gives the
+//! committed value, and a memo read inside its own computation gives its previous value.
+//! The one read with no possible value, a strong read of a memo inside its own first
+//! computation, aborts (see [`Strong`](traits::Strong)).
+//!
 //! ## Design Principles and Assumptions
 //! - **Effects are expensive.** The library is built on the assumption that the side effects
 //!   (making a network request, rendering something to the DOM, writing to disk) are orders of

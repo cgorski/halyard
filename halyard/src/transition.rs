@@ -36,16 +36,18 @@ use std::sync::Arc;
 /// # if false { // don't run in doctests
 /// async fn fetch_cats(how_many: u32) -> Vec<String> { vec![] }
 ///
-/// let (cat_count, set_cat_count) = signal::<u32>(1);
+/// // a strong handle: the resource reads it whenever it refetches
+/// let (cat_count, set_cat_count) = arc_signal::<u32>(1);
 ///
-/// let cats = Resource::new(move || cat_count.try_get().unwrap(), |count| fetch_cats(count));
+/// let cats = Resource::new(move || cat_count.get(), |count| fetch_cats(count));
 ///
 /// view! {
 ///   <div>
 ///     <Transition fallback=move || view! { <p>"Loading (Suspense Fallback)..."</p> }>
 ///       // you can access a resource synchronously
 ///       {move || {
-///           cats.try_get().unwrap().map(|data| {
+///           // `None` while loading
+///           cats.try_get().flatten().map(|data| {
 ///             data
 ///               .into_iter()
 ///               .map(|src| {
