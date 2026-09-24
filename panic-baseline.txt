@@ -16,6 +16,4 @@ halyard_router 0
 halyard_router_macro 3
 halyard_rstml 17
 halyard_server 0
-halyard_server_fn 0
-halyard_server_fn_macro 14
 halyard_tachys 0

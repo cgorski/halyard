@@ -1,7 +1,6 @@
 use super::{handle_anchor_click, LocationChange, LocationProvider, Url};
 use crate::{
     error::{js_reason, no_window, report, RouterError},
-    hooks::use_navigate,
     params::ParamsMap,
 };
 use core::fmt;
@@ -296,34 +295,6 @@ impl LocationProvider for BrowserUrl {
         Self::scroll_to_el(loc.scroll);
     }
 
-    fn redirect(loc: &str) {
-        let navigate = use_navigate();
-        let Some(url) = resolve_redirect_url(loc) else {
-            return; // resolve_redirect_url() already logs an error
-        };
-        let same_origin = match location().origin() {
-            Ok(current_origin) => url.origin() == current_origin,
-            Err(error) => {
-                report(&RouterError::Browser {
-                    action: "reading this page's origin for a redirect",
-                    reason: js_reason(&error),
-                    instead: "loading the redirect target from the server",
-                });
-                false
-            }
-        };
-        if same_origin {
-            let navigate = navigate.clone();
-            // delay by a tick here, so that the Action updates *before* the redirect
-            request_animation_frame(move || {
-                navigate(&url.href(), Default::default());
-            });
-            // Use set_href() if the conditions for client-side navigation were not satisfied
-        } else if let Err(e) = location().set_href(&url.href()) {
-            halyard::logging::error!("Failed to redirect: {e:#?}");
-        }
-    }
-
     fn is_back(&self) -> ReadSignal<bool> {
         self.is_back.read_only().into()
     }
@@ -345,37 +316,4 @@ fn search_params_from_web_url(
             })
         })
         .collect()
-}
-
-/// Resolves a redirect location to an (absolute) URL.
-pub(crate) fn resolve_redirect_url(loc: &str) -> Option<web_sys::Url> {
-    let Some(window) = window() else {
-        report(&RouterError::Browser {
-            action: "resolving a redirect",
-            reason: "there is no window".to_string(),
-            instead: "not redirecting",
-        });
-        return None;
-    };
-    let origin = match window.location().origin() {
-        Ok(origin) => origin,
-        Err(e) => {
-            halyard::logging::error!("Failed to get origin: {:#?}", e);
-            return None;
-        }
-    };
-
-    // TODO: Use server function's URL as base instead.
-    let base = origin;
-
-    match web_sys::Url::new_with_base(loc, &base) {
-        Ok(url) => Some(url),
-        Err(e) => {
-            halyard::logging::error!(
-                "Invalid redirect location: {}",
-                e.as_string().unwrap_or_default(),
-            );
-            None
-        }
-    }
 }

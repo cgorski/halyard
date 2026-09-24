@@ -415,8 +415,8 @@ mod tests {
         );
     }
 
-    /// Server functions used to be routed only for GET, POST, PUT, DELETE and PATCH, and
-    /// any other method panicked. Every method axum can filter is routed now.
+    /// Routes used to be added only for GET, POST, PUT, DELETE and PATCH, and any other
+    /// method panicked. Every method axum can filter is routed now.
     #[test]
     fn registry_routes_every_method_axum_can_filter() {
         let mut registry = RouteRegistry::default();

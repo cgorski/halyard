@@ -63,8 +63,8 @@ pub(crate) enum RouteError {
     )]
     UnsupportedMethod { path: String, method: Method },
     #[error(
-        "skipping the second {method} {path}: it is already routed (the route list or \
-         the server functions have this path and method twice)"
+        "skipping the second {method} {path}: it is already routed (the route list \
+         has this path and method twice)"
     )]
     Duplicate { path: String, method: Method },
     #[error(

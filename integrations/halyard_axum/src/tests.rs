@@ -180,8 +180,10 @@ fn redirect_sets_the_location_and_a_302_for_a_page_request() {
     });
 }
 
+/// A request that does not accept HTML gets the `Location` header only: no status, and no
+/// other header.
 #[test]
-fn redirect_marks_a_server_function_response_for_the_client() {
+fn redirect_sets_only_the_location_for_a_request_that_is_not_a_page() {
     with_request_contexts("application/json", |response_options| {
         redirect("/next");
 
@@ -191,10 +193,7 @@ fn redirect_marks_a_server_function_response_for_the_client() {
             parts.headers.get(LOCATION).map(|v| v.as_bytes()),
             Some(&b"/next"[..])
         );
-        assert_eq!(
-            parts.headers.get(REDIRECT_HEADER).map(|v| v.as_bytes()),
-            Some(&b""[..])
-        );
+        assert_eq!(parts.headers.len(), 1, "{:?}", parts.headers);
     });
 }
 
@@ -224,18 +223,6 @@ fn a_render_without_response_options_was_not_a_404() {
 #[test]
 fn awaiting_deferred_data_without_a_shared_context_returns() {
     futures::executor::block_on(await_deferred(&Owner::new()));
-}
-
-#[tokio::test]
-async fn an_unknown_server_function_gets_400() {
-    let response = handle_server_fns(request(Method::POST, "/api/no_such_fn"))
-        .await
-        .into_response();
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(text(response)
-        .await
-        .starts_with("Could not find a server function at the route"));
 }
 
 /// Two listings with one path and method made axum panic ("Overlapping method route"),

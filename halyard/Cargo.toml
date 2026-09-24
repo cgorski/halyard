@@ -39,11 +39,19 @@ typed-builder = { workspace = true, default-features = true }
 typed-builder-macro = { workspace = true, default-features = true }
 serde = { workspace = true, default-features = true }
 serde_json = { workspace = true, default-features = true }
-halyard_server_fn = { workspace = true, features = ["form-redirects", "browser"] }
+
 web-sys = { features = [
   "ShadowRoot",
   "ShadowRootInit",
   "ShadowRootMode",
+  # for `form::FromFormData`
+  "Event",
+  "FormData",
+  "HtmlButtonElement",
+  "HtmlFormElement",
+  "HtmlInputElement",
+  "SubmitEvent",
+  "UrlSearchParams",
 ], workspace = true, default-features = true }
 wasm-bindgen = { workspace = true, default-features = true }
 wasm-bindgen-futures = { workspace = true, default-features = true }
@@ -68,9 +76,7 @@ hydrate = [
   "getrandom?/wasm_js",
 ]
 ssr = [
-  "halyard_macro/ssr",
   "halyard_server/ssr",
-  "halyard_server_fn/ssr",
   "hydration",
   "halyard_tachys/ssr",
 ]

@@ -7,8 +7,6 @@ use halyard_router::{
     ParamSegment, SsrMode, StaticSegment,
 };
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "ssr")]
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 use thiserror::Error;
 
@@ -30,28 +28,13 @@ pub fn shell(options: HalyardOptions) -> impl IntoView {
     }
 }
 
-#[cfg(feature = "ssr")]
-static IS_ADMIN: AtomicBool = AtomicBool::new(true);
-
-#[server]
-pub async fn is_admin() -> Result<bool, ServerFnError> {
-    Ok(IS_ADMIN.load(Ordering::Relaxed))
-}
-
-#[server]
-pub async fn set_is_admin(is_admin: bool) -> Result<(), ServerFnError> {
-    IS_ADMIN.store(is_admin, Ordering::Relaxed);
-    Ok(())
-}
-
 #[component]
 pub fn App() -> impl IntoView {
     // Provides context that manages stylesheets, titles, meta tags, etc.
     provide_meta_context();
     let fallback = || view! { "Page not found." }.into_view();
-    let toggle_admin = ServerAction::<SetIsAdmin>::new();
-    let is_admin =
-        Resource::new(move || toggle_admin.version().get(), |_| is_admin());
+    // a stand-in for a login: every page load starts logged in
+    let is_admin = RwSignal::new(true);
 
     view! {
         <Stylesheet id="halyard" href="/pkg/ssr_modes.css"/>
@@ -61,29 +44,9 @@ pub fn App() -> impl IntoView {
             <nav>
                 <a href="/">"Home"</a>
                 <a href="/admin">"Admin"</a>
-                <Transition>
-                    <ActionForm action=toggle_admin>
-                        <input
-                            type="hidden"
-                            name="is_admin"
-                            value=move || {
-                                (!is_admin.get().and_then(|n| n.ok()).unwrap_or_default())
-                                    .to_string()
-                            }
-                        />
-
-                        <button>
-                            {move || {
-                                if is_admin.get().and_then(Result::ok).unwrap_or_default() {
-                                    "Log Out"
-                                } else {
-                                    "Log In"
-                                }
-                            }}
-
-                        </button>
-                    </ActionForm>
-                </Transition>
+                <button on:click=move |_| is_admin.update(|n| *n = !*n)>
+                    {move || if is_admin.get() { "Log Out" } else { "Log In" }}
+                </button>
             </nav>
             <main>
                 <FlatRoutes fallback>
@@ -110,7 +73,7 @@ pub fn App() -> impl IntoView {
                         path=StaticSegment("admin")
                         view=Admin
                         ssr=SsrMode::Async
-                        condition=move || is_admin.get().map(|n| n.unwrap_or(false))
+                        condition=move || Some(is_admin.get())
                         redirect_path=|| "/"
                     />
                 </FlatRoutes>
@@ -123,18 +86,11 @@ pub fn App() -> impl IntoView {
 fn HomePage() -> impl IntoView {
     // load the posts
     let posts = Resource::new(|| (), |_| list_post_metadata());
-    let posts = move || {
-        posts
-            .get()
-            .map(|n| n.unwrap_or_default())
-            .unwrap_or_default()
-    };
+    let posts = move || posts.get().unwrap_or_default();
 
     let posts2 = Resource::new(|| (), |_| list_post_metadata());
-    let posts2 = Resource::new(
-        || (),
-        move |_| async move { posts2.await.as_ref().map(Vec::len).unwrap_or(0) },
-    );
+    let posts2 =
+        Resource::new(|| (), move |_| async move { posts2.await.len() });
 
     view! {
         <h1>"My Great Blog"</h1>
@@ -181,24 +137,19 @@ fn Post() -> impl IntoView {
     let post_resource = Resource::new_blocking(id, |id| async move {
         match id {
             Err(e) => Err(e),
-            Ok(id) => get_post(id)
-                .await
-                .map(|data| data.ok_or(PostError::PostNotFound))
-                .map_err(|_| PostError::ServerError),
+            Ok(id) => get_post(id).await.ok_or(PostError::PostNotFound),
         }
     });
     let comments_resource = Resource::new(id, |id| async move {
         match id {
             Err(e) => Err(e),
-            Ok(id) => {
-                get_comments(id).await.map_err(|_| PostError::ServerError)
-            }
+            Ok(id) => Ok(get_comments(id).await),
         }
     });
 
     let post_view = Suspend::new(async move {
         match post_resource.await {
-            Ok(Ok(post)) => {
+            Ok(post) => {
                 Ok(view! {
                     <h1>{post.title.clone()}</h1>
                     <p>{post.content.clone()}</p>
@@ -210,7 +161,7 @@ fn Post() -> impl IntoView {
                     <Meta name="description" content=post.content/>
                 })
             }
-            _ => Err(PostError::ServerError),
+            Err(error) => Err(error),
         }
     });
     let comments_view = Suspend::new(async move {
@@ -225,7 +176,7 @@ fn Post() -> impl IntoView {
 
                 </ul>
             }),
-            _ => Err(PostError::ServerError),
+            Err(error) => Err(error),
         }
     });
 
@@ -259,7 +210,8 @@ pub fn Admin() -> impl IntoView {
     view! { <p>"You can only see this page if you're logged in."</p> }
 }
 
-// Dummy API
+// Dummy data, the same on the server and in the browser; the delays (on the server) stand
+// in for a slow data source, to show the streaming modes
 
 static POSTS: LazyLock<[Post; 3]> = LazyLock::new(|| {
     [
@@ -287,8 +239,6 @@ pub enum PostError {
     InvalidId,
     #[error("Post not found.")]
     PostNotFound,
-    #[error("Server error.")]
-    ServerError,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,27 +254,31 @@ pub struct PostMetadata {
     title: String,
 }
 
-#[server]
-pub async fn list_post_metadata() -> Result<Vec<PostMetadata>, ServerFnError> {
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    Ok(POSTS
+async fn delay(seconds: u64) {
+    #[cfg(feature = "ssr")]
+    tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+    #[cfg(not(feature = "ssr"))]
+    let _ = seconds;
+}
+
+pub async fn list_post_metadata() -> Vec<PostMetadata> {
+    delay(1).await;
+    POSTS
         .iter()
         .map(|data| PostMetadata {
             id: data.id,
             title: data.title.clone(),
         })
-        .collect())
+        .collect()
 }
 
-#[server]
-pub async fn get_post(id: usize) -> Result<Option<Post>, ServerFnError> {
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    Ok(POSTS.iter().find(|post| post.id == id).cloned())
+pub async fn get_post(id: usize) -> Option<Post> {
+    delay(1).await;
+    POSTS.iter().find(|post| post.id == id).cloned()
 }
 
-#[server]
-pub async fn get_comments(id: usize) -> Result<Vec<String>, ServerFnError> {
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+pub async fn get_comments(id: usize) -> Vec<String> {
+    delay(2).await;
     _ = id;
-    Ok(vec!["Some comment".into(), "Some other comment".into()])
+    vec!["Some comment".into(), "Some other comment".into()]
 }

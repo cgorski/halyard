@@ -198,9 +198,9 @@ where
     /// has resolved and loaded an `Ok(_)`, rather than requiring nested `.map()`
     /// calls over the `Option<Result<_, _>>` returned by the resource.
     ///
-    /// This is useful when used with features like server functions, in conjunction
-    /// with `<ErrorBoundary/>` and `<Suspense/>`, when these other components are
-    /// left to handle the `None` and `Err(_)` states.
+    /// This is useful for a fallible loader, in conjunction with `<ErrorBoundary/>` and
+    /// `<Suspense/>`, when these other components are left to handle the `None` and
+    /// `Err(_)` states.
     #[track_caller]
     pub fn and_then<U>(&self, f: impl FnOnce(&T) -> U) -> Option<Result<U, E>> {
         self.map(|data| data.as_ref().map(f).map_err(|e| e.clone()))
@@ -491,9 +491,9 @@ where
     /// has resolved and loaded an `Ok(_)`, rather than requiring nested `.map()`
     /// calls over the `Option<Result<_, _>>` returned by the resource.
     ///
-    /// This is useful when used with features like server functions, in conjunction
-    /// with `<ErrorBoundary/>` and `<Suspense/>`, when these other components are
-    /// left to handle the `None` and `Err(_)` states.
+    /// This is useful for a fallible loader, in conjunction with `<ErrorBoundary/>` and
+    /// `<Suspense/>`, when these other components are left to handle the `None` and
+    /// `Err(_)` states.
     #[track_caller]
     pub fn and_then<U>(&self, f: impl FnOnce(&T) -> U) -> Option<Result<U, E>> {
         self.map(|data| data.as_ref().map(f).map_err(|e| e.clone()))

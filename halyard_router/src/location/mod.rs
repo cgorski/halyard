@@ -1,11 +1,9 @@
 #![allow(missing_docs)]
 
 use core::fmt::Debug;
-use halyard::server::ServerActionError;
 use halyard_any_spawner::Executor;
 use halyard_reactive_graph::{
     computed::Memo,
-    owner::provide_context,
     signal::{ArcRwSignal, ReadSignal},
     traits::With,
 };
@@ -102,16 +100,6 @@ impl Url {
             );
         }
         &mut self.hash
-    }
-
-    pub fn provide_server_action_error(&self) {
-        let search_params = self.search_params();
-        if let (Some(err), Some(path)) = (
-            search_params.get_str("__err"),
-            search_params.get_str("__path"),
-        ) {
-            provide_context(ServerActionError::new(path, err))
-        }
     }
 
     pub(crate) fn to_full_path(&self) -> String {
@@ -270,8 +258,6 @@ pub trait LocationProvider: Clone + 'static {
     }
 
     fn parse_with_base(url: &str, base: &str) -> Result<Url, Self::Error>;
-
-    fn redirect(loc: &str);
 
     /// Whether we are currently in a "back" navigation.
     fn is_back(&self) -> ReadSignal<bool>;

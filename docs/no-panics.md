@@ -49,7 +49,7 @@ what clippy cannot see:
 | `RefCell` borrow conflicts | `halyard_tachys` 45, router 8, reactive graph 10 | 65 | yes (re-entrant event handlers) |
 | lock held while user code runs | `Callback::run` (`with_value(\|f\| f(input))`), `StoredValue::with_value`, `debounce` (`cb.write().unwrap()(arg)`) | several | yes: re-entry **deadlocks** natively and **aborts** in wasm (std's single-threaded lock calls `rtabort!` on a conflicting acquisition) |
 | `unwrap_throw`/`expect_throw` | `halyard_dom` 7, router 2, `halyard` 1 | 10 | yes |
-| proc-macro panics | `halyard_macro`, `halyard_rstml`, `halyard_server_fn_macro` | ~120 | compile time only: should be `compile_error!` spans |
+| proc-macro panics | `halyard_macro`, `halyard_rstml` (and `halyard_server_fn_macro`, since removed with server functions) | ~120 | compile time only: should be `compile_error!` spans |
 
 ## Is the poisoning a smell?
 
@@ -91,9 +91,8 @@ ratchet.
    typed capability, not unwrapped from thread-locals.
 4. **Keyed and either views without index arithmetic.** Rewrite the diff over checked
    iteration; on an invariant violation, log it and rebuild the list from scratch.
-5. **Server request path.** `halyard_axum`, `halyard_integration_utils`,
-   `halyard_server_fn`: every `unwrap` becomes a typed error that renders a 500 with a
-   request id.
+5. **Server request path.** `halyard_axum`, `halyard_integration_utils`: every `unwrap`
+   becomes a typed error that renders a 500 with a request id.
 6. **Macros.** Every macro panic becomes a `syn::Error` on the offending span.
 7. **Per crate: panic lints to `deny`** once the crate's count is zero.
 
@@ -138,7 +137,7 @@ they can be swapped later.
 | Crate | Maintained (2026-09) | Use here | Verdict |
 |---|---|---|---|
 | `slotmap` | 1.1.1, 26 M downloads / 90 d | already the arena; generational keys make a stale handle read as "gone", not as another value | keep |
-| `futures` channels | rust-lang, 0.3.34 (2026-08) | oneshot/mpsc in actions, server functions and streaming | keep |
+| `futures` channels | rust-lang, 0.3.34 (2026-08) | oneshot/mpsc in actions and streaming | keep |
 | `gloo-timers`, `gloo-events` | rustwasm, 0.4/0.3 (2026-03) | timers and listeners that cancel on `Drop` (RAII), which is change 1 by construction; `gloo-utils`/`gloo-net` are already dependencies | adopt privately for change 1 |
 | `parking_lot` | 0.12.5, 218 M / 90 d | no poisoning, smaller, `read_recursive`; but in single-threaded wasm a conflicting acquisition parks forever (a hang, worse than an abort) | server-side locks only, if at all; the browser wants `RefCell` + `try_borrow` (smell 3) |
 | `arc-swap` | 1.9.2, 85 M / 90 d | lock-free read-mostly state (route tables, configuration): no guard to hold across user code | candidate for change 2 where the data is read-mostly |

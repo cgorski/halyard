@@ -38,9 +38,9 @@
 use axum::http::Uri;
 use axum::{
     body::{Body, Bytes},
-    extract::{FromRef, FromRequestParts, MatchedPath, State},
+    extract::{FromRef, MatchedPath, State},
     http::{
-        header::{self, HeaderName, HeaderValue, ACCEPT, LOCATION, REFERER},
+        header::{self, HeaderName, HeaderValue, ACCEPT},
         request::Parts,
         HeaderMap, Method, Request, Response, StatusCode,
     },
@@ -51,11 +51,13 @@ use axum::{
 use error::RouteError;
 use error::{error_response, report, request_id, RequestError};
 use futures::{stream::once, Future, Stream, StreamExt};
+#[cfg(feature = "default")]
+use halyard::reactive::computed::ScopedFuture;
 use halyard::{
     config::HalyardOptions,
     context::{provide_context, use_context},
     prelude::*,
-    reactive::{computed::ScopedFuture, owner::Owner},
+    reactive::owner::Owner,
     IntoView,
 };
 use halyard_hydration_context::SsrSharedContext;
@@ -71,14 +73,13 @@ use halyard_router::{
     static_routes::RegenerationFn, ExpandOptionals, PathSegment, RouteList,
     RouteListing, SsrMode,
 };
-use halyard_server_fn::{error::ServerFnErrorErr, redirect::REDIRECT_HEADER};
+
 use route_path::RouteRegistry;
 #[cfg(feature = "default")]
 use std::sync::LazyLock;
 #[cfg(feature = "default")]
 use std::{collections::HashMap, path::Path};
 use std::{
-    collections::HashSet,
     fmt::Debug,
     future::ready,
     io,
@@ -100,8 +101,8 @@ pub use service::ErrorHandler;
 #[cfg(test)]
 mod tests;
 
-/// This struct lets you define headers and override the status of the Response from an Element or a Server Function
-/// Typically contained inside of a ResponseOptions. Setting this is useful for cookies and custom responses.
+/// This struct lets you define headers and override the status of the Response from a page
+/// rendered on the server. Typically contained inside of a ResponseOptions. Setting this is useful for cookies and custom responses.
 #[derive(Debug, Clone, Default)]
 pub struct ResponseParts {
     /// If provided, this will overwrite any other status code for this response.
@@ -125,19 +126,25 @@ impl ResponseParts {
 ///
 /// `ResponseOptions` is provided via context when you use most of the handlers provided in this
 /// crate, including [`.halyard_routes`](HalyardRoutes::halyard_routes),
-/// [`.halyard_routes_with_context`](HalyardRoutes::halyard_routes_with_context), [`handle_server_fns`], etc.
+/// [`.halyard_routes_with_context`](HalyardRoutes::halyard_routes_with_context), etc.
 /// You can find the full set of provided context types in each handler function.
 ///
 /// If you provide your own handler, you will need to provide `ResponseOptions` via context
 /// yourself if you want to access it via context.
 /// ```
+/// use axum::http::StatusCode;
 /// use halyard::prelude::*;
+/// use halyard_axum::ResponseOptions;
 ///
-/// #[server]
-/// pub async fn get_opts() -> Result<(), ServerFnError> {
-///     let opts = expect_context::<halyard_axum::ResponseOptions>();
-///     Ok(())
+/// #[component]
+/// pub fn NotFound() -> impl IntoView {
+///     // provided while the page is rendered on the server
+///     if let Some(response) = use_context::<ResponseOptions>() {
+///         response.set_status(StatusCode::NOT_FOUND);
+///     }
+///     view! { <h1>"Not found"</h1> }
 /// }
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct ResponseOptions(pub Arc<RwLock<ResponseParts>>);
 
@@ -213,33 +220,23 @@ impl ExtendResponse for AxumResponse {
     }
 }
 
-/// Provides an easy way to redirect the user from within a server function.
+/// Redirects the browser away from a page that is being rendered on the server.
 ///
-/// Calling `redirect` in a server function will redirect the browser in three
-/// situations:
-/// 1. A server function that is calling in a [blocking
-///    resource](halyard::server::Resource::new_blocking).
-/// 2. A server function that is called from WASM running in the client (e.g., a dispatched action
-///    or a spawned `Future`).
-/// 3. A `<form>` submitted to the server function endpoint using default browser APIs (often due
-///    to using [`ActionForm`] without JS/WASM present.)
+/// The route handlers of this crate provide it to `halyard_router`, whose `<Redirect/>` calls
+/// it during server rendering; application code can call it while a page renders too, for
+/// example from a [blocking resource](halyard::server::Resource::new_blocking).
 ///
 /// Using it with a non-blocking [`Resource`] will not work if you are using streaming rendering,
-/// as the response's headers will already have been sent by the time the server function calls `redirect()`.
+/// as the response's headers will already have been sent by the time it is called.
 ///
 /// ### Implementation
 ///
 /// This sets the `Location` header to the URL given.
 ///
-/// If the route or server function in which this is called is being accessed
-/// by an ordinary `GET` request or an HTML `<form>` without any enhancement, it also sets a
-/// status code of `302` for a temporary redirect. (This is determined by whether the `Accept`
-/// header contains `text/html` as it does for an ordinary navigation.)
-///
-/// Otherwise, it sets a custom header that indicates to the client that it should redirect,
-/// without actually setting the status code. This means that the client will not follow the
-/// redirect, and can therefore return the value of the server function and then handle
-/// the redirect with client-side routing.
+/// If the page is being requested by an ordinary `GET` request or an HTML `<form>` without
+/// any enhancement, it also sets a status code of `302` for a temporary redirect. (This is
+/// determined by whether the `Accept` header contains `text/html` as it does for an ordinary
+/// navigation.) Otherwise the status is left as it is.
 ///
 /// A `path` that cannot be a header value (it contains a control character such as CR or
 /// LF, which would start another header) is refused: the response gets no `Location` and
@@ -268,17 +265,9 @@ pub fn redirect(path: &str) {
             .map(|v| v.contains("text/html"))
             .unwrap_or(false);
         if accepts_html {
-            // if the request accepts text/html, it's a plain form request and needs
-            // to have the 302 code set
+            // if the request accepts text/html, it's a navigation or a plain form
+            // request and needs to have the 302 code set
             res.set_status(StatusCode::FOUND);
-        } else {
-            // otherwise, we sent it from the server fn client and actually don't want
-            // to set a real redirect, as this will break the ability to return data
-            // instead, set the REDIRECT_HEADER to indicate that the client should redirect
-            res.insert_header(
-                const { HeaderName::from_static(REDIRECT_HEADER) },
-                const { HeaderValue::from_static("") },
-            );
         }
     } else {
         #[cfg(feature = "tracing")]
@@ -309,50 +298,6 @@ pub fn generate_request_and_parts(
     (Request::from_parts(parts, body), parts2)
 }
 
-/// An Axum handlers to listens for a request with Halyard server function arguments in the body,
-/// run the server function if found, and return the resulting [`Response`].
-///
-/// This can then be set up at an appropriate route in your application:
-///
-/// ```no_run
-/// use axum::{handler::Handler, routing::post, Router};
-/// use halyard::prelude::*;
-/// use std::net::SocketAddr;
-///
-/// #[cfg(feature = "default")]
-/// #[tokio::main]
-/// async fn main() {
-///     let addr = SocketAddr::from(([127, 0, 0, 1], 8082));
-///
-///     // build our application with a route
-///     let app = Router::new()
-///         .route("/api/*fn_name", post(halyard_axum::handle_server_fns));
-///
-///     // run our app with hyper
-///     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-///     axum::serve(listener, app.into_make_service())
-///         .await
-///         .unwrap();
-/// }
-///
-/// # #[cfg(not(feature = "default"))]
-/// # fn main() { }
-/// ```
-/// Halyard provides a generic implementation of `handle_server_fns`. If access to more specific parts of the Request is desired,
-/// you can specify your own server fn handler based on this one and give it it's own route in the server macro.
-///
-/// ## Provided Context Types
-/// This function always provides context values including the following types:
-/// - [`Parts`]
-/// - [`ResponseOptions`]
-#[cfg_attr(
-    feature = "tracing",
-    tracing::instrument(level = "trace", fields(error), skip_all)
-)]
-pub async fn handle_server_fns(req: Request<Body>) -> impl IntoResponse {
-    handle_server_fns_inner(|| {}, req).await
-}
-
 fn init_executor() {
     #[cfg(feature = "wasm")]
     let _ = halyard_any_spawner::Executor::init_wasm_bindgen();
@@ -366,105 +311,6 @@ fn init_executor() {
              remove 'default-features = false' or, if you are running in a \
              JS-hosted WASM server environment, add the 'wasm' feature."
         );
-    }
-}
-
-/// An Axum handlers to listens for a request with Halyard server function arguments in the body,
-/// run the server function if found, and return the resulting [`Response`].
-///
-/// This can then be set up at an appropriate route in your application:
-///
-/// This version allows you to pass in a closure to capture additional data from the layers above halyard
-/// and store it in context. To use it, you'll need to define your own route, and a handler function
-/// that takes in the data you'd like. See the [render_app_to_stream_with_context] docs for an example
-/// of one that should work much like this one.
-///
-/// **NOTE**: If your server functions expect a context, make sure to provide it both in
-/// [`handle_server_fns_with_context`] **and** in
-/// [`halyard_routes_with_context`](HalyardRoutes::halyard_routes_with_context) (or whatever
-/// rendering method you are using). During SSR, server functions are called by the rendering
-/// method, while subsequent calls from the client are handled by the server function handler.
-/// The same context needs to be provided to both handlers.
-///
-/// ## Provided Context Types
-/// This function always provides context values including the following types:
-/// - [`Parts`]
-/// - [`ResponseOptions`]
-#[cfg_attr(
-    feature = "tracing",
-    tracing::instrument(level = "trace", fields(error), skip_all)
-)]
-pub async fn handle_server_fns_with_context(
-    additional_context: impl Fn() + 'static + Clone + Send,
-    req: Request<Body>,
-) -> impl IntoResponse {
-    handle_server_fns_inner(additional_context, req).await
-}
-
-async fn handle_server_fns_inner(
-    additional_context: impl Fn() + 'static + Clone + Send,
-    req: Request<Body>,
-) -> Response<Body> {
-    let method = req.method().clone();
-    let path = req.uri().path().to_string();
-    let (req, parts) = generate_request_and_parts(req);
-
-    if let Some(mut service) =
-        halyard_server_fn::axum::get_server_fn_service(&path, method)
-    {
-        let owner = Owner::new();
-        owner
-            .with(|| {
-                ScopedFuture::new(async move {
-                    provide_context(parts);
-                    let res_options = ResponseOptions::default();
-                    provide_context(res_options.clone());
-                    additional_context();
-
-                    // store Accepts and Referer in case we need them for redirect (below)
-                    let accepts_html = req
-                        .headers()
-                        .get(ACCEPT)
-                        .and_then(|v| v.to_str().ok())
-                        .map(|v| v.contains("text/html"))
-                        .unwrap_or(false);
-                    let referrer = req.headers().get(REFERER).cloned();
-
-                    // actually run the server fn
-                    let mut res = AxumResponse(service.run(req).await);
-
-                    // if it accepts text/html (i.e., is a plain form post) and doesn't already have a
-                    // Location set, then redirect to the Referer
-                    if accepts_html {
-                        if let Some(referrer) = referrer {
-                            let has_location =
-                                res.0.headers().get(LOCATION).is_some();
-                            if !has_location {
-                                *res.0.status_mut() = StatusCode::FOUND;
-                                res.0.headers_mut().insert(LOCATION, referrer);
-                            }
-                        }
-                    }
-
-                    // apply status code and headers if user changed them
-                    res.extend_response(&res_options);
-                    res.0
-                })
-            })
-            .await
-    } else {
-        let mut res = Response::new(Body::from(format!(
-            "Could not find a server function at the route {path}. \
-                 \n\nIt's likely that either
-                         1. The API prefix you specify in the `#[server]` \
-                 macro doesn't match the prefix at which your server function \
-                 handler is mounted, or \n2. You are on a platform that \
-                 doesn't support automatic server function registration and \
-                 you need to call ServerFn::register_explicit() on the server \
-                 function type, somewhere in your `main` function.",
-        )));
-        *res.status_mut() = StatusCode::BAD_REQUEST;
-        res
     }
 }
 
@@ -1741,9 +1587,7 @@ where
     S: Clone + Send + Sync + 'static,
     HalyardOptions: FromRef<S>,
 {
-    /// Adds routes to the Axum router that have either
-    /// 1) been generated by `halyard_router`, or
-    /// 2) handle a server function.
+    /// Adds the routes generated by `halyard_router` to the Axum router.
     fn halyard_routes<IV>(
         self,
         options: &S,
@@ -1753,9 +1597,7 @@ where
     where
         IV: IntoView + 'static;
 
-    /// Adds routes to the Axum router that have either
-    /// 1) been generated by `halyard_router`, or
-    /// 2) handle a server function.
+    /// Adds the routes generated by `halyard_router` to the Axum router.
     ///
     /// Runs `additional_context` to provide additional data to the reactive system via context,
     /// when handling a route.
@@ -1865,8 +1707,8 @@ where
     {
         init_executor();
 
-        // S represents the router's finished state allowing us to provide
-        // it to the user's server functions.
+        // S represents the router's finished state, provided via context to
+        // every route it renders.
         let state = state.clone();
         let cx_with_state = move || {
             provide_context::<S>(state.clone());
@@ -1875,27 +1717,6 @@ where
 
         let mut router = self;
         let mut routes = RouteRegistry::default();
-
-        let excluded = paths
-            .iter()
-            .filter(|&p| p.exclude)
-            .map(|p| p.path.as_str())
-            .collect::<HashSet<_>>();
-
-        // register server functions
-        for (path, method) in halyard_server_fn::axum::server_fn_paths() {
-            let cx_with_state = cx_with_state.clone();
-            let handler = move |req: Request<Body>| async move {
-                handle_server_fns_with_context(cx_with_state, req).await
-            };
-
-            if !excluded.contains(path) {
-                router =
-                    add_route(router, &mut routes, path, &method, |filter| {
-                        on(filter, handler)
-                    });
-            }
-        }
 
         // register router paths
         for listing in paths.iter().filter(|p| !p.exclude) {
@@ -2053,59 +1874,6 @@ fn http_method(method: halyard_router::Method) -> Method {
         halyard_router::Method::Delete => Method::DELETE,
         halyard_router::Method::Patch => Method::PATCH,
     }
-}
-
-/// A helper to make it easier to use Axum extractors in server functions.
-///
-/// It is generic over some type `T` that implements [`FromRequestParts`] and can
-/// therefore be used in an extractor. The compiler can often infer this type.
-///
-/// Any error that occurs during extraction is converted to a [`ServerFnError`].
-///
-/// ```rust
-/// use halyard::prelude::*;
-///
-/// #[server]
-/// pub async fn request_method() -> Result<String, ServerFnError> {
-///     use axum::http::Method;
-///     use halyard_axum::extract;
-///
-///     // you can extract anything that a regular Axum extractor can extract
-///     // from the head (not from the body of the request)
-///     let method: Method = extract().await?;
-///
-///     Ok(format!("{method:?}"))
-/// }
-/// ```
-pub async fn extract<T>() -> Result<T, ServerFnErrorErr>
-where
-    T: Sized + FromRequestParts<()>,
-    T::Rejection: Debug,
-{
-    extract_with_state::<T, ()>(&()).await
-}
-
-/// A helper to make it easier to use Axum extractors in server functions. This
-/// function is compatible with extractors that require access to `State`.
-///
-/// It is generic over some type `T` that implements [`FromRequestParts`] and can
-/// therefore be used in an extractor. The compiler can often infer this type.
-///
-/// Any error that occurs during extraction is converted to a [`ServerFnError`].
-pub async fn extract_with_state<T, S>(state: &S) -> Result<T, ServerFnErrorErr>
-where
-    T: Sized + FromRequestParts<S>,
-    T::Rejection: Debug,
-{
-    let mut parts = use_context::<Parts>().ok_or_else(|| {
-        ServerFnErrorErr::ServerError(
-            "should have had Parts provided by the halyard_axum integration"
-                .to_string(),
-        )
-    })?;
-    T::from_request_parts(&mut parts, state)
-        .await
-        .map_err(|e| ServerFnErrorErr::ServerError(format!("{e:?}")))
 }
 
 /// A reasonable handler for serving static files (like JS/WASM/CSS) and 404 errors.

@@ -35,7 +35,6 @@
 //!   + reactions: [`Effect`](halyard::prelude::Effect) and [`RenderEffect`](halyard::prelude::RenderEffect).
 //! - **Templating/Views**: the [`view`] macro and [`IntoView`] trait.
 //! - **Routing**: the [`halyard_router`](https://docs.rs/leptos_router/latest/leptos_router/) crate
-//! - **Server Functions**: the [`server`](macro@halyard::prelude::server) macro and [`ServerAction`](halyard::prelude::ServerAction).
 //!
 //! # Feature Flags
 //!
@@ -122,10 +121,6 @@ pub mod prelude {
             wrappers::{read::*, write::*},
         };
         pub use halyard_server::*;
-        pub use halyard_server_fn::{
-            self as server_fn,
-            error::{FromServerFnError, ServerFnError, ServerFnErrorErr},
-        };
         pub use halyard_tachys::{
             reactive_graph::{bind::BindAttribute, node_ref::*, Suspend},
             view::{fragment::Fragment, template::ViewTemplate},
@@ -134,7 +129,7 @@ pub mod prelude {
     pub use export_types::*;
 }
 
-/// Components used for working with HTML forms, like `<ActionForm>`.
+/// Tools for working with HTML forms, like reading a submitted form into a Rust type.
 pub mod form;
 
 /// A standard way to wrap functions and closures to pass them to components.
@@ -190,8 +185,6 @@ mod suspense_component;
 pub mod text_prop;
 mod transition;
 pub use halyard_macro::*;
-#[doc(inline)]
-pub use halyard_server_fn as server_fn;
 
 /// Type-erase a reactive closure into a [`halyard_tachys::reactive_graph::SharedReactiveFunction`].
 ///
@@ -232,7 +225,7 @@ pub mod mount;
 pub use halyard_config as config;
 #[doc(inline)]
 pub use halyard_oco as oco;
-mod from_form_data;
+
 #[doc(inline)]
 pub use halyard_either_of as either;
 #[doc(inline)]

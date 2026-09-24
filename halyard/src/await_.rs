@@ -6,7 +6,7 @@ use serde::{de::DeserializeOwned, Serialize};
 
 #[component]
 /// Allows you to inline the data loading for an `async` block or
-/// server function directly into your view. This is the equivalent of combining a
+/// function directly into your view. This is the equivalent of combining a
 /// [`create_resource`] that only loads once (i.e., with a source signal `|| ()`) with
 /// a [`Suspense`] with no `fallback`.
 ///

@@ -73,16 +73,15 @@ where
     Chil: IntoView,
 {
     #[cfg(feature = "ssr")]
-    let (location_provider, current_url, redirect_hook) = {
+    let (location_provider, current_url) = {
         let current_url =
             ArcRwSignal::new(request_url(use_context::<RequestUrl>()));
 
-        (None, current_url, Box::new(move |_: &str| {}))
+        (None, current_url)
     };
 
     #[cfg(not(feature = "ssr"))]
-    let (location_provider, current_url, redirect_hook) = {
-        let owner = Owner::current();
+    let (location_provider, current_url) = {
         // TODO options here
         let location = match BrowserUrl::new() {
             Ok(location) => {
@@ -105,20 +104,11 @@ where
             |location| location.as_url().clone(),
         );
 
-        let redirect_hook = Box::new(move |loc: &str| {
-            if let Some(owner) = &owner {
-                owner.with(|| BrowserUrl::redirect(loc));
-            }
-        });
-
-        (location, current_url, redirect_hook)
+        (location, current_url)
     };
     // provide router context
     let state = ArcRwSignal::new(State::new(None));
     let location = Location::new(current_url.read_only(), state.read_only());
-
-    // set server function redirect hook
-    _ = server_fn::redirect::set_redirect_hook(redirect_hook);
 
     provide_context(RouterContext {
         base,
@@ -315,9 +305,6 @@ where
     );
     Some(move || {
         current_url.track();
-        outer_owner.with(|| {
-            current_url.read_untracked().provide_server_action_error()
-        });
         NestedRoutesView {
             location: location.clone(),
             routes: routes.clone(),
@@ -383,9 +370,6 @@ where
 
     Some(move || {
         current_url.track();
-        outer_owner.with(|| {
-            current_url.read_untracked().provide_server_action_error()
-        });
         FlatRoutesView {
             current_url: current_url.clone(),
             location: location.clone(),

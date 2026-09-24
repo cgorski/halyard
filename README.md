@@ -61,7 +61,6 @@ fixed at the source than worked around in every application:
 | `tachys`                                      | `halyard_tachys`                  |
 | `reactive_graph`                              | `halyard_reactive_graph`          |
 | `hydration_context`                           | `halyard_hydration_context`       |
-| `server_fn`, `server_fn_macro`, `server_fn_macro_default` | `halyard_server_fn`, `halyard_server_fn_macro`, `halyard_server_fn_macro_default` |
 | `any_spawner`, `either_of`, `next_tuple`, `or_poisoned`, `const_str_slice_concat` | `halyard_any_spawner`, `halyard_either_of`, `halyard_next_tuple`, `halyard_or_poisoned`, `halyard_const_str_slice_concat` |
 | `oco_ref` (`oco/`)                            | `halyard_oco`                     |
 | `throw_error` (`any_error/`)                  | `halyard_throw_error`             |
@@ -77,14 +76,20 @@ browser with WebAssembly, optionally as islands, with lazy routes and wasm split
 optional extras around that were removed because nothing used them: client-side-only
 rendering (the `csr` feature), the executors other than Tokio and wasm-bindgen-futures
 (glib, async-executor, the futures thread pool), resource encodings other than serde JSON
-(and `ToString`/`FromStr`) and the codec and TLS features that `halyard` forwarded to
-server functions, the `nightly` features (calling a signal as a function, static-string
-attributes), `subsecond` hot patching, and the `panic-on-hydration-mismatch` features.
-Server functions keep their own codec features for now.
+(and `ToString`/`FromStr`), the `nightly` features (calling a signal as a function,
+static-string attributes), `subsecond` hot patching, and the `panic-on-hydration-mismatch`
+features.
 
-Inside `halyard` the re-export names are unchanged: `halyard::tachys`, `halyard::server_fn`,
-`halyard::reactive`, `halyard::prelude::*`, and the `view!`, `#[component]`, `#[server]`
-macros keep their names. Types named `Leptos*` are now `Halyard*` (`HalyardOptions`,
+Server functions (upstream's `server_fn`, `server_fn_macro` and `server_fn_macro_default`,
+the `#[server]` macro, `ServerAction`, `ServerMultiAction`, `<ActionForm/>`,
+`<MultiActionForm/>` and the axum handlers for them) were removed too: no application uses
+them. Data reaches the page through resources, loaded on the server and sent with the page
+as serde JSON; `Action` runs any async function; an application that needs an HTTP API
+routes it in axum itself, and `halyard_router`'s `<Form/>` can post to it.
+
+Inside `halyard` the re-export names are unchanged: `halyard::tachys`,
+`halyard::reactive`, `halyard::prelude::*`, and the `view!` and `#[component]` macros keep
+their names. Types named `Leptos*` are now `Halyard*` (`HalyardOptions`,
 `HalyardRoutes`, …).
 
 ## Configuration

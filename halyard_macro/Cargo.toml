@@ -26,7 +26,6 @@ proc-macro2 = { workspace = true, default-features = true }
 quote = { workspace = true, default-features = true }
 syn = { features = ["full"], workspace = true, default-features = true }
 rstml = { workspace = true, default-features = true }
-halyard_server_fn_macro = { workspace = true }
 convert_case = { workspace = true, default-features = true }
 convert_case_extras = { workspace = true, default-features = true }
 uuid = { features = ["v4"], workspace = true, default-features = true }
@@ -40,20 +39,15 @@ trybuild = { workspace = true, default-features = true }
 # later; cargo strips versionless dev-dependencies when publishing.
 halyard = { path = "../halyard" }
 halyard_router = { path = "../halyard_router", features = ["ssr"] }
-halyard_server_fn = { path = "../halyard_server_fn", features = ["cbor"] }
 insta = { workspace = true, default-features = true }
 serde = { workspace = true, default-features = true }
 
 [features]
 hydrate = []
-ssr = ["halyard_server_fn_macro/ssr"]
 tracing = ["dep:tracing"]
 islands = []
 trace-components = []
 trace-component-props = []
-actix = ["halyard_server_fn_macro/actix"]
-axum = ["halyard_server_fn_macro/axum"]
-generic = ["halyard_server_fn_macro/generic"]
 # Having an erasure feature rather than normal --cfg erase_components for the proc macro crate is a workaround for this rust issue:
 # https://github.com/rust-lang/cargo/issues/4423
 # TLDR proc macros will ignore RUSTFLAGS when --target is specified on the cargo command.
@@ -64,24 +58,6 @@ __internal_erase_components = []
 
 [package.metadata.cargo-all-features]
 denylist = ["tracing", "trace-component-props", "trace-components"]
-skip_feature_sets = [
-  [
-    "hydrate",
-    "ssr",
-  ],
-  [
-    "actix",
-    "axum",
-  ],
-  [
-    "actix",
-    "generic",
-  ],
-  [
-    "generic",
-    "axum",
-  ],
-]
 max_combination_size = 2
 
 [package.metadata.docs.rs]

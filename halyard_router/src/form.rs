@@ -164,7 +164,7 @@ where
                                     on_response(&resp);
                                 }
                                 // Check all the logical 3xx responses that might
-                                // get returned from a server function
+                                // get returned from the server
                                 if resp.redirected() {
                                     follow_redirect(
                                         &resp.url(),
@@ -208,7 +208,7 @@ where
                                     on_response(&resp);
                                 }
                                 // Check all the logical 3xx responses that might
-                                // get returned from a server function
+                                // get returned from the server
                                 if resp.redirected() {
                                     follow_redirect(
                                         &resp.url(),

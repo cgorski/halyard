@@ -18,9 +18,6 @@ members = [
   "halyard_macro_diagnostics",
   "halyard_server",
   "halyard_reactive_graph",
-  "halyard_server_fn",
-  "halyard_server_fn_macro",
-  "halyard_server_fn/halyard_server_fn_macro_default",
   "halyard_tachys",
 
   # integrations
@@ -65,9 +62,6 @@ halyard_next_tuple = { path = "./halyard_next_tuple", version = "0.1.0" }
 halyard_oco = { path = "./halyard_oco", version = "0.1.0" }
 halyard_or_poisoned = { path = "./halyard_or_poisoned", version = "0.1.0" }
 halyard_reactive_graph = { path = "./halyard_reactive_graph", version = "0.1.0" }
-halyard_server_fn = { path = "./halyard_server_fn", version = "0.1.0" }
-halyard_server_fn_macro = { path = "./halyard_server_fn_macro", version = "0.1.0" }
-halyard_server_fn_macro_default = { path = "./halyard_server_fn/halyard_server_fn_macro_default", version = "0.1.0" }
 halyard_tachys = { path = "./halyard_tachys", version = "0.1.0" }
 
 # members deps
@@ -83,10 +77,8 @@ thiserror = { default-features = false, version = "2.0" }
 wasm-bindgen = { default-features = false, version = "0.2" }
 indexmap = { default-features = false, version = "2.13" }
 rstml = { package = "halyard_rstml", path = "./third_party/halyard_rstml", version = "0.1.0" }
-rustc_version = { default-features = false, version = "0.4" }
 guardian = { default-features = false, version = "1.3" }
 rustc-hash = { default-features = false, version = "2.1" }
-actix-web = { default-features = false, version = "4.12" }
 tracing = { default-features = false, version = "0.1" }
 slotmap = { default-features = false, version = "1.1" }
 futures = { default-features = false, version = "0.3" }
@@ -94,7 +86,6 @@ pin-project-lite = { default-features = false, version = "0.2" }
 send_wrapper = { default-features = false, version = "0.6" }
 tokio-test = { default-features = false, version = "0.4" }
 html-escape = { default-features = false, version = "0.2" }
-const_format = { default-features = false, version = "0.2" }
 gloo-net = { default-features = false, version = "0.6" }
 url = { default-features = false, version = "2.5" }
 tokio = { default-features = false, version = "1.49" }
@@ -108,47 +99,28 @@ parking_lot = { default-features = false, version = "0.12" }
 axum = { default-features = false, version = "0.8" }
 serde_qs = { default-features = false, version = "0.15" }
 syn = { default-features = false, version = "2.0" }
-xxhash-rust = { default-features = false, version = "0.8" }
 pastey = { default-features = false, version = "0.2" }
 quote = { default-features = false, version = "1.0" }
 web-sys = { default-features = false, version = "0.3" }
 js-sys = { default-features = false, version = "0.3" }
 rand = { default-features = false, version = "0.9" }
-serde-lite = { default-features = false, version = "0.5" }
-tokio-tungstenite = { default-features = false, version = "0.28" }
 erased = { default-features = false, version = "0.1" }
 async-trait = { default-features = false, version = "0.1" }
 anyhow = { default-features = false, version = "1.0" }
-actix-ws = { default-features = false, version = "0.3" }
 tower-http = { default-features = false, version = "0.6" }
 prettyplease = { default-features = false, version = "0.2" }
-inventory = { default-features = false, version = "0.3" }
 config = { default-features = false, version = "0.15" }
-ciborium = { default-features = false, version = "0.2" }
-bitcode = { default-features = false, version = "0.6" }
-multer = { default-features = false, version = "3.1" }
-wasm-streams = { default-features = false, version = "0.5" }
-rkyv = { default-features = false, version = "0.8" }
 temp-env = { default-features = false, version = "0.3" }
 uuid = { default-features = false, version = "1.20" }
-bytes = { default-features = false, version = "1.11" }
-http = { default-features = false, version = "1.4" }
 drain_filter_polyfill = { default-features = false, version = "0.1" }
 tempfile = { default-features = false, version = "3.24" }
 log = { default-features = false, version = "0.4" }
 percent-encoding = { default-features = false, version = "2.3" }
-const-str = { default-features = false, version = "1.1" }
-http-body-util = { default-features = false, version = "0.1" }
-hyper = { default-features = false, version = "1.8" }
-postcard = { default-features = false, version = "1.1" }
-rmp-serde = { default-features = false, version = "1.3" }
 reqwest = { default-features = false, version = "0.13" }
-tower-layer = { default-features = false, version = "0.3" }
 attribute-derive = { default-features = false, version = "0.10" }
 insta = { default-features = false, version = "1.46" }
 codee = { default-features = false, version = "0.3" }
 wasm-bindgen-test = { default-features = false, version = "0.3" }
-rustversion = { default-features = false, version = "1.0" }
 getrandom = { default-features = false, version = "0.4" }
 async-lock = { default-features = false, version = "3.4" }
 base16 = { default-features = false, version = "0.2" }

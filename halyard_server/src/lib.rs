@@ -1,15 +1,12 @@
-//! Utilities for communicating between the server and the client with Halyard.
+//! Utilities for communicating between the server and the client with Halyard: resources
+//! whose data is loaded on the server and sent to the client with the page.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-mod action;
-pub use action::*;
 use std::borrow::Borrow;
 mod local_resource;
 pub use local_resource::*;
-mod multi_action;
-pub use multi_action::*;
 mod once_resource;
 pub use once_resource::*;
 mod resource;

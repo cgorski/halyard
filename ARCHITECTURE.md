@@ -165,24 +165,13 @@ than similar Rust frontend frameworks in its HTML rendering.
 >   </main>"#
 > ```
 
-## Server Functions (`halyard_server`, `halyard_server_fn`, and `halyard_server_fn_macro`)
+## Resources (`halyard_server`)
 
-Server functions are a framework-agnostic shorthand for converting
-a function, whose body can only be run on the server, into an ad hoc
-REST API endpoint, and then generating code on the client to call that
-endpoint when you call the function.
-
-These are inspired by Solid/Bling’s `server$` functions, and there’s
-similar work being done in a number of other JavaScript frameworks.
-
-RPC is not a new idea, but these kinds of server functions may be.
-Specifically, by using web standards (defaulting to `POST`/`GET` requests
-with URL-encoded form data) they allow easy graceful degradation and the
-use of the `<form>` element.
-
-This function is split across three packages so that `server_fn` and
-`halyard_server_fn_macro` can be used by other frameworks. `halyard_server`
-includes some Halyard-specific reactive functionality (like actions).
+`halyard_server` holds the resources (`Resource`, `OnceResource`, `LocalResource`) and
+`SharedValue`: data loaded on the server while the page renders and sent to the browser
+with the page, as serde JSON, so that hydration starts from the same data without loading
+it again. halyard has no server functions (upstream's `server_fn` crates were removed): an
+application that needs an HTTP API routes it in axum next to `halyard_axum`'s routes.
 
 ## `halyard`
 
