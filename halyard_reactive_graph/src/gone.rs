@@ -98,7 +98,8 @@ pub fn report_gone_render(
         .unwrap_or_default();
     crate::log_warning(format_args!(
         "A {what}{defined} is rendered in a view, but its value is gone (its \
-         owner was disposed): nothing is rendered or updated."
+         owner, or that of a value it is derived from, was disposed): nothing is \
+         rendered or updated."
     ));
 }
 

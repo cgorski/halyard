@@ -141,9 +141,11 @@ not follow Leptos.
   typed errors (`Result`, `thiserror` enums) or recovers visibly (log, fall back to
   client rendering, render nothing), and uses the strongest types that are practical so
   the impossible states cannot be written. Reactive handles follow `Rc`/`Weak`: a `Copy`
-  (arena) handle is weak, read with `try_get` (an `Option`) or put in the view as it is;
+  (arena) handle is weak, read with `try_get` (an `Option`) or put in the view as it is
+  (so is what `map`/`memo` derive from it: `disabled=(valid, busy).map(|(v, b)| !v || *b)`);
   a reference-counted handle is strong, read with `get` (`docs/no-panics.md`, "Design:
-  weak arena handles"). No value is lent out for a change in place: a write replaces the
+  weak arena handles"). A resource whose source may have no value is made with
+  `Resource::new_try` (a `None` source fetches nothing). No value is lent out for a change in place: a write replaces the
   value (`set`) or changes a copy (`update`, `write()`; `T: Clone`), so a strong read always
   finds one. The one read with no possible value, a strong read of a memo inside its own
   first computation, aborts like unbounded recursion (the only abort in halyard). The

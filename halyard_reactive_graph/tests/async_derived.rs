@@ -3,7 +3,7 @@ use halyard_reactive_graph::{
     computed::{ArcAsyncDerived, AsyncDerived},
     owner::Owner,
     prelude::*,
-    signal::RwSignal,
+    signal::{ArcRwSignal, RwSignal},
 };
 use std::future::pending;
 
@@ -136,4 +136,56 @@ async fn async_derived_with_initial() {
     // setting multiple dependencies will hold until the latest change is ready
     signal2.set(1);
     assert_eq!(derived.await, 2);
+}
+
+/// A loader whose result is ready while a reader holds the value (a guard from
+/// `by_ref().await`, held across an `.await`) waits for the reader without queueing as a
+/// writer: a writer waiting for the lock would keep new readers out, so a strong read made
+/// meanwhile would wait for the reader too (natively) or find the lock busy (in the browser).
+/// Here the strong read returns the previous value at once, and the new value comes in when
+/// the reader lets go.
+#[tokio::test]
+async fn a_strong_read_does_not_wait_for_a_loader_that_waits_for_a_reader() {
+    use std::{sync::mpsc, time::Duration};
+
+    _ = Executor::init_tokio();
+    let owner = Owner::new();
+    owner.set();
+
+    let source = ArcRwSignal::new(0);
+    let derived = ArcAsyncDerived::new({
+        let source = source.clone();
+        move || {
+            let n = source.get();
+            async move { n }
+        }
+    });
+    assert_eq!(derived.clone().await, 0);
+
+    // a reader holds the value across `.await`s
+    let reader = derived.by_ref().await;
+    assert_eq!(*reader, 0);
+
+    // the loader runs again, and its result is ready while the reader holds the value
+    source.set(1);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // a strong read on another thread: it must not wait for the reader held here
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn({
+        let derived = derived.clone();
+        move || _ = tx.send(derived.get())
+    });
+    let read = rx.recv_timeout(Duration::from_secs(5));
+    drop(reader);
+    assert_eq!(
+        read,
+        Ok(Some(0)),
+        "a strong read waited for a loader that was waiting for a reader"
+    );
+
+    // once the reader lets go, the loaded value comes in
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(derived.get(), Some(1));
+    assert_eq!(derived.await, 1);
 }

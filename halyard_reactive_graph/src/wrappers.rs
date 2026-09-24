@@ -518,6 +518,30 @@ pub mod read {
         }
     }
 
+    impl<T, S> IsDisposed for Signal<T, S>
+    where
+        T: 'static,
+        S: Storage<T> + Storage<SignalTypes<T, S>>,
+    {
+        /// `true` once the signal is gone, and for a signal that may have no value
+        /// ([`Signal::derive_try`], [`Map::map`](crate::map::Map::map), or one made from a
+        /// [`Memo::new_try`]) also while it has none because a source it reads is gone.
+        fn is_disposed(&self) -> bool {
+            match self.inner.try_with_value(Clone::clone) {
+                None => true,
+                Some(SignalTypes::Memo(memo)) => memo.has_no_value(),
+                Some(SignalTypes::DerivedTry(derived)) => {
+                    untrack(|| derived()).is_none()
+                }
+                Some(
+                    SignalTypes::ReadSignal(_)
+                    | SignalTypes::DerivedSignal(_)
+                    | SignalTypes::Stored(_),
+                ) => false,
+            }
+        }
+    }
+
     impl<T, S> Track for Signal<T, S>
     where
         T: 'static,
@@ -1594,6 +1618,19 @@ pub mod read {
     }
 
     #[allow(deprecated)]
+    impl<T, S> IsDisposed for MaybeSignal<T, S>
+    where
+        S: Storage<T> + Storage<SignalTypes<T, S>>,
+    {
+        fn is_disposed(&self) -> bool {
+            match self {
+                Self::Static(_) => false,
+                Self::Dynamic(signal) => signal.is_disposed(),
+            }
+        }
+    }
+
+    #[allow(deprecated)]
     impl<T, S> Track for MaybeSignal<T, S>
     where
         S: Storage<T> + Storage<SignalTypes<T, S>>,
@@ -1870,6 +1907,15 @@ pub mod read {
         fn defined_at(&self) -> Option<&'static Location<'static>> {
             // TODO this can be improved by adding a defined_at field
             None
+        }
+    }
+
+    impl<T, S> IsDisposed for MaybeProp<T, S>
+    where
+        S: Storage<Option<T>> + Storage<SignalTypes<Option<T>, S>>,
+    {
+        fn is_disposed(&self) -> bool {
+            self.0.as_ref().is_some_and(IsDisposed::is_disposed)
         }
     }
 

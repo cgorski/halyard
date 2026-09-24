@@ -87,6 +87,18 @@ jobs:
         run: |
           cargo check -p halyard --no-default-features --features ssr
           cargo check -p halyard --no-default-features --features axum,tracing,nonce
+      # The views that render handles in every position (tests/handles_in_views.rs), built
+      # for the browser: the server renders them in the tests, this checks they compile
+      # with `hydrate`.
+      - name: hydrate check of tests/handles_in_views.rs
+        run: cargo check -p halyard --no-default-features --features hydrate --test handles_in_views
+
+      # The example is outside the workspace (it has its own lockfile): check both of its
+      # builds, the server (`ssr`) and the browser (`hydrate`, wasm32).
+      - name: example ssr_modes_axum (ssr; hydrate on wasm32)
+        run: |
+          cargo check --manifest-path examples/ssr_modes_axum/Cargo.toml --features ssr
+          cargo check --manifest-path examples/ssr_modes_axum/Cargo.toml --features hydrate --target wasm32-unknown-unknown
 
       - name: lockfile must not contain the replaced crates
         run: |

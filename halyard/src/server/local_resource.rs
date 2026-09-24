@@ -1,6 +1,6 @@
 use crate::server::{
     error::{warn, warn_disposed, DisposedUse, ResourceError},
-    resource::never_loads,
+    resource::{never_loads, try_source},
 };
 use halyard_reactive_graph::traits::TryWith;
 use halyard_reactive_graph::{
@@ -9,7 +9,7 @@ use halyard_reactive_graph::{
         AsyncDerivedFuture,
     },
     graph::{
-        AnySource, AnySubscriber, ReactiveNode, Source, Subscriber,
+        untrack, AnySource, AnySubscriber, ReactiveNode, Source, Subscriber,
         ToAnySource, ToAnySubscriber,
     },
     owner::use_context,
@@ -19,7 +19,7 @@ use halyard_reactive_graph::{
         ArcRwSignal, RwSignal,
     },
     traits::{
-        DefinedAt, IsDisposed, Notify, Track, TryReadUntracked,
+        DefinedAt, Get, IsDisposed, Notify, Track, TryReadUntracked,
         UntrackableGuard, Update, Write,
     },
 };
@@ -100,6 +100,56 @@ impl<T> ArcLocalResource<T> {
                     fetcher()
                 })
             },
+            refetch,
+            #[cfg(any(debug_assertions, halyard_debuginfo))]
+            defined_at: Location::caller(),
+        }
+    }
+
+    /// Creates a resource whose `source` may have no value.
+    ///
+    /// `source` gives what to fetch and `fetcher` loads it; the resource tracks only
+    /// `source` (unlike [`new`](Self::new), whose fetcher is tracked). `None` means "no
+    /// fetch": the `fetcher` is not called, and the resource stays as it is: with the value it
+    /// loaded last, or with the load under way, or pending if it never loaded. A source that
+    /// reads weak handles can use `?` on their `try_*` reads, so that a handle whose value is
+    /// gone fetches nothing. When the source gives a value again, the resource loads if that
+    /// value differs from the one it last loaded with, or if `refetch` was called meanwhile
+    /// (a `refetch` while the source is `None` fetches nothing then).
+    ///
+    /// Like [`new`](Self::new), this loads only on the client.
+    #[track_caller]
+    pub fn new_try<S, Fut>(
+        source: impl Fn() -> Option<S> + Send + Sync + 'static,
+        fetcher: impl Fn(S) -> Fut + 'static,
+    ) -> Self
+    where
+        T: 'static,
+        S: PartialEq + Clone + Send + Sync + 'static,
+        Fut: Future<Output = T> + 'static,
+    {
+        let refetch = ArcRwSignal::new(0);
+        // on the server a local resource never loads (see `new`)
+        let data = if cfg!(feature = "ssr") {
+            drop((source, fetcher));
+            ArcAsyncDerived::new_mock(pending::<T>)
+        } else {
+            let source = try_source(&refetch, source);
+            ArcAsyncDerived::new_try_unsync(move || {
+                let (_, source) = source.get();
+                let fut = untrack(|| source.map(&fetcher));
+                async move {
+                    // `None`: no source value yet, so nothing is fetched
+                    let fut = fut?;
+                    // see `new`: a tick's wait, so that it never looks ready at once
+                    halyard_reactive_graph::executor::Executor::tick().await;
+                    Some(fut.await)
+                }
+            })
+        };
+
+        Self {
+            data,
             refetch,
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: Location::caller(),
@@ -379,6 +429,22 @@ impl<T> LocalResource<T> {
             #[cfg(any(debug_assertions, halyard_debuginfo))]
             defined_at: Location::caller(),
         }
+    }
+
+    /// Creates a resource whose `source` may have no value: `None` means "no fetch", and the
+    /// resource stays as it is (pending if it never loaded). See
+    /// [`ArcLocalResource::new_try`].
+    #[track_caller]
+    pub fn new_try<S, Fut>(
+        source: impl Fn() -> Option<S> + Send + Sync + 'static,
+        fetcher: impl Fn(S) -> Fut + 'static,
+    ) -> Self
+    where
+        T: 'static,
+        S: PartialEq + Clone + Send + Sync + 'static,
+        Fut: Future<Output = T> + 'static,
+    {
+        ArcLocalResource::new_try(source, fetcher).into()
     }
 
     /// Re-runs the async function.

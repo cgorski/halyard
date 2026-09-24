@@ -65,7 +65,10 @@
 //!   events.)
 //!
 //! Resources send their data with the page as serde JSON (or, with `Resource::new_str`,
-//! through `ToString` and `FromStr`).
+//! through `ToString` and `FromStr`). A resource whose source may have no value (for example
+//! one that reads a weak handle with `?`) is made with `Resource::new_try` (and
+//! `LocalResource::new_try`): while the source gives `None`, nothing is fetched and the
+//! resource stays as it is, pending if it never loaded.
 //!
 //! **Important Note:** You must enable either `hydrate` or `ssr` (or `axum`) to tell Halyard
 //! which build you are compiling. You should only enable one of these per build target,

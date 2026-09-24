@@ -126,6 +126,18 @@ where
     {
         self.clone().into()
     }
+
+    /// A memo made with [`Memo::new_try`](crate::computed::Memo::new_try) whose function gave
+    /// no value (a source it reads is gone): it holds nothing, and it is not being computed
+    /// by this thread.
+    pub(crate) fn has_no_value(&self) -> bool
+    where
+        T: 'static,
+    {
+        self.inner.is_fallible()
+            && !computing_here(lock_id(&*self.inner.value))
+            && matches!(self.inner.value.try_read(), Ok(value) if value.is_none())
+    }
 }
 
 impl<T: 'static> ArcMemo<T, SyncStorage>

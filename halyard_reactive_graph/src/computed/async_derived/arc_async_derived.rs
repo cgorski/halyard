@@ -22,6 +22,7 @@ use crate::{
     signal::{
         guards::{
             report_reentered, AsyncPlain, CopyWriteGuard, Mapped, ReadGuard,
+            ReleaseWaker,
         },
         ArcTrigger,
     },
@@ -128,6 +129,8 @@ pub struct ArcAsyncDerived<T> {
     pub(crate) wakers: Arc<RwLock<Vec<Waker>>>,
     pub(crate) inner: Arc<RwLock<ArcAsyncDerivedInner>>,
     pub(crate) loading: Arc<AtomicBool>,
+    // the loader waiting to swap its result into `value`, woken when the lock is let go of
+    pub(crate) released: Arc<ReleaseWaker>,
 }
 crate::impl_strong!([T] ArcAsyncDerived<T>);
 
@@ -232,6 +235,7 @@ impl<T> Clone for ArcAsyncDerived<T> {
             wakers: Arc::clone(&self.wakers),
             inner: Arc::clone(&self.inner),
             loading: Arc::clone(&self.loading),
+            released: Arc::clone(&self.released),
         }
     }
 }
@@ -290,6 +294,7 @@ macro_rules! spawn_derived {
             wakers,
             inner: Arc::clone(&inner),
             loading: Arc::new(AtomicBool::new(!is_ready)),
+            released: Arc::default(),
         };
         let any_subscriber = this.to_any_subscriber();
         let initial_fut = if $should_track {
@@ -319,6 +324,8 @@ macro_rules! spawn_derived {
                         inner.write().or_poisoned().notifier.notify();
                         (false, Some(initial_fut))
                     }
+                    // a first run that fetched nothing: pending until a run fetches
+                    Some(orig_value) if orig_value.is_none() => (false, None),
                     Some(orig_value) => {
                         let mut guard = this.inner.write().or_poisoned();
 
@@ -356,6 +363,7 @@ macro_rules! spawn_derived {
                 let inner = Arc::downgrade(&this.inner);
                 let wakers = Arc::downgrade(&this.wakers);
                 let loading = Arc::downgrade(&this.loading);
+                let released = Arc::downgrade(&this.released);
                 let fut = async move {
                     // if the AsyncDerived has *already* been marked dirty (i.e., one of its
                     // sources has changed after creation), we should throw out the Future
@@ -378,8 +386,8 @@ macro_rules! spawn_derived {
                                 .with_observer_untracked(|| any_subscriber.update_if_necessary())
                         };
                         if update_if_necessary || first_run.is_some() {
-                            match (value.upgrade(), inner.upgrade(), wakers.upgrade(), loading.upgrade()) {
-                                (Some(value), Some(inner), Some(wakers), Some(loading)) => {
+                            match (value.upgrade(), inner.upgrade(), wakers.upgrade(), loading.upgrade(), released.upgrade()) {
+                                (Some(value), Some(inner), Some(wakers), Some(loading), Some(released)) => {
                                     // generate new Future
                                     let owner = inner.read().or_poisoned().owner.clone();
                                     let fut = initial_fut.take().unwrap_or_else(|| {
@@ -409,7 +417,7 @@ macro_rules! spawn_derived {
                                     });
 
                                     // generate and assign new value
-                                    loading.store(true, Ordering::Relaxed);
+                                    let was_loading = loading.swap(true, Ordering::Relaxed);
 
                                     let this_version = {
                                         let mut guard = inner.write().or_poisoned();
@@ -425,6 +433,15 @@ macro_rules! spawn_derived {
                                     };
 
                                     let new_value = fut.await;
+                                    if new_value.is_none() {
+                                        // a run that fetched nothing (`new_try_*`: a resource
+                                        // whose source has no value yet): everything stays as
+                                        // it was, pending; the suspenses and the transition
+                                        // waiting for this run wait for the next one
+                                        loading.store(was_loading, Ordering::Relaxed);
+                                        first_run = Some(ready_tx);
+                                        continue;
+                                    }
 
                                     let latest_version = {
                                         let mut guard = inner.write().or_poisoned();
@@ -433,7 +450,7 @@ macro_rules! spawn_derived {
                                     };
 
                                     if latest_version == this_version {
-                                        Self::set_inner_value(new_value, value, wakers, inner, loading, Some(ready_tx)).await;
+                                        Self::set_inner_value(new_value, value, wakers, inner, loading, released, Some(ready_tx)).await;
                                     }
                                 }
                                 _ => break,
@@ -454,16 +471,38 @@ macro_rules! spawn_derived {
 }
 
 impl<T: 'static> ArcAsyncDerived<T> {
+    /// Swaps a loaded value in and notifies.
+    ///
+    /// The loader never holds the value's lock while it is suspended, and never queues for it
+    /// as a writer: a writer waiting for the lock keeps new readers out, so a synchronous read
+    /// made meanwhile would find the lock busy (in the browser, where no other thread can
+    /// release it) or wait for whatever reader the writer waits for (natively). If a reader
+    /// holds the value (a guard from `by_ref().await` held across an `.await`, or a read on
+    /// another thread), the loader waits without taking the lock and tries again when a
+    /// guard of the value is let go of ([`ReleaseWaker`]); meanwhile reads give the previous
+    /// value.
     async fn set_inner_value(
         new_value: SendOption<T>,
         value: Arc<AsyncRwLock<SendOption<T>>>,
         wakers: Arc<RwLock<Vec<Waker>>>,
         inner: Arc<RwLock<ArcAsyncDerivedInner>>,
         loading: Arc<AtomicBool>,
+        released: Arc<ReleaseWaker>,
         ready_tx: Option<oneshot::Sender<()>>,
     ) {
         let mut new_value = new_value;
-        mem::swap(&mut *value.write().await, &mut new_value);
+        std::future::poll_fn(|cx| {
+            // registered before trying, so that a release in between wakes this task
+            released.wake_at_release(cx.waker());
+            match value.try_write_arc() {
+                Some(mut stored) => {
+                    mem::swap(&mut *stored, &mut new_value);
+                    std::task::Poll::Ready(())
+                }
+                None => std::task::Poll::Pending,
+            }
+        })
+        .await;
         // the previous value, dropped once the lock is released
         drop(new_value);
         Self::notify_subs(&wakers, &inner, &loading, ready_tx);
@@ -593,6 +632,76 @@ impl<T: 'static> ArcAsyncDerived<T> {
         this
     }
 
+    /// Like [`new_with_manual_dependencies`](Self::new_with_manual_dependencies), for a
+    /// computation that may fetch nothing: a run whose future gives `None` leaves the value,
+    /// and whether it is loading, as they were (pending if nothing was ever loaded). For
+    /// resources whose source may have no value.
+    #[doc(hidden)]
+    #[track_caller]
+    pub fn new_try_with_manual_dependencies<Fut, S>(
+        initial_value: Option<T>,
+        fun: impl Fn() -> Fut + Send + Sync + 'static,
+        source: &S,
+    ) -> Self
+    where
+        T: Send + Sync + 'static,
+        Fut: Future<Output = Option<T>> + Send + 'static,
+        S: Track,
+    {
+        let fun = move || {
+            let fut = fun();
+            let fut =
+                ScopedFuture::new_untracked_with_diagnostics(async move {
+                    SendOption::new(fut.await)
+                });
+            #[cfg(feature = "sandboxed-arenas")]
+            let fut = Sandboxed::new(fut);
+            fut
+        };
+        let initial_value = SendOption::new(initial_value);
+        let (this, _) = spawn_derived!(
+            crate::spawn,
+            initial_value,
+            fun,
+            true,
+            false,
+            false,
+            Some(source)
+        );
+        this
+    }
+
+    /// Like [`new_unsync`](Self::new_unsync), for a computation that may fetch nothing: a run
+    /// whose future gives `None` leaves the value, and whether it is loading, as they were
+    /// (pending if nothing was ever loaded). For local resources whose source may have no
+    /// value.
+    #[doc(hidden)]
+    #[track_caller]
+    pub fn new_try_unsync<Fut>(fun: impl Fn() -> Fut + 'static) -> Self
+    where
+        T: 'static,
+        Fut: Future<Output = Option<T>> + 'static,
+    {
+        let fun = move || {
+            let fut = fun();
+            let fut = async move { SendOption::new_local(fut.await) };
+            #[cfg(feature = "sandboxed-arenas")]
+            let fut = Sandboxed::new(fut);
+            fut
+        };
+        let initial_value = SendOption::new_local(None);
+        let (this, _) = spawn_derived!(
+            crate::spawn_local,
+            initial_value,
+            fun,
+            true,
+            true,
+            true,
+            None::<ArcTrigger>
+        );
+        this
+    }
+
     /// Creates a new async derived computation that will be guaranteed to run on the current
     /// thread.
     ///
@@ -713,6 +822,7 @@ impl<T: 'static> TryReadUntracked for ArcAsyncDerived<T> {
                 .push(suspense_context);
         }
         AsyncPlain::try_new(&self.value).map(|plain| {
+            let plain = plain.waking_at_release(&self.released);
             ReadGuard::new(Mapped::new_with_guard(plain, |v| v.deref()))
         })
     }
@@ -783,7 +893,8 @@ impl<T: 'static> ArcAsyncDerived<T> {
     where
         Option<T>: Clone,
     {
-        AsyncPlain::try_new(&self.value).map(|plain| (**plain).clone())
+        AsyncPlain::try_new(&self.value)
+            .map(|plain| (**plain.waking_at_release(&self.released)).clone())
     }
 
     /// Swaps `value` in as the value (`value` then holds the previous one, to drop once the
@@ -802,6 +913,7 @@ impl<T: 'static> ArcAsyncDerived<T> {
         self.bump_version();
         mem::swap(stored.deref_mut().deref_mut(), value);
         drop(stored);
+        self.released.released();
         if notify {
             self.notify();
         }

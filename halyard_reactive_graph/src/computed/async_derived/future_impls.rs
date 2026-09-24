@@ -6,7 +6,9 @@ use crate::{
     graph::{AnySource, ToAnySource},
     owner::{use_context, Storage},
     send_wrapper_ext::SendOption,
-    signal::guards::{AsyncAwaited, Mapped, ReadGuard},
+    signal::guards::{
+        AsyncAwaited, Mapped, OnRelease, ReadGuard, ReleaseWaker,
+    },
     traits::Track,
 };
 use futures::pin_mut;
@@ -81,6 +83,7 @@ where
             loading: Arc::clone(&self.loading),
             wakers: Arc::clone(&self.wakers),
             inner: Arc::clone(&self.inner),
+            released: Arc::clone(&self.released),
         }
     }
 }
@@ -107,6 +110,22 @@ pub struct AsyncDerivedFuture<T> {
     loading: Arc<AtomicBool>,
     wakers: Arc<RwLock<Vec<Waker>>>,
     inner: Arc<RwLock<ArcAsyncDerivedInner>>,
+    released: Arc<ReleaseWaker>,
+}
+
+/// Polls a read of an async value: the guard, which wakes a loader waiting for the lock when
+/// it is dropped.
+fn poll_read<T>(
+    value: &Arc<async_lock::RwLock<SendOption<T>>>,
+    released: &Arc<ReleaseWaker>,
+    cx: &mut Context<'_>,
+) -> Poll<AsyncAwaited<SendOption<T>>> {
+    let read = value.read_arc();
+    pin_mut!(read);
+    read.poll(cx).map(|guard| AsyncAwaited {
+        guard,
+        _on_release: OnRelease(Arc::clone(released)),
+    })
 }
 
 impl<T> Future for AsyncDerivedFuture<T>
@@ -121,7 +140,6 @@ where
         let _guard = SpecialNonReactiveZone::enter();
         let waker = cx.waker();
         self.source.track();
-        let value = self.value.read_arc();
 
         if let Some(suspense_context) = use_context::<SuspenseContext>() {
             self.inner
@@ -131,14 +149,16 @@ where
                 .push(suspense_context);
         }
 
-        pin_mut!(value);
-        match (self.loading.load(Ordering::Relaxed), value.poll(cx)) {
+        match (
+            self.loading.load(Ordering::Relaxed),
+            poll_read(&self.value, &self.released, cx),
+        ) {
             (true, _) => {
                 self.wakers.write().or_poisoned().push(waker.clone());
                 Poll::Pending
             }
             (_, Poll::Pending) => Poll::Pending,
-            (_, Poll::Ready(guard)) => match guard.as_ref() {
+            (_, Poll::Ready(guard)) => match guard.guard.as_ref() {
                 Some(value) => Poll::Ready(value.clone()),
                 // emptied (`set(None)`) after it loaded: ready with the next value (a write
                 // or a reload wakes the wakers)
@@ -161,6 +181,7 @@ impl<T: 'static> ArcAsyncDerived<T> {
             value: Arc::clone(&self.value),
             loading: Arc::clone(&self.loading),
             wakers: Arc::clone(&self.wakers),
+            released: Arc::clone(&self.released),
         }
     }
 }
@@ -185,6 +206,7 @@ pub struct AsyncDerivedRefFuture<T> {
     value: Arc<async_lock::RwLock<SendOption<T>>>,
     loading: Arc<AtomicBool>,
     wakers: Arc<RwLock<Vec<Waker>>>,
+    released: Arc<ReleaseWaker>,
 }
 
 impl<T> Future for AsyncDerivedRefFuture<T>
@@ -198,25 +220,24 @@ where
         let _guard = SpecialNonReactiveZone::enter();
         let waker = cx.waker();
         self.source.track();
-        let value = self.value.read_arc();
-        pin_mut!(value);
-        match (self.loading.load(Ordering::Relaxed), value.poll(cx)) {
+        match (
+            self.loading.load(Ordering::Relaxed),
+            poll_read(&self.value, &self.released, cx),
+        ) {
             (true, _) => {
                 self.wakers.write().or_poisoned().push(waker.clone());
                 Poll::Pending
             }
             (_, Poll::Pending) => Poll::Pending,
             // emptied (`set(None)`) after it loaded: ready with the next value
-            (_, Poll::Ready(guard)) if guard.is_none() => {
+            (_, Poll::Ready(guard)) if guard.guard.is_none() => {
                 self.wakers.write().or_poisoned().push(waker.clone());
                 Poll::Pending
             }
             // The value was just seen to be there, and the read guard keeps it from being
             // emptied while the guard lives, so the mapping always finds it.
             (_, Poll::Ready(guard)) => Poll::Ready(ReadGuard::new(
-                Mapped::new_with_guard(AsyncAwaited { guard }, |guard| {
-                    guard.as_ref().unwrap()
-                }),
+                Mapped::new_with_guard(guard, |guard| guard.as_ref().unwrap()),
             )),
         }
     }

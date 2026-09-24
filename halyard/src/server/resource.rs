@@ -303,6 +303,33 @@ where
     pub fn new_with_options<S, Fut>(
         source: impl Fn() -> S + Send + Sync + 'static,
         fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
+        blocking: bool,
+    ) -> ArcResource<T, Ser>
+    where
+        S: PartialEq + Clone + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+        Fut: Future<Output = T> + Send + 'static,
+    {
+        Self::new_try_with_options(move || Some(source()), fetcher, blocking)
+    }
+
+    /// Creates a new resource with the encoding `Ser` whose `source` may have no value.
+    ///
+    /// Like [`new_with_options`](Self::new_with_options), but `source` returns an `Option`:
+    /// `None` means "no fetch". The `fetcher` is not called, and the resource stays as it is:
+    /// with the value it loaded last, or with the load under way, or pending if it never
+    /// loaded. A source that reads weak handles can use `?` on their `try_*` reads, so that a
+    /// handle whose value is gone fetches nothing. When the source gives a value again, the
+    /// resource loads if that value differs from the one it last loaded with, or if `refetch`
+    /// was called meanwhile (a `refetch` while the source is `None` fetches nothing then).
+    ///
+    /// A resource that never loaded is pending: a `<Suspense>` that reads it shows its
+    /// fallback, and on the server the page waits for it (so does a blocking resource), until
+    /// the source gives a value.
+    #[track_caller]
+    pub fn new_try_with_options<S, Fut>(
+        source: impl Fn() -> Option<S> + Send + Sync + 'static,
+        fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
         #[allow(unused)] // this is used with `feature = "ssr"`
         blocking: bool,
     ) -> ArcResource<T, Ser>
@@ -323,26 +350,27 @@ where
         let is_ready = initial.is_some();
 
         let refetch = ArcRwSignal::new(0);
-        let source = ArcMemo::new({
-            let refetch = refetch.clone();
-            move |_| (refetch.get(), run_in_resource_source_signal(&source))
-        });
+        let source = try_source(&refetch, source);
         let fun = {
             let source = source.clone();
             move || {
                 let (_, source) = source.get();
-                let fut = fetcher(source);
+                let fut = source.map(&fetcher);
                 async move {
                     if IS_SUPPRESSING_RESOURCE_LOAD.load(Ordering::Relaxed) {
                         pending().await
                     } else {
-                        fut.await
+                        // `None`: no source value yet, so nothing is fetched
+                        match fut {
+                            Some(fut) => Some(fut.await),
+                            None => None,
+                        }
                     }
                 }
             }
         };
 
-        let data = ArcAsyncDerived::new_with_manual_dependencies(
+        let data = ArcAsyncDerived::new_try_with_manual_dependencies(
             initial, fun, &source,
         );
         if is_ready {
@@ -410,6 +438,26 @@ where
         // wrapping, not saturating: every refetch must change the value the source compares
         self.refetch.update(|n| *n = n.wrapping_add(1));
     }
+}
+
+/// The source of a resource: the refetch count, and the last value of `source` that was
+/// `Some` (`None` only until there is one). A `None` from `source` leaves it as it was, so
+/// the resource fetches nothing: a memo notifies its subscribers only when its value changes.
+pub(crate) fn try_source<S>(
+    refetch: &ArcRwSignal<usize>,
+    source: impl Fn() -> Option<S> + Send + Sync + 'static,
+) -> ArcMemo<(usize, Option<S>)>
+where
+    S: PartialEq + Clone + Send + Sync + 'static,
+{
+    let refetch = refetch.clone();
+    ArcMemo::new(move |previous: Option<&(usize, Option<S>)>| {
+        let refetch = refetch.get();
+        match run_in_resource_source_signal(&source) {
+            Some(source) => (refetch, Some(source)),
+            None => previous.cloned().unwrap_or((refetch, None)),
+        }
+    })
 }
 
 /// A resource's value from the server, read from the page while hydrating: `None` if the
@@ -531,6 +579,38 @@ where
         Fut: Future<Output = T> + Send + 'static,
     {
         ArcResource::new_with_options(source, fetcher, true)
+    }
+
+    /// Creates a new resource with the encoding [`JsonSerdeCodec`] whose `source` may have no
+    /// value: `None` means "no fetch" (see
+    /// [`new_try_with_options`](ArcResource::new_try_with_options)).
+    #[track_caller]
+    pub fn new_try<S, Fut>(
+        source: impl Fn() -> Option<S> + Send + Sync + 'static,
+        fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
+    ) -> Self
+    where
+        S: PartialEq + Clone + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+        Fut: Future<Output = T> + Send + 'static,
+    {
+        ArcResource::new_try_with_options(source, fetcher, false)
+    }
+
+    /// Creates a new blocking resource with the encoding [`JsonSerdeCodec`] whose `source` may
+    /// have no value: `None` means "no fetch" (see
+    /// [`new_try_with_options`](ArcResource::new_try_with_options)).
+    #[track_caller]
+    pub fn new_try_blocking<S, Fut>(
+        source: impl Fn() -> Option<S> + Send + Sync + 'static,
+        fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
+    ) -> Self
+    where
+        S: PartialEq + Clone + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+        Fut: Future<Output = T> + Send + 'static,
+    {
+        ArcResource::new_try_with_options(source, fetcher, true)
     }
 }
 
@@ -885,6 +965,50 @@ where
     {
         Resource::new_with_options(source, fetcher, true)
     }
+
+    /// Creates a new resource with the encoding [`JsonSerdeCodec`] whose `source` may have no
+    /// value: `None` means "no fetch". The `fetcher` is not called, and the resource stays as
+    /// it is (pending if it never loaded). See
+    /// [`new_try_with_options`](Resource::new_try_with_options).
+    ///
+    /// ```
+    /// # use halyard::prelude::*;
+    /// # async fn load_orders(customer: u32) -> Vec<String> { vec![] }
+    /// # #[component]
+    /// # pub fn Orders() -> impl IntoView {
+    /// let customer = RwSignal::new(Some(7_u32));
+    /// // nothing is fetched while there is no customer, or once `customer` is gone
+    /// let orders = Resource::new_try(move || customer.try_get()?, load_orders);
+    /// # }
+    /// ```
+    #[track_caller]
+    pub fn new_try<S, Fut>(
+        source: impl Fn() -> Option<S> + Send + Sync + 'static,
+        fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
+    ) -> Self
+    where
+        S: PartialEq + Clone + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+        Fut: Future<Output = T> + Send + 'static,
+    {
+        Resource::new_try_with_options(source, fetcher, false)
+    }
+
+    /// Creates a new blocking resource with the encoding [`JsonSerdeCodec`] whose `source` may
+    /// have no value: `None` means "no fetch" (see
+    /// [`new_try_with_options`](Resource::new_try_with_options)).
+    #[track_caller]
+    pub fn new_try_blocking<S, Fut>(
+        source: impl Fn() -> Option<S> + Send + Sync + 'static,
+        fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
+    ) -> Self
+    where
+        S: PartialEq + Clone + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+        Fut: Future<Output = T> + Send + 'static,
+    {
+        Resource::new_try_with_options(source, fetcher, true)
+    }
 }
 
 impl<T, Ser> Resource<T, Ser>
@@ -923,8 +1047,35 @@ where
         T: Send + Sync + 'static,
         Fut: Future<Output = T> + Send + 'static,
     {
+        Self::new_try_with_options(move || Some(source()), fetcher, blocking)
+    }
+
+    /// Creates a new resource with the encoding `Ser` whose `source` may have no value.
+    ///
+    /// Like [`new_with_options`](Self::new_with_options), but `source` returns an `Option`:
+    /// `None` means "no fetch". The `fetcher` is not called, and the resource stays as it is:
+    /// with the value it loaded last, or with the load under way, or pending if it never
+    /// loaded. A source that reads weak handles can use `?` on their `try_*` reads, so that a
+    /// handle whose value is gone fetches nothing. When the source gives a value again, the
+    /// resource loads if that value differs from the one it last loaded with, or if `refetch`
+    /// was called meanwhile (a `refetch` while the source is `None` fetches nothing then).
+    ///
+    /// A resource that never loaded is pending: a `<Suspense>` that reads it shows its
+    /// fallback, and on the server the page waits for it (so does a blocking resource), until
+    /// the source gives a value.
+    #[track_caller]
+    pub fn new_try_with_options<S, Fut>(
+        source: impl Fn() -> Option<S> + Send + Sync + 'static,
+        fetcher: impl Fn(S) -> Fut + Send + Sync + 'static,
+        blocking: bool,
+    ) -> Resource<T, Ser>
+    where
+        S: Send + Sync + Clone + PartialEq + 'static,
+        T: Send + Sync + 'static,
+        Fut: Future<Output = T> + Send + 'static,
+    {
         let ArcResource { data, refetch, .. }: ArcResource<T, Ser> =
-            ArcResource::new_with_options(source, fetcher, blocking);
+            ArcResource::new_try_with_options(source, fetcher, blocking);
         Resource {
             ser: PhantomData,
             data: data.into(),
@@ -1134,6 +1285,36 @@ mod tests {
             let data = page_data(&context);
 
             assert!(data.contains(&sent_for_resource_0(NOT_SENT)), "{data}");
+        }
+
+        /// `new_try`: while the source has no value nothing is fetched and the page waits;
+        /// once it has one, the resource loads and the page carries the value.
+        #[test]
+        fn a_try_resource_is_sent_once_its_source_has_a_value() {
+            use std::sync::atomic::AtomicUsize;
+
+            init_executor();
+            let (owner, context) = server_request();
+            let id = ArcRwSignal::new(None::<u32>);
+            let fetches = Arc::new(AtomicUsize::new(0));
+            let _resource = owner.with(|| {
+                let id = id.clone();
+                let fetches = Arc::clone(&fetches);
+                ArcResource::new_try(
+                    move || id.get(),
+                    move |id: u32| {
+                        fetches.fetch_add(1, Ordering::SeqCst);
+                        async move { id * 10 }
+                    },
+                )
+            });
+            assert_eq!(fetches.load(Ordering::SeqCst), 0);
+
+            id.set(Some(4));
+            let data = page_data(&context);
+
+            assert!(data.contains(&sent_for_resource_0("40")), "{data}");
+            assert_eq!(fetches.load(Ordering::SeqCst), 1);
         }
 
         /// A resource cleared after it loaded (`set(None)`) has no value to send: that

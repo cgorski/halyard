@@ -1,5 +1,5 @@
 // the prelude carries the router's and the head's everyday components and hooks
-use halyard::{prelude::*, router::params::Params};
+use halyard::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -121,20 +121,21 @@ pub struct PostParams {
 #[component]
 fn Post() -> impl IntoView {
     let query = use_params::<PostParams>();
+    // `None` once the page is gone: then the resources fetch nothing
     let id = move || {
-        query.with(|q| {
+        query.try_with(|q| {
             q.as_ref()
                 .map(|q| q.id.unwrap_or_default())
                 .map_err(|_| PostError::InvalidId)
         })
     };
-    let post_resource = Resource::new_blocking(id, |id| async move {
+    let post_resource = Resource::new_try_blocking(id, |id| async move {
         match id {
             Err(e) => Err(e),
             Ok(id) => get_post(id).await.ok_or(PostError::PostNotFound),
         }
     });
-    let comments_resource = Resource::new(id, |id| async move {
+    let comments_resource = Resource::new_try(id, |id| async move {
         match id {
             Err(e) => Err(e),
             Ok(id) => Ok(get_comments(id).await),

@@ -82,7 +82,7 @@ where
 ///         <div>
 ///             <button on:click=clear>"Clear"</button>
 ///             <button on:click=decrement>"-1"</button>
-///             <span>"Value: " {move || count.try_get().map(|count| count.unwrap_or(0))} "!"</span>
+///             <span>"Value: " {count.map(|count| count.unwrap_or(0))} "!"</span>
 ///             <button on:click=increment>"+1"</button>
 ///         </div>
 ///     }

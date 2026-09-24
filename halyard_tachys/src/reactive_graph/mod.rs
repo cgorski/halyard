@@ -916,7 +916,10 @@ mod stable {
         computed::{ArcMemo, Memo},
         effect::RenderEffect,
         owner::Storage,
-        signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
+        signal::{
+            ArcMappedSignal, ArcReadSignal, ArcRwSignal, MappedSignal,
+            ReadSignal, RwSignal,
+        },
         traits::{IsDisposed, TryGet},
         wrappers::read::{ArcSignal, MaybeProp, Signal, SignalTypes},
     };
@@ -979,6 +982,8 @@ mod stable {
     reactive_impl!(ArcReadSignal, <V>, V, false, ArcReadSignal<V>: TryGet<Value = V> + IsDisposed);
     reactive_impl!(ArcMemo, <V>, V, false, ArcMemo<V>: TryGet<Value = V> + IsDisposed);
     reactive_impl!(ArcSignal, <V>, V, true, ArcSignal<V>: TryGet<Value = V> + IsDisposed);
+    reactive_impl!(MappedSignal, <V>, V, false, MappedSignal<V>: TryGet<Value = V> + IsDisposed);
+    reactive_impl!(ArcMappedSignal, <V>, V, false, ArcMappedSignal<V>: TryGet<Value = V> + IsDisposed);
 }
 
 #[cfg(test)]

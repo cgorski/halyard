@@ -695,7 +695,10 @@ mod stable {
     use halyard_reactive_graph::{
         computed::{ArcMemo, Memo},
         owner::Storage,
-        signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
+        signal::{
+            ArcMappedSignal, ArcReadSignal, ArcRwSignal, MappedSignal,
+            ReadSignal, RwSignal,
+        },
         traits::{IsDisposed, TryGet},
         wrappers::read::{ArcSignal, Signal},
     };
@@ -743,6 +746,8 @@ mod stable {
     class_reactive!(ArcReadSignal, <V>, V, ArcReadSignal<V>: TryGet<Value = V> + IsDisposed);
     class_reactive!(ArcMemo, <V>, V, ArcMemo<V>: TryGet<Value = V> + IsDisposed);
     class_reactive!(ArcSignal, <V>, V, ArcSignal<V>: TryGet<Value = V> + IsDisposed);
+    class_reactive!(MappedSignal, <V>, V, MappedSignal<V>: TryGet<Value = V> + IsDisposed);
+    class_reactive!(ArcMappedSignal, <V>, V, ArcMappedSignal<V>: TryGet<Value = V> + IsDisposed);
 
     tuple_class_reactive!(
         RwSignal,
@@ -788,6 +793,8 @@ mod stable {
     tuple_class_reactive!(ArcReadSignal,<>, <bool>, ArcReadSignal<bool>: TryGet<Value = bool> + IsDisposed);
     tuple_class_reactive!(ArcMemo,<>, <bool>, ArcMemo<bool>: TryGet<Value = bool> + IsDisposed);
     tuple_class_reactive!(ArcSignal,<>, <bool>, ArcSignal<bool>: TryGet<Value = bool> + IsDisposed);
+    tuple_class_reactive!(MappedSignal,<>, <bool>, MappedSignal<bool>: TryGet<Value = bool> + IsDisposed);
+    tuple_class_reactive!(ArcMappedSignal,<>, <bool>, ArcMappedSignal<bool>: TryGet<Value = bool> + IsDisposed);
 }
 
 /*

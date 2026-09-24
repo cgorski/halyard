@@ -382,7 +382,8 @@ pub fn ContactForm(contacts: RwSignal<Vec<Contact>>) -> impl IntoView {
 ```
 
 The one read that could panic today (after the `.await`) is now explicit; the view
-closures are gone; the handler says what happens if its fields are gone.
+closures are gone; the handler says what happens if its fields are gone. (This example is
+compiled and rendered as it stands by `halyard/tests/no_panics_example.rs`.)
 
 ### Size of the change
 
@@ -473,17 +474,57 @@ The design above is implemented as written, with these changes and details:
   `Memo::new_try` (so also `.memo(...)` and the `memo!` macro) and a signal made with
   `Signal::derive_try` (so also `.map(...)`) have no strong form: `upgrade` gives `None`,
   because a strong handle to them could not read total.
-- **Rendering.** A weak handle rendered as a child or as an attribute, property, class,
-  style or inner-HTML value renders as an `Option` of its value: nothing when gone
-  (reported once per handle). A class toggle (`class:name=flag`) renders without the
-  class, and a `TextProp` made from a handle renders empty text. `<Show when>`, `<For each>`
-  and `<ForEnumerate each>` take a closure or a handle (trait `ViewSource`): when gone,
-  `<Show>` renders nothing (neither children nor fallback) and `<For>` renders no rows.
-  `<ShowLet some=signal>` also renders nothing when the signal is gone.
+- **Rendering.** A handle (weak or strong: signals, memos, `Signal`, `MaybeProp`, mapped
+  signals, and what `map`/`memo` give) renders as a child or as an attribute, property,
+  class (`class=`, `class:name=`, `class=("name", flag)`), style (`style=`, `style:name=`)
+  or inner-HTML value as an `Option` of its value: nothing when gone (reported once per
+  handle, at the place it was made, e.g. the `.map(...)` call). A class toggle renders
+  without the class, and a `TextProp` made from a handle renders empty text. `<Show when>`,
+  `<For each>`, `<ForEnumerate each>` and `<ShowLet some>` take a closure or a handle
+  (traits `ViewSource`, `IntoOptionGetter`): when gone, `<Show>` and `<ShowLet>` render
+  nothing (neither children nor fallback) and `<For>` renders no rows. What makes a derived
+  handle "gone" is `IsDisposed`: for a memo made with `Memo::new_try` (so `.memo(...)`) and
+  a signal made with `Signal::derive_try` (so `.map(...)`), it is also true while the value
+  is missing because a source is gone. (B4, 2026-09-24: until then `Signal` and the arena
+  `Memo` had no `IsDisposed`, so none of these positions accepted them or `map`/`memo`
+  results, and mapped signals were not accepted at all.) Tests:
+  `halyard/tests/handles_in_views.rs` (every position, live and gone, and a hydrate
+  type-check), `halyard/tests/no_panics_example.rs` (the example above).
 - **Resources.** Their `From<weak> for Arc...` conversions did not panic (they gave a
   resource that never loads, with a warning); they are replaced by `upgrade()` all the
   same, so that a gone resource is visible as `None`. `refetch` is an `update` (a logged
   no-op when gone).
+- **A source that may have no value** (B4). `Resource::new_try(source, fetcher)` (also
+  `new_try_blocking`, `new_try_with_options`, the `ArcResource` forms, and
+  `LocalResource::new_try`/`ArcLocalResource::new_try`) takes a `source` returning
+  `Option<S>`, typically `move || id.try_get()?`. `None` means "no fetch": the fetcher is
+  not called, and the resource stays as it is (the value it loaded last, a load under way,
+  or pending if it never loaded). When the source gives a value again, the resource loads if
+  that value differs from the one it last loaded with, or if `refetch` was called meanwhile
+  (a `refetch` while the source is `None` fetches nothing then). A resource that never
+  loaded is pending: a `<Suspense>` shows its fallback, and on the server the page waits for
+  it until the source gives a value. `new` and `new_with_options` are `new_try` with a source
+  that always has a value. Underneath, the source is a memo of the last `Some` value (a
+  `None` leaves it unchanged, so the resource is not notified), and a load whose future
+  gives `None` (only before the first value) leaves the value and the loading state as they
+  were (`ArcAsyncDerived::new_try_with_manual_dependencies`/`new_try_unsync`, doc hidden).
+  `OnceResource` has no source, so it has no `new_try`. Tests:
+  `halyard/tests/resource_new_try.rs` (reactive graph: no fetch while `None`, keeps its value,
+  a gone handle, `refetch`, `new` unchanged, the local resource; server: `<Suspense>` shows its
+  fallback) and `server::resource` (the page carries the value once the source has one).
+- **No lock across an `.await`** (B4). A load used to swap its result in with
+  `value.write().await`: while a reader held the value (a guard from `by_ref().await` kept
+  across an `.await`, or a read on another thread) the loader queued as a writer, which
+  keeps new readers out, so a strong read made meanwhile found the lock busy: in the browser
+  that reached `wait_for`'s abort, natively it waited for whatever the loader waited for. A
+  load now never holds or queues for the value's lock while it is suspended: when its result
+  is ready it tries the lock, and if a reader holds it, it waits without taking it and tries
+  again when a guard of the value is let go of (every read guard of an async value, and a
+  synchronous write, wakes it: `ReleaseWaker`). Meanwhile reads give the previous value.
+  The resources load through `ArcAsyncDerived` and hold no lock across an `.await`
+  themselves. Test: `tests/async_derived.rs`
+  (`a_strong_read_does_not_wait_for_a_loader_that_waits_for_a_reader`: a strong read on
+  another thread while a loader waits for a reader; it timed out before).
 - **Callbacks.** `Callable` keeps `try_run`; the total `run` is the `Run` trait, for
   `ArcCallback`/`ArcUnsyncCallback` (any output) and for `Callback`/`UnsyncCallback` whose
   output is `()`.
@@ -528,4 +569,7 @@ they can be swapped later.
       everywhere; writes replace or change a copy); a memo read inside its own
       recomputation gives its previous value; `wait_for` never spins on its own thread (the
       first-computation self-read aborts: the one documented abort, "As implemented")
+- [x] B4: every handle and what `map`/`memo` give render in every view position; resources
+      with a source that may have no value (`new_try`); no lock across an `.await` in async
+      derived values and resources; the worked example above compiles as a test
 - [ ] Changes 1 to 7 above (2 remains for `StoredValue` closures and the DOM layer)

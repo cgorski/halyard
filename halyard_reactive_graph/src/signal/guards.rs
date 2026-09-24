@@ -4,6 +4,7 @@ pub use super::commit::SignalWriteGuard;
 use crate::{
     computed::BlockingLock,
     error::{Access, GraphError, ReportOnce},
+    or_poisoned::OrPoisoned,
     reentry::{self, lock_id, Held, SINGLE_THREADED},
     traits::{Notify, UntrackableGuard},
 };
@@ -237,11 +238,49 @@ impl<T: Display> Display for Plain<T> {
     }
 }
 
+/// The task waiting to swap a result into an async value once no one holds its lock (an
+/// async derived value's loader). The loader never queues for the lock as a writer, because
+/// a queued writer keeps new readers out for as long as it waits; so every guard of the value
+/// wakes it when it lets go ([`OnRelease`]), and so does a synchronous write.
+#[derive(Debug, Default)]
+pub(crate) struct ReleaseWaker(std::sync::Mutex<Option<std::task::Waker>>);
+
+impl ReleaseWaker {
+    /// Wakes `waker` at the next release (replacing a waker registered before).
+    pub(crate) fn wake_at_release(&self, waker: &std::task::Waker) {
+        let mut slot = self.0.lock().or_poisoned();
+        if !slot.as_ref().is_some_and(|slot| slot.will_wake(waker)) {
+            *slot = Some(waker.clone());
+        }
+    }
+
+    /// The value's lock was let go of: wakes the waiting task, if any.
+    pub(crate) fn released(&self) {
+        let waker = self.0.lock().or_poisoned().take();
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+/// Calls [`ReleaseWaker::released`] when dropped: the last field of a guard, so that it runs
+/// after the lock guard is released.
+#[derive(Debug)]
+pub(crate) struct OnRelease(pub(crate) Arc<ReleaseWaker>);
+
+impl Drop for OnRelease {
+    fn drop(&mut self) {
+        self.0.released();
+    }
+}
+
 /// A guard that provides access to an async signal's value.
 pub struct AsyncPlain<T: 'static> {
     guard: async_lock::RwLockReadGuardArc<T>,
     // after `guard`: the lock is released before it stops being recorded as held
     _held: Held,
+    // last: wakes a task waiting for the lock once it is released
+    on_release: Option<OnRelease>,
 }
 
 impl<T: 'static> Debug for AsyncPlain<T> {
@@ -279,7 +318,17 @@ impl<T: 'static> AsyncPlain<T> {
         Self {
             guard,
             _held: Held::new(lock_id(&**lock)),
+            on_release: None,
         }
+    }
+
+    /// Wakes the task waiting on `waker` for the lock when this guard is dropped.
+    pub(crate) fn waking_at_release(
+        mut self,
+        waker: &Arc<ReleaseWaker>,
+    ) -> Self {
+        self.on_release = Some(OnRelease(Arc::clone(waker)));
+        self
     }
 }
 
@@ -298,6 +347,8 @@ impl<T> Deref for AsyncPlain<T> {
 /// that holds it waits for it to be dropped.
 pub struct AsyncAwaited<T: 'static> {
     pub(crate) guard: async_lock::RwLockReadGuardArc<T>,
+    // after `guard`: wakes a task waiting for the lock once it is released
+    pub(crate) _on_release: OnRelease,
 }
 
 impl<T: 'static> Debug for AsyncAwaited<T> {

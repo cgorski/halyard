@@ -7,15 +7,20 @@ use halyard_reactive_graph::{
     computed::{ArcMemo, Memo},
     gone::render_value,
     owner::Storage,
-    signal::{ArcReadSignal, ArcRwSignal, ReadSignal, RwSignal},
+    signal::{
+        ArcMappedSignal, ArcReadSignal, ArcRwSignal, MappedSignal, ReadSignal,
+        RwSignal,
+    },
     traits::{Get, IsDisposed, TryGet},
     wrappers::read::{ArcSignal, Signal},
 };
 use halyard_tachys::either::EitherOf3;
 
 /// The source of a [`<Show when=…>`](Show) or a [`<For each=…>`](crate::control_flow::For):
-/// a closure, or a signal handle (weak or strong), so that `when=flag` and `each=items` work
-/// without a closure.
+/// a closure, or a signal handle (weak or strong: a signal, memo, [`Signal`], mapped signal,
+/// or what [`map`](halyard_reactive_graph::map::Map::map) and
+/// [`memo`](halyard_reactive_graph::map::Map::memo) give), so that `when=flag` and
+/// `each=items` work without a closure.
 ///
 /// A weak handle whose value is gone gives `None` (reported once): `<Show>` renders nothing,
 /// `<For>` renders no rows.
@@ -66,6 +71,8 @@ handle_sources!(
     [] ArcReadSignal<T>,
     [S: Storage<T>] ArcMemo<T, S>,
     [S: Storage<T>] ArcSignal<T, S>,
+    [] MappedSignal<T>,
+    [] ArcMappedSignal<T>,
 );
 
 #[component(transparent)]

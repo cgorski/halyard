@@ -5,7 +5,7 @@ use crate::{
         guards::{Mapped, Plain, ReadGuard},
         ArcReadSignal,
     },
-    traits::{DefinedAt, Dispose, Get, Track, TryReadUntracked},
+    traits::{DefinedAt, Dispose, Get, IsDisposed, Track, TryReadUntracked},
 };
 use std::{fmt::Debug, hash::Hash, panic::Location};
 
@@ -339,6 +339,21 @@ where
         {
             None
         }
+    }
+}
+
+impl<T, S> IsDisposed for Memo<T, S>
+where
+    T: 'static,
+    S: Storage<ArcMemo<T, S>> + Storage<T>,
+{
+    /// `true` once the memo is gone, and for a memo made with [`Memo::new_try`] (or
+    /// [`Map::memo`](crate::map::Map::memo)) also while its function gives no value because
+    /// a source it reads is gone.
+    fn is_disposed(&self) -> bool {
+        self.inner
+            .try_get_value()
+            .is_none_or(|memo| memo.has_no_value())
     }
 }
 

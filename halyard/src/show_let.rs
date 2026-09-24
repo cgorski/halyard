@@ -58,7 +58,8 @@ use std::{marker::PhantomData, sync::Arc};
 /// # }
 /// ```
 ///
-/// In addition to signals you can also use a closure that returns an `Option`:
+/// In addition to signals you can also use what [`map`](halyard_reactive_graph::map::Map::map)
+/// gives, or a closure that returns an `Option`:
 ///
 /// ```
 /// # use halyard::prelude::*;
@@ -68,8 +69,11 @@ use std::{marker::PhantomData, sync::Arc};
 /// let (opt_value, set_opt_value) = signal(None::<i32>);
 ///
 /// view! {
-///     <ShowLet some=move || opt_value.try_get().flatten().map(|v| v * 2) let:value>
+///     <ShowLet some=opt_value.map(|v| v.map(|v| v * 2)) let:value>
 ///         "We have a value: " {value}
+///     </ShowLet>
+///     <ShowLet some=move || opt_value.try_get().flatten().map(|v| v * 3) let:value>
+///         "Or: " {value}
 ///     </ShowLet>
 /// }
 /// # }

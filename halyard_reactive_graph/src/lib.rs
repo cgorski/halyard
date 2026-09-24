@@ -60,7 +60,14 @@
 //! one (`None` if the value is gone), and `downgrade()` (or `From`) the reverse. To derive
 //! from weak handles, use [`map`](traits::Map::map)/[`memo`](traits::Map::memo) (also over a
 //! tuple of handles), [`Signal::derive_try`](wrappers::read::Signal::derive_try) or
-//! [`Memo::new_try`](computed::Memo::new_try).
+//! [`Memo::new_try`](computed::Memo::new_try). What they give is gone while any source is
+//! gone, and renders like any other handle: as a child, an attribute, property, class, style
+//! or inner-HTML value, or the source of a `<Show>` or `<For>` (nothing when gone).
+//!
+//! An async derived value ([`ArcAsyncDerived`](computed::ArcAsyncDerived), and the resources
+//! built on it) never holds its value's lock across an `.await`: a load that is ready swaps its
+//! result in, and waits (without taking the lock) while a reader holds the value, so a
+//! synchronous read always finds the previous value meanwhile.
 //!
 //! ## Writes
 //!
