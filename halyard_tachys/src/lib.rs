@@ -1,7 +1,9 @@
 //! Allows rendering user interfaces based on a statically-typed view tree.
 //!
-//! This view tree is generic over rendering backends, and agnostic about reactivity/change
-//! detection.
+//! Views render to the DOM, render to HTML on the server, and hydrate server-rendered HTML.
+//! Reactive values from `halyard_reactive_graph` (signals, memos, closures) are views and
+//! attribute values that update themselves. The crate also holds the small building blocks
+//! the view types are made of: [`either`], [`oco`] and [`next_tuple`].
 
 #![deny(missing_docs)]
 
@@ -55,7 +57,9 @@ pub mod svg;
 pub mod view;
 mod view_error;
 
-pub use halyard_either_of as either;
+/// Enums of several possible types (`Either`, `EitherOf3`, ...), each of which renders the
+/// variant it holds.
+pub mod either;
 #[cfg(feature = "islands")]
 #[doc(hidden)]
 pub use wasm_bindgen;
@@ -63,15 +67,22 @@ pub use wasm_bindgen;
 #[doc(hidden)]
 pub use web_sys;
 
-/// View implementations for the `oco_ref` crate (cheaply-cloned string types).
-#[cfg(feature = "oco")]
+/// [`Oco`](oco::Oco), a cheaply cloned string or slice ("owned or clone-on-write"), and
+/// its views.
 pub mod oco;
-/// View implementations for the `reactive_graph` crate.
-#[cfg(feature = "reactive_graph")]
+/// View implementations for `halyard_reactive_graph`'s signals, memos and other reactive
+/// values.
 pub mod reactive_graph;
 
 /// A type-erased container.
 pub mod erased;
+
+/// Concatenates `&'static str` slices in `const` contexts (element templates).
+#[doc(hidden)]
+pub mod const_str_slice_concat;
+/// Takes the next item onto a tuple (`(A, B)` becomes `(A, B, C)`), for building views and
+/// attribute lists.
+pub mod next_tuple;
 
 pub(crate) trait UnwrapOrDebug {
     type Output;

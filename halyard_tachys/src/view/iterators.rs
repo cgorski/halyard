@@ -3,13 +3,13 @@ use super::{
     list_diff::{never, ListError},
     Mountable, Position, PositionState, Render, RenderHtml,
 };
+use crate::either::Either;
 use crate::{
     html::attribute::{any_attribute::AnyAttribute, Attribute},
     hydration::Cursor,
     renderer::Rndr,
     ssr::StreamBuilder,
 };
-use halyard_either_of::Either;
 use itertools::Itertools;
 
 /// Retained view state for an `Option`.

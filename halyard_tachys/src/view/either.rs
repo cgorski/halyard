@@ -2,6 +2,7 @@ use super::{
     add_attr::AddAnyAttr, MarkBranch, Mountable, Position, PositionState,
     Render, RenderHtml,
 };
+use crate::either::*;
 use crate::{
     html::attribute::{
         any_attribute::AnyAttribute, Attribute, NamedAttributeKey,
@@ -12,7 +13,6 @@ use crate::{
     view_error::{report_once, ViewError},
 };
 use futures::future::join;
-use halyard_either_of::*;
 use std::sync::atomic::AtomicBool;
 
 impl<A, B> Render for Either<A, B>

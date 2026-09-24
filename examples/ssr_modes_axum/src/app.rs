@@ -1,11 +1,5 @@
-use halyard::prelude::*;
-use halyard_meta::{MetaTags, *};
-use halyard_router::{
-    components::{FlatRoutes, ProtectedRoute, Route, Router},
-    hooks::use_params,
-    params::Params,
-    ParamSegment, SsrMode, StaticSegment,
-};
+// the prelude carries the router's and the head's everyday components and hooks
+use halyard::{prelude::*, router::params::Params};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use thiserror::Error;

@@ -71,7 +71,7 @@ fn provider_outside_any_owner_provides_its_value() {
 async fn suspense_reading_a_local_resource_without_shared_context_renders_the_fallback(
 ) {
     use futures::StreamExt;
-    use halyard_any_spawner::Executor;
+    use halyard_reactive_graph::executor::Executor;
 
     _ = Executor::init_tokio();
     let owner = Owner::new();
@@ -92,7 +92,7 @@ async fn suspense_reading_a_local_resource_without_shared_context_renders_the_fa
 async fn transition_reading_a_local_resource_without_shared_context_renders_the_fallback(
 ) {
     use futures::StreamExt;
-    use halyard_any_spawner::Executor;
+    use halyard_reactive_graph::executor::Executor;
 
     _ = Executor::init_tokio();
     let owner = Owner::new();

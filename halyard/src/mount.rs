@@ -1,12 +1,11 @@
 #[cfg(debug_assertions)]
 use crate::logging;
 use crate::IntoView;
-use halyard_any_spawner::Executor;
+use halyard_reactive_graph::executor::Executor;
 use halyard_reactive_graph::owner::Owner;
-use halyard_tachys::{
-    dom::document,
-    view::{Mountable, Render},
-};
+#[cfg(any(feature = "hydrate", test))]
+use halyard_tachys::dom::document;
+use halyard_tachys::view::{Mountable, Render};
 #[cfg(feature = "hydrate")]
 use halyard_tachys::{
     hydration::Cursor,
@@ -18,7 +17,8 @@ use std::cell::Cell;
 use wasm_bindgen::JsCast;
 use web_sys::HtmlElement;
 
-/// Why [`hydrate_body`], [`hydrate_lazy`] or [`mount_to_body`] did not start the app.
+/// Why [`hydrate_body`] or [`hydrate_lazy`] did not start the app.
+#[cfg(any(feature = "hydrate", test))]
 #[derive(Debug, thiserror::Error)]
 enum MountError {
     #[error(
@@ -37,6 +37,7 @@ enum MountError {
 
 /// The `<body>` to start the app in; `None`, logged, if there is no document or it has no
 /// `<body>`.
+#[cfg(any(feature = "hydrate", test))]
 fn body_or_report(during: &'static str) -> Option<HtmlElement> {
     let error = match document() {
         None => MountError::NoDocument { during },
@@ -193,7 +194,9 @@ where
     F: FnOnce() -> N + 'static,
     N: IntoView,
 {
-    use halyard_hydration_context::{HydrateSharedContext, SharedContext};
+    use halyard_reactive_graph::hydration_context::{
+        HydrateSharedContext, SharedContext,
+    };
     use std::sync::Arc;
 
     crate::logging::warn!(
@@ -236,7 +239,7 @@ where
     F: Fn() -> N + 'static,
     N: IntoView,
 {
-    use halyard_hydration_context::HydrateSharedContext;
+    use halyard_reactive_graph::hydration_context::HydrateSharedContext;
     use halyard_tachys::hydration::take_hydration_failure;
     use std::sync::Arc;
 
@@ -304,7 +307,7 @@ where
     F: Fn() -> N + 'static,
     N: IntoView,
 {
-    use halyard_hydration_context::HydrateSharedContext;
+    use halyard_reactive_graph::hydration_context::HydrateSharedContext;
     use halyard_tachys::hydration::take_hydration_failure;
     use std::sync::Arc;
 
@@ -362,22 +365,6 @@ where
     Some(UnmountHandle { owner, mountable })
 }
 
-/// Runs the provided closure and mounts the result to the `<body>`.
-///
-/// Without a document or a `<body>` (see [`halyard_tachys::dom::body`]) this logs an error
-/// and does nothing: `f` is not run.
-pub fn mount_to_body<F, N>(f: F)
-where
-    F: FnOnce() -> N + 'static,
-    N: IntoView,
-{
-    let Some(body) = body_or_report("mount_to_body()") else {
-        return;
-    };
-    let owner = mount_to(body, f);
-    owner.forget();
-}
-
 /// Runs the provided closure and mounts the result to the provided element.
 pub fn mount_to<F, N>(parent: HtmlElement, f: F) -> UnmountHandle<N::State>
 where
@@ -416,38 +403,12 @@ where
     UnmountHandle { owner, mountable }
 }
 
-/// Runs the provided closure and mounts the result to the provided element.
-pub fn mount_to_renderer<F, N>(
-    parent: &halyard_tachys::renderer::types::Element,
-    f: F,
-) -> UnmountHandle<N::State>
-where
-    F: FnOnce() -> N + 'static,
-    N: Render,
-{
-    // use wasm-bindgen-futures to drive the reactive system
-    // we ignore the return value because an Err here just means the wasm-bindgen executor is
-    // already initialized, which is not an issue
-    _ = Executor::init_wasm_bindgen();
-
-    // create a new reactive owner and use it as the root node to run the app
-    let owner = Owner::new();
-    let mountable = owner.with(move || {
-        let view = f();
-        let mut mountable = view.build();
-        mountable.mount(parent, None);
-        mountable
-    });
-
-    // returns a handle that owns the owner
-    // when this is dropped, it will clean up the reactive system and unmount the view
-    UnmountHandle { owner, mountable }
-}
-
 /// Hydrates any islands that are currently present on the page.
 #[cfg(feature = "hydrate")]
 pub fn hydrate_islands() {
-    use halyard_hydration_context::{HydrateSharedContext, SharedContext};
+    use halyard_reactive_graph::hydration_context::{
+        HydrateSharedContext, SharedContext,
+    };
     use std::sync::Arc;
 
     // use wasm-bindgen-futures to drive the reactive system
@@ -511,21 +472,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    /// A native build (as these tests) has no document. `mount_to_body` panicked there;
-    /// it logs an error and does nothing, without running the app.
+    /// A native build (as these tests) has no document. Starting the app there used to
+    /// panic; the entry points find no `<body>`, log an error and do nothing.
     #[test]
-    fn mount_to_body_without_a_document_does_nothing() {
-        use std::sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        };
-
-        let ran = Arc::new(AtomicBool::new(false));
-        super::mount_to_body({
-            let ran = Arc::clone(&ran);
-            move || ran.store(true, Ordering::Relaxed)
-        });
-        assert!(!ran.load(Ordering::Relaxed));
+    fn without_a_document_there_is_no_body_to_start_in() {
+        assert!(super::body_or_report("a test").is_none());
     }
 
     /// The same for `hydrate_body`; and the render-mode check, which also read the

@@ -11,40 +11,38 @@ rust-version.workspace = true
 edition.workspace = true
 
 [dependencies]
-halyard_throw_error = { workspace = true }
-halyard_any_spawner = { workspace = true, features = ["wasm-bindgen"] }
-base64 = { optional = true, workspace = true, default-features = true }
-cfg-if = { workspace = true, default-features = true }
-halyard_hydration_context = { workspace = true }
-halyard_either_of = { workspace = true }
-halyard_dom = { workspace = true }
 halyard_macro = { workspace = true }
-halyard_server = { workspace = true, features = ["tachys"] }
-halyard_config = { workspace = true }
-halyard_oco = { workspace = true }
-halyard_or_poisoned = { workspace = true }
-rand = { optional = true, workspace = true, default-features = true }
-# NOTE: While not used directly, `getrandom`'s `wasm_js` feature is needed when `rand` is used on WASM to
-#       avoid a compilation error
-getrandom = { optional = true, workspace = true, default-features = true }
-halyard_reactive_graph = { workspace = true, features = ["serde"] }
+halyard_reactive_graph = { workspace = true, features = ["serde", "hydration"] }
+halyard_tachys = { workspace = true }
+base64 = { workspace = true, default-features = true }
+futures = { workspace = true, default-features = true }
 rustc-hash = { workspace = true, default-features = true }
-halyard_tachys = { workspace = true, features = [
-  "reactive_graph",
-  "oco",
-] }
+send_wrapper = { workspace = true, default-features = true }
+serde = { features = [
+  "derive",
+  "rc",
+], workspace = true, default-features = true }
+serde_json = { workspace = true, default-features = true }
+serde_qs = { workspace = true, default-features = true }
+slotmap = { workspace = true, default-features = true }
 thiserror = { workspace = true, default-features = true }
 tracing = { optional = true, workspace = true, default-features = true }
 typed-builder = { workspace = true, default-features = true }
 typed-builder-macro = { workspace = true, default-features = true }
-serde = { workspace = true, default-features = true }
-serde_json = { workspace = true, default-features = true }
-
+wasm-bindgen = { workspace = true, default-features = true }
+wasm-bindgen-futures = { workspace = true, default-features = true }
+wasm_split_helpers = { workspace = true, default-features = true }
+js-sys = { workspace = true, default-features = true }
 web-sys = { features = [
+  "Document",
+  "Window",
+  "console",
+  "Location",
+  # portals
   "ShadowRoot",
   "ShadowRootInit",
   "ShadowRootMode",
-  # for `form::FromFormData`
+  # forms (`form::FromFormData`, the router's `<Form/>`)
   "Event",
   "FormData",
   "HtmlButtonElement",
@@ -52,63 +50,107 @@ web-sys = { features = [
   "HtmlInputElement",
   "SubmitEvent",
   "UrlSearchParams",
+  # the router: history and links
+  "History",
+  "HtmlAnchorElement",
+  "MouseEvent",
+  "Url",
+  # the router: fetching pages and posting forms
+  "Headers",
+  "Request",
+  "RequestInit",
+  "RequestMode",
+  "Response",
+  # meta
+  "HtmlLinkElement",
+  "HtmlMetaElement",
+  "HtmlTitleElement",
 ], workspace = true, default-features = true }
-wasm-bindgen = { workspace = true, default-features = true }
-wasm-bindgen-futures = { workspace = true, default-features = true }
-serde_qs = { workspace = true, default-features = true }
-slotmap = { workspace = true, default-features = true }
-futures = { workspace = true, default-features = true }
-send_wrapper = { workspace = true, default-features = true }
-wasm_split_helpers = { workspace = true, default-features = true }
+# config
+config = { default-features = false, features = [
+  "toml",
+  "convert-case",
+], workspace = true }
+# server (resources)
+codee = { features = ["json_serde"], workspace = true, default-features = true }
+# meta
+html-escape = { workspace = true, default-features = true }
+# router
+gloo-net = { workspace = true, default-features = true }
+percent-encoding = { optional = true, workspace = true, default-features = true }
+url = { workspace = true, default-features = true }
+# axum integration
+axum = { optional = true, default-features = false, features = [
+  "matched-path",
+], workspace = true }
+tokio = { optional = true, default-features = false, workspace = true }
+tower = { optional = true, features = [
+  "util",
+], workspace = true, default-features = true }
+tower-http = { optional = true, workspace = true, default-features = true }
+
+# nonces are generated on the server only; the browser reads the one the server rendered
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rand = { optional = true, workspace = true, default-features = true }
 
 [features]
-hydration = [
-  "halyard_reactive_graph/hydration",
-  "halyard_server/hydration",
-  "halyard_hydration_context/browser",
-  "halyard_dom/hydration",
-]
+# server-side rendering and hydration share the data the server sends with the page
+hydration = ["halyard_reactive_graph/browser"]
+# the browser build: hydrates server-rendered pages
 hydrate = [
   "halyard_macro/hydrate",
   "hydration",
   "halyard_tachys/hydrate",
   "halyard_reactive_graph/effects",
-  "getrandom?/wasm_js",
 ]
-ssr = [
-  "halyard_server/ssr",
-  "hydration",
-  "halyard_tachys/ssr",
+# the server build: renders pages to HTML (also enables the router's and meta's server side)
+ssr = ["hydration", "halyard_tachys/ssr", "dep:percent-encoding"]
+# the axum integration (`halyard::axum`): a native server on Tokio
+axum = [
+  "ssr",
+  "nonce",
+  "dep:axum",
+  "dep:tokio",
+  "dep:tower",
+  "dep:tower-http",
+  "axum/default",
+  "tokio/fs",
+  "tokio/sync",
+  "tower-http/fs",
+  "tower/util",
+  "halyard_reactive_graph/sandboxed-arenas",
 ]
 tracing = [
   "dep:tracing",
   "halyard_reactive_graph/tracing",
   "halyard_tachys/tracing",
   "halyard_macro/tracing",
-  "halyard_dom/tracing",
-  "halyard_server/tracing",
 ]
-nonce = ["base64", "rand", "dep:getrandom"]
+nonce = ["dep:rand"]
 islands = ["halyard_macro/islands"]
-trace-component-props = [
-  "halyard_macro/trace-component-props",
-  "halyard_dom/trace-component-props",
-]
+trace-component-props = ["halyard_macro/trace-component-props"]
 delegation = ["halyard_tachys/delegation"]
-islands-router = ["halyard_tachys/mark_branches"]
+# the islands router: marks branches, and serializes the keys of keyed lists
+islands-router = ["halyard_tachys/mark_branches", "halyard_tachys/islands"]
 
 [dev-dependencies]
 tokio = { features = [
+  "rt",
   "rt-multi-thread",
   "macros",
+  "io-util",
+  "net",
+  "process",
+  "time",
 ], workspace = true, default-features = true }
 tokio-test = { workspace = true, default-features = true }
-halyard_any_spawner = { workspace = true, features = ["tokio"] }
-# for tests/render_mode.rs (dev-dependency cycles are allowed by cargo).
-# Path only, no version: halyard_meta depends on this crate, so it is
-# published later; cargo strips versionless dev-dependencies when publishing.
-halyard_meta = { path = "../halyard_meta", features = ["ssr"] }
-
+tempfile = { workspace = true, default-features = true }
+temp-env = { features = [
+  "async_closure",
+], workspace = true, default-features = true }
+anyhow = { workspace = true }
+axum = { workspace = true, default-features = true }
+reqwest = { workspace = true }
 
 # Having an erasure feature rather than normal --cfg erase_components for the proc macro crate is a workaround for this rust issue:
 # https://github.com/rust-lang/cargo/issues/4423
@@ -130,11 +172,15 @@ skip_feature_sets = [
     "ssr",
     "hydrate",
   ],
+  [
+    "axum",
+    "hydrate",
+  ],
 ]
 max_combination_size = 2
 
 [package.metadata.docs.rs]
-all-features = true
+features = ["ssr", "axum", "nonce", "islands", "tracing"]
 rustdoc-args = ["--generate-link-to-definition", "--cfg", "erase_components"]
 
 [lints.rust]

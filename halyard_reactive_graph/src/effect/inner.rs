@@ -1,3 +1,4 @@
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     channel::Sender,
     graph::{
@@ -5,7 +6,6 @@ use crate::{
         ToAnySubscriber,
     },
 };
-use halyard_or_poisoned::OrPoisoned;
 use std::sync::{Arc, RwLock, Weak};
 
 /// Handles internal subscription logic for effects.

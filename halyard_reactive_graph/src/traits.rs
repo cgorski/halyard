@@ -63,6 +63,7 @@
 //! there isn't an `RwLock` so you can't wrap in a [`ReadGuard`](crate::signal::guards::ReadGuard),
 //! but you can still implement [`WithUntracked`] and [`Track`], the same traits will still be implemented.
 
+use crate::executor::Executor;
 pub use crate::trait_options::*;
 use crate::{
     effect::Effect,
@@ -71,7 +72,6 @@ use crate::{
     signal::{arc_signal, guards::UntrackedWriteGuard, ArcReadSignal},
 };
 use futures::{Stream, StreamExt};
-use halyard_any_spawner::Executor;
 use std::{
     ops::{Deref, DerefMut},
     panic::Location,

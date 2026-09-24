@@ -1,5 +1,5 @@
 #[cfg(feature = "effects")]
-use halyard_any_spawner::Executor;
+use halyard_reactive_graph::executor::Executor;
 #[cfg(feature = "effects")]
 use halyard_reactive_graph::owner::Owner;
 #[cfg(feature = "effects")]

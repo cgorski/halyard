@@ -118,7 +118,6 @@ where
 {
     On {
         event,
-        #[cfg(feature = "reactive_graph")]
         owner: halyard_reactive_graph::owner::Owner::current()
             .unwrap_or_default(),
         cb: (!cfg!(feature = "ssr")).then(|| SendWrapper::new(cb)),
@@ -146,7 +145,6 @@ where
 /// An [`Attribute`] that adds an event listener to an element.
 pub struct On<E, F> {
     event: E,
-    #[cfg(feature = "reactive_graph")]
     owner: halyard_reactive_graph::owner::Owner,
     cb: Option<SendWrapper<F>>,
 }
@@ -159,7 +157,6 @@ where
     fn clone(&self) -> Self {
         Self {
             event: self.event.clone(),
-            #[cfg(feature = "reactive_graph")]
             owner: self.owner.clone(),
             cb: self.cb.clone(),
         }
@@ -204,7 +201,7 @@ where
         let span = tracing::Span::current();
 
         let cb = Box::new(move |ev: crate::renderer::types::Event| {
-            #[cfg(all(debug_assertions, feature = "reactive_graph"))]
+            #[cfg(debug_assertions)]
             let _rx_guard =
                 halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
             #[cfg(feature = "tracing")]
@@ -212,10 +209,7 @@ where
 
             let ev = E::EventType::from(ev);
 
-            #[cfg(feature = "reactive_graph")]
             self.owner.with(|| cb.invoke(ev));
-            #[cfg(not(feature = "reactive_graph"))]
-            cb.invoke(ev);
         }) as Box<dyn FnMut(crate::renderer::types::Event)>;
 
         attach_inner(
@@ -250,7 +244,7 @@ where
         let span = tracing::Span::current();
 
         let cb = Box::new(move |ev: crate::renderer::types::Event| {
-            #[cfg(all(debug_assertions, feature = "reactive_graph"))]
+            #[cfg(debug_assertions)]
             let _rx_guard =
                 halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
             #[cfg(feature = "tracing")]
@@ -258,10 +252,7 @@ where
 
             let ev = E::EventType::from(ev);
 
-            #[cfg(feature = "reactive_graph")]
             self.owner.with(|| cb.invoke(ev));
-            #[cfg(not(feature = "reactive_graph"))]
-            cb.invoke(ev);
         }) as Box<dyn FnMut(crate::renderer::types::Event)>;
 
         attach_inner(el, cb, self.event.name())
@@ -366,7 +357,6 @@ where
     fn into_cloneable(self) -> Self::Cloneable {
         On {
             cb: self.cb.map(|cb| SendWrapper::new(cb.take().into_shared())),
-            #[cfg(feature = "reactive_graph")]
             owner: self.owner,
             event: self.event,
         }
@@ -375,7 +365,6 @@ where
     fn into_cloneable_owned(self) -> Self::CloneableOwned {
         On {
             cb: self.cb.map(|cb| SendWrapper::new(cb.take().into_shared())),
-            #[cfg(feature = "reactive_graph")]
             owner: self.owner,
             event: self.event,
         }

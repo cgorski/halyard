@@ -1,7 +1,7 @@
 # Vendored copy of syn_derive 0.2.0 (https://github.com/Kyuuhachi/syn_derive,
 # MIT OR Apache-2.0). Changes from upstream: the package is renamed so it
 # cannot collide with crates.io, and the unmaintained `proc-macro-error2`
-# dependency is replaced by `halyard_macro_diagnostics` (see `src/lib.rs`).
+# dependency is replaced by a small `diagnostics` module (see `src/lib.rs`).
 # See `Cargo.toml.upstream` for the original manifest.
 [package]
 name = "halyard_syn_derive"
@@ -24,7 +24,6 @@ doctest = false
 syn = { workspace = true, default-features = true, features = ["parsing", "derive"] }
 quote = { workspace = true, default-features = true }
 proc-macro2 = { workspace = true, default-features = true }
-halyard_macro_diagnostics = { workspace = true }
 
 [features]
 full = ["syn/full"]

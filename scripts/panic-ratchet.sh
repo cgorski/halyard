@@ -3,7 +3,7 @@
 #
 # Counts every construct that can panic at run time in the library code of
 # each crate (clippy's panic lints; test code is not linted), in the three
-# builds that matter: default features, the server (ssr) feature set, and
+# builds that matter: default features, the server (ssr, axum) feature set, and
 # the browser (hydrate, wasm32). Fails if any crate has more sites than
 # `panic-baseline.txt` records. When you remove panics, run with `--update`
 # and commit the lower numbers; the numbers may only go down.
@@ -37,13 +37,12 @@ trap 'rm -rf "$WORK"' EXIT
 echo "== clippy: default features" >&2
 cargo clippy --workspace --lib --bins --message-format=json -q -- "${FLAGS[@]}" \
   > "$WORK/default.jsonl" 2>"$WORK/default.err" || { cat "$WORK/default.err" >&2; exit 1; }
-echo "== clippy: server (ssr)" >&2
-cargo clippy -p halyard_axum -p halyard_router -p halyard_meta \
-  --features halyard_router/ssr,halyard_meta/ssr --lib --message-format=json -q -- "${FLAGS[@]}" \
+echo "== clippy: server (ssr, axum)" >&2
+cargo clippy -p halyard --features axum --lib --message-format=json -q -- "${FLAGS[@]}" \
   > "$WORK/ssr.jsonl" 2>"$WORK/ssr.err" || { cat "$WORK/ssr.err" >&2; exit 1; }
 echo "== clippy: browser (hydrate, wasm32)" >&2
-cargo clippy -p halyard -p halyard_router -p halyard_meta --no-default-features \
-  --features halyard/hydrate --target wasm32-unknown-unknown --lib --message-format=json -q -- "${FLAGS[@]}" \
+cargo clippy -p halyard --no-default-features \
+  --features hydrate --target wasm32-unknown-unknown --lib --message-format=json -q -- "${FLAGS[@]}" \
   > "$WORK/hydrate.jsonl" 2>"$WORK/hydrate.err" || { cat "$WORK/hydrate.err" >&2; exit 1; }
 
 # One line per distinct site: crate <TAB> lint <TAB> file:line:col. The crate

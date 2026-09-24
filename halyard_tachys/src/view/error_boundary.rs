@@ -1,12 +1,12 @@
 use super::{add_attr::AddAnyAttr, Position, PositionState, RenderHtml};
+use crate::either::Either;
 use crate::{
     html::attribute::{any_attribute::AnyAttribute, Attribute},
     hydration::Cursor,
     ssr::StreamBuilder,
     view::{iterators::OptionState, Mountable, Render},
 };
-use halyard_either_of::Either;
-use halyard_throw_error::{Error as AnyError, ErrorHook};
+use halyard_reactive_graph::throw_error::{Error as AnyError, ErrorHook};
 use std::sync::Arc;
 
 impl<T, E> Render for Result<T, E>
@@ -17,27 +17,31 @@ where
     type State = ResultState<T>;
 
     fn build(self) -> Self::State {
-        let hook = halyard_throw_error::get_error_hook();
+        let hook = halyard_reactive_graph::throw_error::get_error_hook();
         let (state, error) = match self {
             Ok(view) => (Either::Left(view.build()), None),
             Err(e) => (
                 Either::Right(Render::build(())),
-                Some(halyard_throw_error::throw(e.into())),
+                Some(halyard_reactive_graph::throw_error::throw(e.into())),
             ),
         };
         ResultState { state, error, hook }
     }
 
     fn rebuild(self, state: &mut Self::State) {
-        let _guard =
-            state.hook.clone().map(halyard_throw_error::set_error_hook);
+        let _guard = state
+            .hook
+            .clone()
+            .map(halyard_reactive_graph::throw_error::set_error_hook);
         match (&mut state.state, self) {
             // both errors: throw the new error and replace
             (Either::Right(_), Err(new)) => {
                 if let Some(old_error) = state.error.take() {
-                    halyard_throw_error::clear(&old_error);
+                    halyard_reactive_graph::throw_error::clear(&old_error);
                 }
-                state.error = Some(halyard_throw_error::throw(new.into()));
+                state.error = Some(halyard_reactive_graph::throw_error::throw(
+                    new.into(),
+                ));
             }
             // both Ok: need to rebuild child
             (Either::Left(old), Ok(new)) => {
@@ -49,12 +53,13 @@ where
                 old.insert_before_this(&mut new_state);
                 old.unmount();
                 state.state = Either::Right(new_state);
-                state.error = Some(halyard_throw_error::throw(err));
+                state.error =
+                    Some(halyard_reactive_graph::throw_error::throw(err));
             }
             // Err => Ok: clear error and build
             (Either::Right(old), Ok(new)) => {
                 if let Some(err) = state.error.take() {
-                    halyard_throw_error::clear(&err);
+                    halyard_reactive_graph::throw_error::clear(&err);
                 }
                 let mut new_state = new.build();
                 old.insert_before_this(&mut new_state);
@@ -72,7 +77,7 @@ where
 {
     /// The view state.
     state: OptionState<T>,
-    error: Option<halyard_throw_error::ErrorId>,
+    error: Option<halyard_reactive_graph::throw_error::ErrorId>,
     hook: Option<Arc<dyn ErrorHook>>,
 }
 
@@ -84,7 +89,7 @@ where
         // when the state is cleared, unregister this error; this item is being dropped and its
         // error should no longer be shown
         if let Some(e) = self.error.take() {
-            halyard_throw_error::clear(&e);
+            halyard_reactive_graph::throw_error::clear(&e);
         }
     }
 }
@@ -184,7 +189,7 @@ where
             }
             Err(e) => {
                 buf.push_str("<!>");
-                halyard_throw_error::throw(e);
+                halyard_reactive_graph::throw_error::throw(e);
             }
         }
     }
@@ -209,7 +214,7 @@ where
             ),
             Err(e) => {
                 buf.push_sync("<!>");
-                halyard_throw_error::throw(e);
+                halyard_reactive_graph::throw_error::throw(e);
             }
         }
     }
@@ -219,7 +224,7 @@ where
         cursor: &Cursor,
         position: &PositionState,
     ) -> Self::State {
-        let hook = halyard_throw_error::get_error_hook();
+        let hook = halyard_reactive_graph::throw_error::get_error_hook();
         let (state, error) = match self {
             Ok(view) => (
                 Either::Left(view.hydrate::<FROM_SERVER>(cursor, position)),
@@ -230,7 +235,7 @@ where
                     RenderHtml::hydrate::<FROM_SERVER>((), cursor, position);
                 (
                     Either::Right(state),
-                    Some(halyard_throw_error::throw(e.into())),
+                    Some(halyard_reactive_graph::throw_error::throw(e.into())),
                 )
             }
         };
@@ -242,7 +247,7 @@ where
         cursor: &Cursor,
         position: &PositionState,
     ) -> Self::State {
-        let hook = halyard_throw_error::get_error_hook();
+        let hook = halyard_reactive_graph::throw_error::get_error_hook();
         let (state, error) = match self {
             Ok(view) => (
                 Either::Left(view.hydrate_async(cursor, position).await),
@@ -253,7 +258,7 @@ where
                     RenderHtml::hydrate_async((), cursor, position).await;
                 (
                     Either::Right(state),
-                    Some(halyard_throw_error::throw(e.into())),
+                    Some(halyard_reactive_graph::throw_error::throw(e.into())),
                 )
             }
         };

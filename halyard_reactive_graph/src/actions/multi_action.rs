@@ -24,7 +24,7 @@ use std::{fmt::Debug, future::Future, panic::Location, pin::Pin, sync::Arc};
 /// # use halyard_reactive_graph::actions::*;
 /// # use halyard_reactive_graph::prelude::*;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 /// async fn send_new_todo_to_api(task: String) -> usize {
 ///   // do something...
@@ -105,7 +105,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// // if there's a single argument, just use that
     /// let action1 = MultiAction::new(|input: &String| {
@@ -151,7 +151,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// async fn send_new_todo_to_api(task: String) -> usize {
     ///   // do something...
@@ -180,7 +180,7 @@ where
     ///
     /// // when submissions resolve, they are not removed from the set
     /// // however, their `pending` signal is now `false`, and this can be used to filter them
-    /// # halyard_any_spawner::Executor::tick().await;
+    /// # halyard_reactive_graph::executor::Executor::tick().await;
     /// assert_eq!(submissions.with(Vec::len), 3);
     /// assert_eq!(pending_submissions(), 0);
     /// # });
@@ -202,7 +202,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// async fn send_new_todo_to_api(task: String) -> usize {
     ///   // do something...
@@ -245,7 +245,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// async fn send_new_todo_to_api(task: String) -> usize {
     ///   // do something...
@@ -286,7 +286,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// async fn send_new_todo_to_api(task: String) -> usize {
     ///   // do something...
@@ -305,7 +305,7 @@ where
     /// add_todo.dispatch("Profit!!!".to_string());
     ///
     /// assert_eq!(version.get(), 0);
-    /// # halyard_any_spawner::Executor::tick().await;
+    /// # halyard_reactive_graph::executor::Executor::tick().await;
     ///
     /// // when they've all resolved
     /// assert_eq!(version.get(), 3);
@@ -336,7 +336,7 @@ where
 /// # use halyard_reactive_graph::actions::*;
 /// # use halyard_reactive_graph::prelude::*;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 /// async fn send_new_todo_to_api(task: String) -> usize {
 ///   // do something...
@@ -403,7 +403,7 @@ impl<I, O> ArcMultiAction<I, O> {
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// // if there's a single argument, just use that
     /// let action1 = ArcMultiAction::new(|input: &String| {
@@ -452,7 +452,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// async fn send_new_todo_to_api(task: String) -> usize {
     ///   // do something...
@@ -484,7 +484,7 @@ where
     ///
     /// // when submissions resolve, they are not removed from the set
     /// // however, their `pending` signal is now `false`, and this can be used to filter them
-    /// # halyard_any_spawner::Executor::tick().await;
+    /// # halyard_reactive_graph::executor::Executor::tick().await;
     /// assert_eq!(submissions.with(Vec::len), 3);
     /// assert_eq!(pending_submissions(), 0);
     /// # });
@@ -531,7 +531,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// async fn send_new_todo_to_api(task: String) -> usize {
     ///   // do something...
@@ -582,7 +582,7 @@ impl<I, O> ArcMultiAction<I, O> {
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// async fn send_new_todo_to_api(task: String) -> usize {
     ///   // do something...
@@ -612,7 +612,7 @@ impl<I, O> ArcMultiAction<I, O> {
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// async fn send_new_todo_to_api(task: String) -> usize {
     ///   // do something...
@@ -631,7 +631,7 @@ impl<I, O> ArcMultiAction<I, O> {
     /// add_todo.dispatch("Profit!!!".to_string());
     ///
     /// assert_eq!(version.get(), 0);
-    /// # halyard_any_spawner::Executor::tick().await;
+    /// # halyard_reactive_graph::executor::Executor::tick().await;
     ///
     /// // when they've all resolved
     /// assert_eq!(version.get(), 3);

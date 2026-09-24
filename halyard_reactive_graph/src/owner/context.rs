@@ -1,5 +1,5 @@
+use crate::or_poisoned::OrPoisoned;
 use crate::owner::Owner;
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     any::{Any, TypeId},
     collections::VecDeque,
@@ -149,7 +149,7 @@ impl Owner {
 /// # let owner = Owner::new(); owner.set();
 /// # use halyard_reactive_graph::effect::Effect;
 /// # futures::executor::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio();
+/// # halyard_reactive_graph::executor::Executor::init_tokio();
 /// Effect::new(move |_| {
 ///     println!("Provider");
 ///     provide_context(42i32); // provide an i32
@@ -182,7 +182,7 @@ impl Owner {
 /// # let owner = Owner::new(); owner.set();
 /// # use halyard_reactive_graph::effect::Effect;
 /// # futures::executor::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio();
+/// # halyard_reactive_graph::executor::Executor::init_tokio();
 /// Effect::new(move |_| {
 ///     println!("Provider");
 ///     provide_context("foo"); // provide a &'static str
@@ -231,7 +231,7 @@ pub fn provide_context<T: Send + Sync + 'static>(value: T) {
 /// # let owner = Owner::new(); owner.set();
 /// # use halyard_reactive_graph::effect::Effect;
 /// # futures::executor::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio();
+/// # halyard_reactive_graph::executor::Executor::init_tokio();
 /// Effect::new(move |_| {
 ///     provide_context(String::from("foo"));
 ///
@@ -279,7 +279,7 @@ pub fn use_context<T: Clone + 'static>() -> Option<T> {
 /// # let owner = Owner::new(); owner.set();
 /// # use halyard_reactive_graph::effect::Effect;
 /// # futures::executor::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio();
+/// # halyard_reactive_graph::executor::Executor::init_tokio();
 /// Effect::new(move |_| {
 ///     provide_context(String::from("foo"));
 ///
@@ -336,7 +336,7 @@ pub fn expect_context<T: Clone + 'static>() -> T {
 /// # let owner = Owner::new(); owner.set();
 /// # use halyard_reactive_graph::effect::Effect;
 /// # futures::executor::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio();
+/// # halyard_reactive_graph::executor::Executor::init_tokio();
 ///
 /// #[derive(Debug, PartialEq)]
 /// struct NotClone(String);
@@ -381,7 +381,7 @@ pub fn take_context<T: 'static>() -> Option<T> {
 /// # let owner = Owner::new(); owner.set();
 /// # use halyard_reactive_graph::effect::Effect;
 /// # futures::executor::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio();
+/// # halyard_reactive_graph::executor::Executor::init_tokio();
 /// Effect::new(move |_| {
 ///     provide_context(String::from("foo"));
 ///
@@ -420,7 +420,7 @@ pub fn with_context<T: 'static, R>(cb: impl FnOnce(&T) -> R) -> Option<R> {
 /// # let owner = Owner::new(); owner.set();
 /// # use halyard_reactive_graph::effect::Effect;
 /// # futures::executor::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio();
+/// # halyard_reactive_graph::executor::Executor::init_tokio();
 /// Effect::new(move |_| {
 ///     provide_context(String::from("foo"));
 ///

@@ -1,38 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-  # utilities
-  "halyard_any_spawner",
-  "halyard_const_str_slice_concat",
-  "halyard_either_of",
-  "halyard_next_tuple",
-  "halyard_oco",
-  "halyard_or_poisoned",
-
-  # core
-  "halyard_hydration_context",
   "halyard",
-  "halyard_dom",
-  "halyard_config",
   "halyard_macro",
-  "halyard_macro_diagnostics",
-  "halyard_server",
   "halyard_reactive_graph",
   "halyard_tachys",
-
-  # integrations
-  "integrations/halyard_axum",
-  "integrations/halyard_integration_utils",
 
   # vendored third-party crates (see third_party/*/Cargo.toml and NOTICE)
   "third_party/halyard_rstml",
   "third_party/halyard_syn_derive",
-
-  # libraries
-  "halyard_meta",
-  "halyard_router",
-  "halyard_router_macro",
-  "halyard_throw_error",
 ]
 exclude = ["examples"]
 
@@ -41,31 +17,13 @@ edition = "2021"
 rust-version = "1.88"
 
 [workspace.dependencies]
-# members (directory names are kept from upstream to ease `git merge upstream/main`;
-# the crate names are what matter)
-halyard_throw_error = { path = "./halyard_throw_error/", version = "0.1.0" }
-halyard_any_spawner = { path = "./halyard_any_spawner/", version = "0.1.0" }
-halyard_const_str_slice_concat = { path = "./halyard_const_str_slice_concat", version = "0.1.0" }
-halyard_either_of = { path = "./halyard_either_of/", version = "0.1.0" }
-halyard_hydration_context = { path = "./halyard_hydration_context", version = "0.1.0" }
+# members
 halyard = { path = "./halyard", version = "0.1.0" }
-halyard_config = { path = "./halyard_config", version = "0.1.0" }
-halyard_dom = { path = "./halyard_dom", version = "0.1.0" }
-halyard_integration_utils = { path = "./integrations/halyard_integration_utils", version = "0.1.0" }
 halyard_macro = { path = "./halyard_macro", version = "0.1.0" }
-halyard_macro_diagnostics = { path = "./halyard_macro_diagnostics", version = "0.1.0" }
-halyard_router = { path = "./halyard_router", version = "0.1.0" }
-halyard_router_macro = { path = "./halyard_router_macro", version = "0.1.0" }
-halyard_server = { path = "./halyard_server", version = "0.1.0" }
-halyard_meta = { path = "./halyard_meta", version = "0.1.0" }
-halyard_next_tuple = { path = "./halyard_next_tuple", version = "0.1.0" }
-halyard_oco = { path = "./halyard_oco", version = "0.1.0" }
-halyard_or_poisoned = { path = "./halyard_or_poisoned", version = "0.1.0" }
 halyard_reactive_graph = { path = "./halyard_reactive_graph", version = "0.1.0" }
 halyard_tachys = { path = "./halyard_tachys", version = "0.1.0" }
 
 # members deps
-async-once-cell = { default-features = false, version = "0.5" }
 itertools = { default-features = false, version = "0.14" }
 convert_case = { default-features = false, version = "0.11" }
 convert_case_extras = { default-features = false, version = "0.2" }
@@ -90,12 +48,10 @@ gloo-net = { default-features = false, version = "0.6" }
 url = { default-features = false, version = "2.5" }
 tokio = { default-features = false, version = "1.49" }
 base64 = { default-features = false, version = "0.22" }
-cfg-if = { default-features = false, version = "1.0" }
 wasm-bindgen-futures = { default-features = false, version = "0.4" }
 tower = { default-features = false, version = "0.5" }
 proc-macro2 = { default-features = false, version = "1.0" }
 serde = { default-features = false, version = "1.0" }
-parking_lot = { default-features = false, version = "0.12" }
 axum = { default-features = false, version = "0.8" }
 serde_qs = { default-features = false, version = "0.15" }
 syn = { default-features = false, version = "2.0" }
@@ -105,14 +61,11 @@ web-sys = { default-features = false, version = "0.3" }
 js-sys = { default-features = false, version = "0.3" }
 rand = { default-features = false, version = "0.9" }
 erased = { default-features = false, version = "0.1" }
-async-trait = { default-features = false, version = "0.1" }
 anyhow = { default-features = false, version = "1.0" }
 tower-http = { default-features = false, version = "0.6" }
 prettyplease = { default-features = false, version = "0.2" }
 config = { default-features = false, version = "0.15" }
 temp-env = { default-features = false, version = "0.3" }
-uuid = { default-features = false, version = "1.20" }
-drain_filter_polyfill = { default-features = false, version = "0.1" }
 tempfile = { default-features = false, version = "3.24" }
 log = { default-features = false, version = "0.4" }
 percent-encoding = { default-features = false, version = "2.3" }
@@ -121,11 +74,7 @@ attribute-derive = { default-features = false, version = "0.10" }
 insta = { default-features = false, version = "1.46" }
 codee = { default-features = false, version = "0.3" }
 wasm-bindgen-test = { default-features = false, version = "0.3" }
-getrandom = { default-features = false, version = "0.4" }
 async-lock = { default-features = false, version = "3.4" }
-base16 = { default-features = false, version = "0.2" }
-digest = { default-features = false, version = "0.10" }
-sha2 = { default-features = false, version = "0.10" }
 wasm_split_helpers = { default-features = false, version = "0.2.1" }
 
 [profile.release]

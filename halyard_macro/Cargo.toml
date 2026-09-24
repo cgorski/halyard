@@ -5,7 +5,7 @@ publish = ["crates-io"]
 authors = ["Greg Johnston"]
 license = "MIT"
 repository = "https://github.com/cgorski/halyard"
-description = "view macro for the Halyard web framework."
+description = "The macros of the Halyard web framework: view!, #[component], #[island], path!, #[lazy_route] and more."
 readme = "../README.md"
 rust-version.workspace = true
 edition.workspace = true
@@ -14,11 +14,9 @@ edition.workspace = true
 proc-macro = true
 
 [dependencies]
-halyard_macro_diagnostics = { workspace = true }
 attribute-derive = { features = [
   "syn-full",
 ], workspace = true, default-features = true }
-cfg-if = { workspace = true, default-features = true }
 html-escape = { workspace = true, default-features = true }
 itertools = { workspace = true, default-features = true }
 prettyplease = { workspace = true, default-features = true }
@@ -28,17 +26,15 @@ syn = { features = ["full"], workspace = true, default-features = true }
 rstml = { workspace = true, default-features = true }
 convert_case = { workspace = true, default-features = true }
 convert_case_extras = { workspace = true, default-features = true }
-uuid = { features = ["v4"], workspace = true, default-features = true }
 tracing = { optional = true, workspace = true, default-features = true }
 
 [dev-dependencies]
 log = { workspace = true, default-features = true }
 typed-builder = { workspace = true, default-features = true }
 trybuild = { workspace = true, default-features = true }
-# Path only, no version: these depend on this crate, so they are published
-# later; cargo strips versionless dev-dependencies when publishing.
-halyard = { path = "../halyard" }
-halyard_router = { path = "../halyard_router", features = ["ssr"] }
+# Path only, no version: halyard depends on this crate, so it is published later;
+# cargo strips versionless dev-dependencies when publishing.
+halyard = { path = "../halyard", features = ["ssr"] }
 insta = { workspace = true, default-features = true }
 serde = { workspace = true, default-features = true }
 

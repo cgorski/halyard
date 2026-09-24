@@ -37,8 +37,12 @@ a disposed signal read after an `await`, or from a re-entrant lock.
 
 `scripts/panic-ratchet.sh` counts panicking constructs in library code, in three builds
 (default features; server; browser on wasm32), per crate: 616 at the first count, 613
-after `c426d9a3`. CI fails if a crate's count rises. The table is the first count, plus
-what clippy cannot see:
+after `c426d9a3`, 93 on 2026-09-24 (in `halyard_macro` 42, `halyard_tachys` 31, the vendored
+`halyard_rstml` 17, `halyard_reactive_graph` 3, `halyard` 0). CI fails if a crate's count
+rises. The table is the first count, plus what clippy cannot see. It names the crates of
+that time: `halyard_router`, `halyard_dom`, `halyard_axum` and `halyard_integration_utils`
+are modules of `halyard` now (`router`, `dom`, `axum`, `integration_utils`), and
+`halyard_server_fn_macro` was removed with server functions.
 
 | Class | Where | Count | Reaches users? |
 |---|---|---|---|
@@ -49,7 +53,7 @@ what clippy cannot see:
 | `RefCell` borrow conflicts | `halyard_tachys` 45, router 8, reactive graph 10 | 65 | yes (re-entrant event handlers) |
 | lock held while user code runs | `Callback::run` (`with_value(\|f\| f(input))`), `StoredValue::with_value`, `debounce` (`cb.write().unwrap()(arg)`) | several | yes: re-entry **deadlocks** natively and **aborts** in wasm (std's single-threaded lock calls `rtabort!` on a conflicting acquisition) |
 | `unwrap_throw`/`expect_throw` | `halyard_dom` 7, router 2, `halyard` 1 | 10 | yes |
-| proc-macro panics | `halyard_macro`, `halyard_rstml` (and `halyard_server_fn_macro`, since removed with server functions) | ~120 | compile time only: should be `compile_error!` spans |
+| proc-macro panics | `halyard_macro`, `halyard_rstml`, `halyard_server_fn_macro` | ~120 | compile time only: should be `compile_error!` spans |
 
 ## Is the poisoning a smell?
 
@@ -78,7 +82,7 @@ ratchet.
    outlives its component and reads a signal after an `.await`.
    `task::spawn_local` becomes owner-scoped and cancelled on the owner's cleanup;
    `spawn_local_detached` is the explicit opt-out. Timers, intervals, animation frames
-   and window listeners in `halyard_dom` register their cancellation with the current
+   and window listeners in `halyard::dom` register their cancellation with the current
    owner too (`debounce` already does). Until this is released, applications should use
    `spawn_local_scoped_with_cancellation` and can forbid the unscoped spawns with
    clippy's `disallowed-methods`.
@@ -91,8 +95,8 @@ ratchet.
    typed capability, not unwrapped from thread-locals.
 4. **Keyed and either views without index arithmetic.** Rewrite the diff over checked
    iteration; on an invariant violation, log it and rebuild the list from scratch.
-5. **Server request path.** `halyard_axum`, `halyard_integration_utils`: every `unwrap`
-   becomes a typed error that renders a 500 with a request id.
+5. **Server request path.** `halyard::axum` and `halyard::integration_utils`: every
+   `unwrap` becomes a typed error that renders a 500 with a request id.
 6. **Macros.** Every macro panic becomes a `syn::Error` on the offending span.
 7. **Per crate: panic lints to `deny`** once the crate's count is zero.
 

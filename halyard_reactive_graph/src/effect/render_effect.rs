@@ -1,3 +1,4 @@
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     channel::channel,
     effect::inner::EffectInner,
@@ -10,7 +11,6 @@ use crate::{
     reentry::{held_by_this_thread, lock_id, Held},
 };
 use futures::StreamExt;
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     fmt::Debug,
     future::{Future, IntoFuture},
@@ -117,7 +117,7 @@ where
                 owner.with(|| subscriber.with_observer(|| fun(initial_value))),
             );
 
-            halyard_any_spawner::Executor::spawn_local({
+            crate::executor::Executor::spawn_local({
                 let value = Arc::clone(&value);
 
                 async move {
@@ -184,7 +184,7 @@ where
                 .await;
             *value.write().or_poisoned() = Some(initial);
 
-            halyard_any_spawner::Executor::spawn_local({
+            crate::executor::Executor::spawn_local({
                 let value = Arc::clone(&value);
 
                 async move {

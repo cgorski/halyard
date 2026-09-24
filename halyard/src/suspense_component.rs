@@ -4,9 +4,10 @@ use crate::{
     IntoView,
 };
 use futures::{channel::oneshot, select, FutureExt};
-use halyard_hydration_context::SerializedDataId;
 use halyard_macro::component;
-use halyard_or_poisoned::OrPoisoned;
+use halyard_reactive_graph::hydration_context::SerializedDataId;
+use halyard_reactive_graph::or_poisoned::OrPoisoned;
+use halyard_reactive_graph::throw_error::ErrorHookFuture;
 use halyard_reactive_graph::{
     computed::{
         suspense::{LocalResourceNotifier, SuspenseContext},
@@ -32,7 +33,6 @@ use halyard_tachys::{
         Mountable, Position, PositionState, Render, RenderHtml,
     },
 };
-use halyard_throw_error::ErrorHookFuture;
 use slotmap::{DefaultKey, SlotMap};
 use std::sync::{Arc, Mutex};
 

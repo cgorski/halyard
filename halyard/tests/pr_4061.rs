@@ -2,7 +2,7 @@
 mod imports {
     pub use futures::StreamExt;
     pub use halyard::prelude::*;
-    pub use halyard_any_spawner::Executor;
+    pub use halyard_reactive_graph::executor::Executor;
 }
 
 #[cfg(feature = "ssr")]

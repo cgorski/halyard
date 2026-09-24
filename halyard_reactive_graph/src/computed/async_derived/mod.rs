@@ -112,12 +112,12 @@ impl<Fut: Future> Future for ScopedFutureUntrackedWithDiagnostics<Fut> {
 
 /// Utilities used to track whether asynchronous computeds are currently loading.
 pub mod suspense {
+    use crate::or_poisoned::OrPoisoned;
     use crate::{
         signal::ArcRwSignal,
         traits::{Update, Write},
     };
     use futures::channel::oneshot::Sender;
-    use halyard_or_poisoned::OrPoisoned;
     use slotmap::{DefaultKey, SlotMap};
     use std::sync::{Arc, Mutex};
 

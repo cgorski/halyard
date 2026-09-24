@@ -9,14 +9,17 @@
 //! navigations and mutations once the WASM has loaded. With islands, only the components
 //! marked `#[island]` are hydrated.
 //!
-//! The API is Leptos 0.8's with the crates renamed (`leptos` → `halyard`, `leptos_router` →
-//! `halyard_router`, ...; `LeptosOptions` → [`HalyardOptions`](halyard_config::HalyardOptions)),
-//! so the upstream [Leptos Book](https://book.leptos.dev/) and
-//! [examples](https://github.com/leptos-rs/leptos/tree/main/examples) apply. What the fork
-//! changes is documented in the repository `README.md`; the user-visible parts are:
+//! The API is Leptos 0.8's, gathered into one crate: `leptos` is `halyard`, and
+//! `leptos_router`, `leptos_meta` and `leptos_axum` are the modules [`router`], [`meta`] and
+//! `axum` (with the `axum` feature); `LeptosOptions` is
+//! [`HalyardOptions`](halyard::config::HalyardOptions). So the upstream
+//! [Leptos Book](https://book.leptos.dev/) and
+//! [examples](https://github.com/leptos-rs/leptos/tree/main/examples) apply, with those paths.
+//! What the fork changes is documented in the repository `README.md`; the user-visible parts
+//! are:
 //!
 //! - the WASM/JS file names are resolved at **runtime** from
-//!   [`HalyardOptions`](halyard_config::HalyardOptions) (see
+//!   [`HalyardOptions`](halyard::config::HalyardOptions) (see
 //!   [`HydrationScripts`](hydration::HydrationScripts) and the `wasm_file_name` option);
 //! - every runtime setting is read from `HALYARD_*` with the legacy `LEPTOS_*` as a fallback;
 //! - a hydration mismatch logs one detailed error and falls back to client-side rendering
@@ -34,15 +37,26 @@
 //!     and [`Action`](halyard::prelude::Action) to mutate data or imperatively call `async` functions.
 //!   + reactions: [`Effect`](halyard::prelude::Effect) and [`RenderEffect`](halyard::prelude::RenderEffect).
 //! - **Templating/Views**: the [`view`] macro and [`IntoView`] trait.
-//! - **Routing**: the [`halyard_router`](https://docs.rs/leptos_router/latest/leptos_router/) crate
+//! - **Routing**: the [`router`] module (`<Router/>`, `<Routes/>`, `<Route/>`, `<A/>`, hooks).
+//! - **The document's `<head>`**: the [`meta`] module (`<Title/>`, `<Meta/>`, `<Link/>`, ...).
+//! - **Serving**: the `axum` module, with the `axum` feature (`HalyardRoutes`,
+//!   `generate_route_list`, `file_and_error_handler`).
+//!
+//! [`prelude`] brings in what most components use, including the router's and the head's
+//! everyday components and hooks.
 //!
 //! # Feature Flags
 //!
-//! - **`ssr`** Server-side rendering: Generate an HTML string (typically on the server).
+//! - **`ssr`** Server-side rendering: Generate an HTML string (typically on the server). Also
+//!   turns on the server side of the router and of the head's tags.
+//! - **`axum`** The axum integration (`halyard::axum`): serves an application's pages on a
+//!   native server running on Tokio. Implies `ssr` and `nonce`.
 //! - **`islands`** Activates “islands mode,” in which components are not made interactive on the
 //!   client unless they use the `#[island]` macro.
+//! - **`islands-router`** Client-side navigation between pages in islands mode.
 //! - **`hydrate`** Hydration: use this to add interactivity to an SSRed Halyard app.
-//! - **`nonce`** Adds support for nonces to be added as part of a Content Security Policy.
+//! - **`nonce`** Adds support for nonces to be added as part of a Content Security Policy. The
+//!   server generates them; the browser build only reads the one on the page.
 //! - **`tracing`** Adds support for [`tracing`](https://docs.rs/tracing/latest/tracing/).
 //! - **`trace-component-props`** Adds `tracing` support for component props.
 //! - **`delegation`** Uses event delegation rather than the browser’s native event handling
@@ -53,7 +67,7 @@
 //! Resources send their data with the page as serde JSON (or, with `Resource::new_str`,
 //! through `ToString` and `FromStr`).
 //!
-//! **Important Note:** You must enable either `hydrate` or `ssr` to tell Halyard
+//! **Important Note:** You must enable either `hydrate` or `ssr` (or `axum`) to tell Halyard
 //! which build you are compiling. You should only enable one of these per build target,
 //! i.e., you should not have both `hydrate` and `ssr` enabled for your server binary, only `ssr`.
 //!
@@ -85,7 +99,7 @@
 //! ```
 //!
 //! The server build (`ssr`) renders the page, usually through the axum integration
-//! (`halyard_axum`); the browser build (`hydrate`) hydrates it with
+//! (`halyard::axum`, with the `axum` feature); the browser build (`hydrate`) hydrates it with
 //! `halyard::mount::hydrate_body` (or `hydrate_lazy`, for lazy routes and components, or
 //! `hydrate_islands` in islands mode).
 
@@ -102,15 +116,15 @@ pub mod prelude {
     // In the future, maybe we should remove this blanket export
     // However, it is definitely useful relative to looking up every struct etc.
     mod export_types {
+        pub use crate::config::*;
+        pub use crate::dom::helpers::*;
+        pub use crate::server::*;
         pub use crate::{
             callback::*, children::*, component::*, control_flow::*, error::*,
             form::*, hydration::*, into_view::*, mount::*, nonce::*,
             suspense::*, text_prop::*,
         };
-        pub use halyard_config::*;
-        pub use halyard_dom::helpers::*;
         pub use halyard_macro::*;
-        pub use halyard_oco::*;
         pub use halyard_reactive_graph::{
             actions::*,
             computed::*,
@@ -120,10 +134,27 @@ pub mod prelude {
             signal::*,
             wrappers::{read::*, write::*},
         };
-        pub use halyard_server::*;
+        pub use halyard_tachys::oco::*;
         pub use halyard_tachys::{
             reactive_graph::{bind::BindAttribute, node_ref::*, Suspend},
             view::{fragment::Fragment, template::ViewTemplate},
+        };
+        // the router's and the head's everyday items
+        pub use crate::meta::{
+            provide_meta_context, Body, HashedStylesheet, Html, Link, Meta,
+            MetaTags, Script, Style, Stylesheet, Title,
+        };
+        pub use crate::router::{
+            components::{
+                FlatRoutes, Form, Outlet, ParentRoute, ProtectedParentRoute,
+                ProtectedRoute, Redirect, Route, Router, Routes, A,
+            },
+            hooks::{
+                use_location, use_navigate, use_params, use_params_map,
+                use_query, use_query_map,
+            },
+            path, LazyRoute, NavigateOptions, OptionalParamSegment,
+            ParamSegment, SsrMode, StaticSegment, WildcardSegment,
         };
     }
     pub use export_types::*;
@@ -149,7 +180,7 @@ mod error_boundary;
 /// Tools for handling errors.
 pub mod error {
     pub use crate::error_boundary::*;
-    pub use halyard_throw_error::*;
+    pub use halyard_reactive_graph::throw_error::*;
 }
 
 /// Control-flow components like `<Show>`, `<For>`, and `<Await>`.
@@ -213,23 +244,36 @@ pub use typed_builder;
 #[doc(hidden)]
 pub use typed_builder_macro;
 mod into_view;
-#[doc(inline)]
-pub use halyard_dom;
 pub use into_view::IntoView;
 mod provider;
 #[doc(inline)]
 pub use halyard_tachys as tachys;
+/// The axum integration: serves the routes of an application, renders its pages and
+/// serves its static files.
+#[cfg(feature = "axum")]
+pub mod axum;
+/// Runtime configuration: [`HalyardOptions`](config::HalyardOptions), read from
+/// `HALYARD_*` variables and `Cargo.toml` metadata.
+pub mod config;
+/// Browser helpers: `window()`, `document()`, event listeners, timers.
+pub mod dom;
+#[cfg(feature = "axum")]
+mod integration_utils;
+/// Tags that belong in the document's `<head>` (`<Title/>`, `<Meta/>`, `<Link/>`,
+/// `<Stylesheet/>`, ...), set from any component.
+pub mod meta;
 /// Tools to mount an application to the DOM, or to hydrate it from server-rendered HTML.
 pub mod mount;
+/// The router: `<Router/>`, `<Routes/>`, `<Route/>`, `<A/>`, `<Form/>`, route matching,
+/// hooks such as `use_navigate` and `use_params`, and the `path!` macro.
+pub mod router;
 #[doc(inline)]
-pub use halyard_config as config;
-#[doc(inline)]
-pub use halyard_oco as oco;
+pub use halyard_tachys::oco;
 
 #[doc(inline)]
-pub use halyard_either_of as either;
-#[doc(inline)]
 pub use halyard_reactive_graph as reactive;
+#[doc(inline)]
+pub use halyard_tachys::either;
 
 /// Provide and access data along the reactive graph, sharing data without directly passing arguments.
 pub mod context {
@@ -237,8 +281,9 @@ pub mod context {
     pub use halyard_reactive_graph::owner::{provide_context, use_context};
 }
 
-#[doc(inline)]
-pub use halyard_server as server;
+/// Resources (`Resource`, `OnceResource`, `LocalResource`) and `SharedValue`: data loaded
+/// on the server and sent to the browser with the page.
+pub mod server;
 /// HTML attribute types.
 #[doc(inline)]
 pub use halyard_tachys::html::attribute as attr;
@@ -255,17 +300,12 @@ pub use halyard_tachys::mathml as math;
 #[doc(inline)]
 pub use halyard_tachys::svg;
 
-/// Utilities for simple isomorphic logging to the console or terminal.
-pub mod logging {
-    pub use halyard_dom::{
-        debug_error, debug_log, debug_warn, error, log, warn,
-    };
-}
+pub mod logging;
 
 /// Utilities for working with asynchronous tasks.
 pub mod task {
-    use halyard_any_spawner::Executor;
     use halyard_reactive_graph::computed::ScopedFuture;
+    use halyard_reactive_graph::executor::Executor;
     use std::future::Future;
 
     /// Spawns a thread-safe [`Future`].

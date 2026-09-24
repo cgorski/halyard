@@ -18,7 +18,7 @@ serial-integration = { max-threads = 1 }
 # - https://github.com/nextest-rs/nextest/issues/209
 #
 # [[profile.default.overrides]]
-# filter = "binary_id(halyard_axum::axum_integration)"
+# filter = "binary_id(halyard::axum_integration)"
 # test-group = "serial-integration"
 
 # Ideally we want this to work to allow for as much as (relatively) cross-
@@ -28,10 +28,10 @@ serial-integration = { max-threads = 1 }
 #
 # ```
 # [scripts.setup.axum_integration_service_mode]
-# command = ["cargo", "halyard", "--manifest-path", "integrations/halyard_axum/tests/service_mode/Cargo.toml", "build"]
+# command = ["cargo", "halyard", "--manifest-path", "halyard/tests/service_mode/Cargo.toml", "build"]
 #
 # [[profile.default.scripts]]
-# filter = "binary_id(halyard_axum::axum_integration)"
+# filter = "binary_id(halyard::axum_integration)"
 # setup = ["axum_integration_service_mode"]
 # ```
 #
@@ -44,10 +44,10 @@ command = ["cmd", "/c", "scripts\\axum_integration_service_mode.bat"]
 
 [[profile.default.scripts]]
 platform = { host = "cfg(unix)" }
-filter = "binary_id(halyard_axum::axum_integration)"
+filter = "binary_id(halyard::axum_integration)"
 setup = ["axum_integration_service_mode_sh"]
 
 [[profile.default.scripts]]
 platform = { host = "cfg(windows)" }
-filter = "binary_id(halyard_axum::axum_integration)"
+filter = "binary_id(halyard::axum_integration)"
 setup = ["axum_integration_service_mode_bat"]

@@ -101,7 +101,7 @@ fn maybe_modify_return_type(ret: &mut ReturnType) {
                     false
                 }) {
                     *ty = parse_quote!(
-                        ::halyard_router::any_nested_route::AnyNestedRoute
+                        ::halyard::router::any_nested_route::AnyNestedRoute
                     );
                 }
             }
@@ -278,7 +278,7 @@ impl ToTokens for Model {
                         quote!()
                     } else {
                         quote! {
-                            ::halyard::halyard_dom::tracing_props![#prop_names];
+                            ::halyard::tracing_props![#prop_names];
                         }
                     },
                 )

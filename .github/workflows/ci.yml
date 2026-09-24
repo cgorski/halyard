@@ -44,26 +44,31 @@ jobs:
       - name: panic ratchet
         run: scripts/panic-ratchet.sh
 
-      # Tests run per crate, as upstream's CI does: a single `cargo test --workspace`
-      # unifies features across members (e.g. `halyard_reactive_graph/sandboxed-arenas`
-      # from the integrations) and that makes ~7 upstream test targets fail, both here
-      # and upstream. `halyard_axum`'s `axum_integration` test additionally needs a
-      # `cargo halyard build` of a fixture project (the sibling build tool is not
-      # available in this repo's CI), so only its unit and doc tests run.
+      # Tests run per crate: a single `cargo test --workspace` unifies features across
+      # members and that makes some test targets fail (see the README's known issues).
+      # halyard is tested in its three builds: default, `ssr`, and `axum` (the server
+      # integration). The `axum` integration test (`tests/axum_integration.rs`) needs a
+      # `cargo halyard build` of a fixture project, and the build tool is not available in
+      # this repository's CI, so with `axum` every other test target runs here.
       - name: cargo test (per crate)
         run: |
           set -euo pipefail
           for pkg in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
             echo "::group::cargo test -p $pkg"
-            if [ "$pkg" = "halyard_axum" ]; then
-              cargo test -p "$pkg" --lib
-              cargo test -p "$pkg" --doc
-            else
-              cargo test -p "$pkg"
-            fi
+            cargo test -p "$pkg"
             echo "::endgroup::"
           done
+          echo "::group::cargo test -p halyard --features ssr"
           cargo test -p halyard --features ssr
+          echo "::endgroup::"
+          echo "::group::cargo test -p halyard --features axum (without the integration test)"
+          cargo test -p halyard --features axum --lib
+          cargo test -p halyard --features axum --doc
+          for t in halyard/tests/*.rs; do
+            name=$(basename "$t" .rs)
+            [ "$name" = "axum_integration" ] || cargo test -p halyard --features axum --test "$name"
+          done
+          echo "::endgroup::"
 
       # Render-mode fingerprint: the same test must pass in both erasure modes.
       - name: render-mode parity test (typed)
@@ -76,10 +81,12 @@ jobs:
 
       - name: wasm32 check (hydrate)
         run: cargo check -p halyard --no-default-features --features hydrate --target wasm32-unknown-unknown
-      - name: wasm32 check (hydrate + islands + router + meta)
-        run: cargo check -p halyard -p halyard_router -p halyard_meta --no-default-features --features halyard/hydrate,halyard/islands --target wasm32-unknown-unknown
-      - name: ssr check
-        run: cargo check -p halyard -p halyard_router -p halyard_meta -p halyard_axum --no-default-features --features halyard/ssr,halyard_router/ssr,halyard_meta/ssr
+      - name: wasm32 check (hydrate + nonce + islands + islands-router)
+        run: cargo check -p halyard --no-default-features --features hydrate,nonce,islands,islands-router --target wasm32-unknown-unknown
+      - name: ssr check (ssr; axum with tracing and nonce)
+        run: |
+          cargo check -p halyard --no-default-features --features ssr
+          cargo check -p halyard --no-default-features --features axum,tracing,nonce
 
       - name: lockfile must not contain the replaced crates
         run: |

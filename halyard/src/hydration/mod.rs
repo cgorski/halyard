@@ -1,7 +1,7 @@
 #![allow(clippy::needless_lifetimes)]
 
+use crate::config::HalyardOptions;
 use crate::{prelude::*, WasmSplitManifest};
-use halyard_config::HalyardOptions;
 use halyard_macro::{component, view};
 use std::{path::PathBuf, sync::OnceLock};
 
@@ -16,7 +16,7 @@ pub fn AutoReload(
     /// Configuration options for this project.
     options: HalyardOptions,
 ) -> impl IntoView {
-    (!disable_watch && halyard_config::halyard_env_is_set("WATCH")).then(|| {
+    (!disable_watch && crate::config::halyard_env_is_set("WATCH")).then(|| {
         #[cfg(feature = "nonce")]
         let nonce = crate::nonce::use_nonce();
         #[cfg(not(feature = "nonce"))]
@@ -27,8 +27,8 @@ pub fn AutoReload(
             None => options.reload_port,
         };
         let protocol = match options.reload_ws_protocol {
-            halyard_config::ReloadWSProtocol::WS => "'ws://'",
-            halyard_config::ReloadWSProtocol::WSS => "'wss://'",
+            crate::config::ReloadWSProtocol::WS => "'ws://'",
+            crate::config::ReloadWSProtocol::WSS => "'wss://'",
         };
 
         let script = format!(
@@ -292,7 +292,7 @@ pub struct IslandsRouterNavigation;
 #[cfg(test)]
 mod tests {
     use super::{load_split_manifest, HydrationFileError};
-    use halyard_config::HalyardOptions;
+    use crate::config::HalyardOptions;
     use std::{path::PathBuf, sync::Arc};
 
     /// A fresh directory under the system temp dir, removed on drop.

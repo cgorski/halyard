@@ -108,7 +108,7 @@ impl Observer {
 /// # use halyard_reactive_graph::prelude::*;
 /// # use halyard_reactive_graph::graph::untrack;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// let (a, set_a) = signal(0);
 /// let (b, set_b) = signal(0);
 /// let c = Memo::new(move |_| {

@@ -13,7 +13,7 @@
 //! nodes, because they can listen to changes in other values.
 //!
 //! ```rust
-//! # halyard_any_spawner::Executor::init_tokio();
+//! # halyard_reactive_graph::executor::Executor::init_tokio();
 //! # let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 //! use halyard_reactive_graph::{
 //!     computed::ArcMemo,
@@ -62,7 +62,12 @@
 //!   will not run until the next "tick" of the async runtime. (This in turn means that the
 //!   reactive system is *async runtime agnostic*: it can be used in the browser with
 //!   `wasm-bindgen-futures`, in a native binary with `tokio`, or with any executor plugged in
-//!   through `halyard_any_spawner`'s custom executors.)
+//!   through [`executor::CustomExecutor`].)
+//!
+//! Alongside the graph, this crate holds what the rest of halyard builds on: [`executor`]
+//! (the one global task executor: Tokio on the server, wasm-bindgen-futures in the browser,
+//! or a custom one), [`hydration_context`] (the data a server page sends to the browser),
+//! [`throw_error`] (the error values that error boundaries catch) and [`or_poisoned`].
 //!
 //! The reactive-graph algorithm used in this crate is based on that of
 //! [Reactively](https://github.com/modderme123/reactively), as described
@@ -78,13 +83,17 @@ pub mod computed;
 pub mod diagnostics;
 pub mod effect;
 mod error;
+pub mod executor;
 pub mod graph;
+pub mod hydration_context;
+pub mod or_poisoned;
 pub mod owner;
 mod reentry;
 pub mod send_wrapper_ext;
 #[cfg(feature = "serde")]
 mod serde;
 pub mod signal;
+pub mod throw_error;
 mod trait_options;
 pub mod traits;
 pub mod transition;
@@ -125,29 +134,29 @@ pub fn log_warning(text: Arguments) {
     }
 }
 
-/// Calls [`Executor::spawn`](halyard_any_spawner::Executor::spawn) on non-wasm targets and [`Executor::spawn_local`](halyard_any_spawner::Executor::spawn_local) on wasm targets, but ensures that the task also runs in the current arena, if
+/// Calls [`Executor::spawn`](crate::executor::Executor::spawn) on non-wasm targets and [`Executor::spawn_local`](crate::executor::Executor::spawn_local) on wasm targets, but ensures that the task also runs in the current arena, if
 /// multithreaded arena sandboxing is enabled.
 pub fn spawn(task: impl Future<Output = ()> + Send + 'static) {
     #[cfg(feature = "sandboxed-arenas")]
     let task = owner::Sandboxed::new(task);
 
     #[cfg(not(target_family = "wasm"))]
-    halyard_any_spawner::Executor::spawn(task);
+    crate::executor::Executor::spawn(task);
 
     #[cfg(target_family = "wasm")]
-    halyard_any_spawner::Executor::spawn_local(task);
+    crate::executor::Executor::spawn_local(task);
 }
 
-/// Calls [`Executor::spawn_local`](halyard_any_spawner::Executor::spawn_local), but ensures that the task also runs in the current arena, if
+/// Calls [`Executor::spawn_local`](crate::executor::Executor::spawn_local), but ensures that the task also runs in the current arena, if
 /// multithreaded arena sandboxing is enabled.
 pub fn spawn_local(task: impl Future<Output = ()> + 'static) {
     #[cfg(feature = "sandboxed-arenas")]
     let task = owner::Sandboxed::new(task);
 
-    halyard_any_spawner::Executor::spawn_local(task);
+    crate::executor::Executor::spawn_local(task);
 }
 
-/// Calls [`Executor::spawn_local`](halyard_any_spawner::Executor), but ensures that the task runs under the current reactive [`Owner`](crate::owner::Owner) and observer.
+/// Calls [`Executor::spawn_local`](crate::executor::Executor), but ensures that the task runs under the current reactive [`Owner`](crate::owner::Owner) and observer.
 ///
 /// Does not cancel the task if the owner is cleaned up.
 pub fn spawn_local_scoped(task: impl Future<Output = ()> + 'static) {
@@ -156,10 +165,10 @@ pub fn spawn_local_scoped(task: impl Future<Output = ()> + 'static) {
     #[cfg(feature = "sandboxed-arenas")]
     let task = owner::Sandboxed::new(task);
 
-    halyard_any_spawner::Executor::spawn_local(task);
+    crate::executor::Executor::spawn_local(task);
 }
 
-/// Calls [`Executor::spawn_local`](halyard_any_spawner::Executor), but ensures that the task runs under the current reactive [`Owner`](crate::owner::Owner) and observer.
+/// Calls [`Executor::spawn_local`](crate::executor::Executor), but ensures that the task runs under the current reactive [`Owner`](crate::owner::Owner) and observer.
 ///
 /// Cancels the task if the owner is cleaned up.
 pub fn spawn_local_scoped_with_cancellation(
@@ -177,7 +186,7 @@ pub fn spawn_local_scoped_with_cancellation(
     #[cfg(feature = "sandboxed-arenas")]
     let task = owner::Sandboxed::new(task);
 
-    halyard_any_spawner::Executor::spawn_local(async move {
+    crate::executor::Executor::spawn_local(async move {
         _ = task.await;
     });
 }

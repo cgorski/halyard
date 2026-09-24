@@ -57,7 +57,6 @@ pub(crate) enum ViewError {
     },
     /// The render effect behind a reactive attribute or view normally always holds its
     /// last value between runs.
-    #[cfg(feature = "reactive_graph")]
     #[error(
         "the effect behind {what} held no value when it was updated; {instead}"
     )]
@@ -65,7 +64,6 @@ pub(crate) enum ViewError {
         what: &'static str,
         instead: &'static str,
     },
-    #[cfg(feature = "reactive_graph")]
     #[error(
         "OwnedView::new was called outside any reactive owner; the view gets a new \
          root owner"
@@ -104,7 +102,6 @@ pub(crate) enum ViewError {
     },
     /// Only an event that was created but never dispatched has no target, and listeners
     /// run only for dispatched events.
-    #[cfg(feature = "reactive_graph")]
     #[error(
         "{what} received an event without a target (created, but never \
          dispatched); {instead}"

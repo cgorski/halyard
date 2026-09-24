@@ -1,10 +1,10 @@
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     error::{GraphError, ReportOnce},
     graph::{AnySubscriber, ReactiveNode, ToAnySubscriber},
     owner::on_cleanup,
     traits::{DefinedAt, Dispose},
 };
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     panic::Location,
     sync::{Arc, Mutex, PoisonError, RwLock, TryLockError},
@@ -212,6 +212,7 @@ pub fn batch<T>(f: impl FnOnce() -> T) -> T {
 }
 
 mod inner {
+    use crate::or_poisoned::OrPoisoned;
     use crate::{
         graph::{
             AnySource, AnySubscriber, ReactiveNode, ReactiveNodeState,
@@ -221,7 +222,6 @@ mod inner {
         owner::Owner,
         traits::DefinedAt,
     };
-    use halyard_or_poisoned::OrPoisoned;
     use indexmap::IndexSet;
     use std::{
         panic::Location,

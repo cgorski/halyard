@@ -25,7 +25,7 @@ pub fn params_impl(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
 				let span = field.span();
 
 				quote_spanned! {
-					span=> #ident: ::halyard_router::params::macro_helpers::Wrapper::<#ty>::__into_param(
+					span=> #ident: ::halyard::router::params::macro_helpers::Wrapper::<#ty>::__into_param(
                         map.get_str(#field_name_string),
                         #field_name_string
                     )?
@@ -37,9 +37,9 @@ pub fn params_impl(ast: &syn::DeriveInput) -> proc_macro::TokenStream {
     };
 
     let gen = quote! {
-        impl Params for #name {
-            fn from_map(map: &::halyard_router::params::ParamsMap) -> ::core::result::Result<Self, ::halyard_router::params::ParamsError> {
-                use ::halyard_router::params::macro_helpers::Fallback as _;
+        impl ::halyard::router::params::Params for #name {
+            fn from_map(map: &::halyard::router::params::ParamsMap) -> ::core::result::Result<Self, ::halyard::router::params::ParamsError> {
+                use ::halyard::router::params::macro_helpers::Fallback as _;
 
                 Ok(Self {
                     #(#fields,)*

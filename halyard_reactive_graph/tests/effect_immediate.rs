@@ -1,6 +1,6 @@
 #[cfg(feature = "effects")]
 pub mod imports {
-    pub use halyard_any_spawner::Executor;
+    pub use halyard_reactive_graph::executor::Executor;
     pub use halyard_reactive_graph::{
         effect::ImmediateEffect, owner::Owner, prelude::*, signal::RwSignal,
     };

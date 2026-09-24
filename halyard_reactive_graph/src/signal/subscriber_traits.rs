@@ -8,6 +8,7 @@
 //! This makes it easy to implement a variety of different signal primitives, as long as they share
 //! these characteristics.
 
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     graph::{
         AnySource, AnySubscriber, ReactiveNode, Source, SubscriberSet,
@@ -15,7 +16,6 @@ use crate::{
     },
     traits::{DefinedAt, IsDisposed},
 };
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     borrow::Borrow,
     sync::{Arc, RwLock, Weak},

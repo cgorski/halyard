@@ -9,8 +9,8 @@ use crate::{
     },
     view_error::{report_once, ViewError},
 };
-use halyard_or_poisoned::OrPoisoned;
 use halyard_reactive_graph::effect::RenderEffect;
+use halyard_reactive_graph::or_poisoned::OrPoisoned;
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -123,11 +123,13 @@ where
 
     #[track_caller]
     fn build(mut self) -> Self::State {
-        let hook = halyard_throw_error::get_error_hook();
+        let hook = halyard_reactive_graph::throw_error::get_error_hook();
         RenderEffect::new(move |prev| {
-            let _guard = hook
-                .as_ref()
-                .map(|h| halyard_throw_error::set_error_hook(Arc::clone(h)));
+            let _guard = hook.as_ref().map(|h| {
+                halyard_reactive_graph::throw_error::set_error_hook(Arc::clone(
+                    h,
+                ))
+            });
             let value = self.invoke();
             if let Some(mut state) = prev {
                 value.rebuild(&mut state);
@@ -266,11 +268,11 @@ where
         ) -> (
             Cursor,
             PositionState,
-            Option<Arc<dyn halyard_throw_error::ErrorHook>>,
+            Option<Arc<dyn halyard_reactive_graph::throw_error::ErrorHook>>,
         ) {
             let cursor = cursor.clone();
             let position = position.clone();
-            let hook = halyard_throw_error::get_error_hook();
+            let hook = halyard_reactive_graph::throw_error::get_error_hook();
             (cursor, position, hook)
         }
         let (cursor, position, hook) = prep(cursor, position);
@@ -278,10 +280,10 @@ where
         RenderEffect::new(move |prev| {
             /// codegen optimisation:
             fn get_guard(
-                hook: &Option<Arc<dyn halyard_throw_error::ErrorHook>>,
-            ) -> Option<halyard_throw_error::ResetErrorHookOnDrop> {
+                hook: &Option<Arc<dyn halyard_reactive_graph::throw_error::ErrorHook>>,
+            ) -> Option<halyard_reactive_graph::throw_error::ResetErrorHookOnDrop> {
                 hook.as_ref()
-                    .map(|h| halyard_throw_error::set_error_hook(Arc::clone(h)))
+                    .map(|h| halyard_reactive_graph::throw_error::set_error_hook(Arc::clone(h)))
             }
             let _guard = get_guard(&hook);
 
@@ -308,11 +310,11 @@ where
         ) -> (
             Cursor,
             PositionState,
-            Option<Arc<dyn halyard_throw_error::ErrorHook>>,
+            Option<Arc<dyn halyard_reactive_graph::throw_error::ErrorHook>>,
         ) {
             let cursor = cursor.clone();
             let position = position.clone();
-            let hook = halyard_throw_error::get_error_hook();
+            let hook = halyard_reactive_graph::throw_error::get_error_hook();
             (cursor, position, hook)
         }
         let (cursor, position, hook) = prep(cursor, position);
@@ -325,11 +327,11 @@ where
                 move |prev| {
                     /// codegen optimisation:
                     fn get_guard(
-                        hook: &Option<Arc<dyn halyard_throw_error::ErrorHook>>,
-                    ) -> Option<halyard_throw_error::ResetErrorHookOnDrop>
+                        hook: &Option<Arc<dyn halyard_reactive_graph::throw_error::ErrorHook>>,
+                    ) -> Option<halyard_reactive_graph::throw_error::ResetErrorHookOnDrop>
                     {
                         hook.as_ref().map(|h| {
-                            halyard_throw_error::set_error_hook(Arc::clone(h))
+                            halyard_reactive_graph::throw_error::set_error_hook(Arc::clone(h))
                         })
                     }
                     let _guard = get_guard(&hook);

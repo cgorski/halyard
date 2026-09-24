@@ -57,16 +57,11 @@ impl<View> Island<View> {
 
     /// Whether this island should be represented by an actual HTML element
     fn should_have_element_representation() -> bool {
-        #[cfg(feature = "reactive_graph")]
         {
             use halyard_reactive_graph::owner::{use_context, IsHydrating};
             let already_hydrating =
                 use_context::<IsHydrating>().map(|h| h.0).unwrap_or(false);
             !already_hydrating
-        }
-        #[cfg(not(feature = "reactive_graph"))]
-        {
-            true
         }
     }
 }

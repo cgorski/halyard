@@ -6,6 +6,11 @@ use halyard::html::HtmlElement;
 fn simple_ssr_test() {
     use halyard::prelude::*;
 
+    // signals live in the current owner's arena (with `sandboxed-arenas`, as the
+    // axum integration builds them, a signal without an owner is disposed at once)
+    let owner = Owner::new();
+    owner.set();
+
     let (value, set_value) = signal(0);
     let rendered: View<HtmlElement<_, _, _>> = view! {
         <div>
@@ -26,6 +31,11 @@ fn simple_ssr_test() {
 #[test]
 fn ssr_test_with_components() {
     use halyard::prelude::*;
+
+    // signals live in the current owner's arena (with `sandboxed-arenas`, as the
+    // axum integration builds them, a signal without an owner is disposed at once)
+    let owner = Owner::new();
+    owner.set();
 
     #[component]
     fn Counter(initial_value: i32) -> impl IntoView {
@@ -59,6 +69,11 @@ fn ssr_test_with_components() {
 fn ssr_test_with_snake_case_components() {
     use halyard::prelude::*;
 
+    // signals live in the current owner's arena (with `sandboxed-arenas`, as the
+    // axum integration builds them, a signal without an owner is disposed at once)
+    let owner = Owner::new();
+    owner.set();
+
     #[component]
     fn snake_case_counter(initial_value: i32) -> impl IntoView {
         let (value, set_value) = signal(initial_value);
@@ -89,6 +104,11 @@ fn ssr_test_with_snake_case_components() {
 #[test]
 fn test_classes() {
     use halyard::prelude::*;
+
+    // signals live in the current owner's arena (with `sandboxed-arenas`, as the
+    // axum integration builds them, a signal without an owner is disposed at once)
+    let owner = Owner::new();
+    owner.set();
 
     let (value, _set_value) = signal(5);
     let rendered: View<HtmlElement<_, _, _>> = view! {

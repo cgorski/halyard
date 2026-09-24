@@ -6,8 +6,8 @@
 //!
 //! # Types
 //! This modules implements 2 callback types:
-//! - [`Callback`](halyard_reactive_graph::callback::Callback)
-//! - [`UnsyncCallback`](halyard_reactive_graph::callback::UnsyncCallback)
+//! - [`Callback`](crate::callback::Callback)
+//! - [`UnsyncCallback`](crate::callback::UnsyncCallback)
 //!
 //! Use `SyncCallback` if the function is not `Sync` and `Send`.
 

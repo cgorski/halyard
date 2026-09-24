@@ -1,6 +1,6 @@
+use crate::dom::helpers::TimeoutHandle;
 use crate::{children::ChildrenFn, component, control_flow::Show, IntoView};
 use core::time::Duration;
-use halyard_dom::helpers::TimeoutHandle;
 use halyard_macro::view;
 use halyard_reactive_graph::{
     effect::RenderEffect,
@@ -99,7 +99,7 @@ pub fn AnimatedShow(
         } else {
             cls.set(hide_class);
 
-            match halyard_dom::helpers::set_timeout_with_handle(
+            match crate::dom::helpers::set_timeout_with_handle(
                 move || show.set(false),
                 hide_delay,
             ) {

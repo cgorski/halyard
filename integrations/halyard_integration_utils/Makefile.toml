@@ -1,4 +1,0 @@
-extend = { path = "../../cargo-make/main.toml" }
-
-[tasks.check-format]
-env = { HALYARD_PROJECT_DIRECTORY = "../../" }

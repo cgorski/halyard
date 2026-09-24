@@ -1,4 +1,5 @@
 use super::suspense::TaskHandle;
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     channel::Sender,
     computed::suspense::SuspenseContext,
@@ -8,7 +9,6 @@ use crate::{
     },
     owner::Owner,
 };
-use halyard_or_poisoned::OrPoisoned;
 use std::sync::RwLock;
 
 pub(crate) struct ArcAsyncDerivedInner {

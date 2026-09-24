@@ -5,8 +5,8 @@ async fn main() {
         http::{HeaderName, HeaderValue},
         Router,
     };
+    use halyard::axum::{generate_route_list, HalyardRoutes};
     use halyard::{logging::log, prelude::*};
-    use halyard_axum::{generate_route_list, HalyardRoutes};
     use ssr_modes_axum::app::*;
 
     let conf = get_configuration(None).unwrap();
@@ -20,11 +20,11 @@ async fn main() {
             let halyard_options = halyard_options.clone();
             move || shell(halyard_options.clone())
         })
-        .fallback(halyard_axum::file_and_error_handler_with_context(
+        .fallback(halyard::axum::file_and_error_handler_with_context(
             move || {
                 // if you want to add custom headers to the static file handler response,
                 // you can do that by providing `ResponseOptions` via context
-                let opts = use_context::<halyard_axum::ResponseOptions>()
+                let opts = use_context::<halyard::axum::ResponseOptions>()
                     .unwrap_or_default();
                 opts.insert_header(
                     HeaderName::from_static("cross-origin-opener-policy"),

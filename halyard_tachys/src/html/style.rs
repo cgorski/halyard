@@ -662,8 +662,7 @@ macro_rules! impl_style_value {
 impl_style_value!(&'static str);
 impl_style_value!(Arc<str>);
 impl_style_value!(String);
-#[cfg(feature = "oco")]
-impl_style_value!(halyard_oco::Oco<'static, str>);
+impl_style_value!(crate::oco::Oco<'static, str>);
 
 /*
 #[cfg(test)]

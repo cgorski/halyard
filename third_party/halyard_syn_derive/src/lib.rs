@@ -96,7 +96,7 @@ enum ExampleEnum {
 */
 
 // halyard: `proc_macro_error2::{Diagnostic, Level, proc_macro_error}` replaced
-// by `halyard_macro_diagnostics` (same emit-and-continue semantics).
+// by the `diagnostics` module below (same emit-and-continue semantics).
 use proc_macro2::{Span, TokenStream};
 use syn::parse::{ParseStream, Parser};
 use syn::spanned::Spanned;
@@ -112,9 +112,43 @@ use {
     },
 };
 
+/// halyard: a stand-in for `proc_macro_error2`'s emit-and-continue diagnostics. The errors a
+/// derive emits are collected and rendered as `compile_error!` in place of its output.
+mod diagnostics {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static ERRORS: RefCell<Vec<syn::Error>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Runs a derive; if it emitted errors, they replace its output.
+    pub(crate) fn entry_point(
+        f: impl FnOnce() -> proc_macro::TokenStream,
+    ) -> proc_macro::TokenStream {
+        let outer = ERRORS.take();
+        let tokens = f();
+        let errors = ERRORS.replace(outer);
+        if errors.is_empty() {
+            tokens
+        } else {
+            errors
+                .into_iter()
+                .map(|error| {
+                    proc_macro::TokenStream::from(error.to_compile_error())
+                })
+                .collect()
+        }
+    }
+
+    /// Records an error and lets the derive continue.
+    pub(crate) fn emit_error(error: syn::Error) {
+        ERRORS.with(|errors| errors.borrow_mut().push(error));
+    }
+}
+
 #[proc_macro_derive(Parse, attributes(syn, parse))]
 pub fn derive_parse(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    halyard_macro_diagnostics::entry_point(|| {
+    diagnostics::entry_point(|| {
         let input = parse_macro_input!(item as DeriveInput);
         derive_parse_inner(input).into()
     })
@@ -122,7 +156,7 @@ pub fn derive_parse(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 #[proc_macro_derive(ToTokens, attributes(syn, to_tokens))]
 pub fn derive_tokens(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    halyard_macro_diagnostics::entry_point(|| {
+    diagnostics::entry_point(|| {
         let input = parse_macro_input!(item as DeriveInput);
         derive_tokens_inner(input).into()
     })
@@ -166,7 +200,7 @@ impl<T> Emit for Result<T, syn::Error> {
 struct Diagnostic(syn::Error);
 impl Diagnostic {
     fn emit(self) {
-        halyard_macro_diagnostics::emit_error(self.0);
+        diagnostics::emit_error(self.0);
     }
 }
 

@@ -1,8 +1,11 @@
 use crate::{children::TypedChildren, IntoView};
 use futures::{channel::oneshot, future::join_all};
-use halyard_hydration_context::{SerializedDataId, SharedContext};
 use halyard_macro::component;
-use halyard_or_poisoned::OrPoisoned;
+use halyard_reactive_graph::hydration_context::{
+    SerializedDataId, SharedContext,
+};
+use halyard_reactive_graph::or_poisoned::OrPoisoned;
+use halyard_reactive_graph::throw_error::{Error, ErrorHook, ErrorId};
 use halyard_reactive_graph::{
     computed::ArcMemo,
     effect::RenderEffect,
@@ -20,7 +23,6 @@ use halyard_tachys::{
         RenderHtml,
     },
 };
-use halyard_throw_error::{Error, ErrorHook, ErrorId};
 use rustc_hash::FxHashMap;
 use std::{
     collections::VecDeque,
@@ -102,7 +104,8 @@ where
     });
     let hook = hook as Arc<dyn ErrorHook>;
 
-    let _guard = halyard_throw_error::set_error_hook(Arc::clone(&hook));
+    let _guard =
+        halyard_reactive_graph::throw_error::set_error_hook(Arc::clone(&hook));
     let suspended_children = ErrorBoundarySuspendedChildren::default();
 
     let owner = Owner::new();
@@ -209,12 +212,15 @@ where
 
     fn build(mut self) -> Self::State {
         let hook = Arc::clone(&self.hook);
-        let _hook = halyard_throw_error::set_error_hook(Arc::clone(&hook));
+        let _hook = halyard_reactive_graph::throw_error::set_error_hook(
+            Arc::clone(&hook),
+        );
         let mut children = Some(self.children.build());
         RenderEffect::new(
             move |prev: Option<BoundaryState<Chil::State, Fal::State>>| {
-                let _hook =
-                    halyard_throw_error::set_error_hook(Arc::clone(&hook));
+                let _hook = halyard_reactive_graph::throw_error::set_error_hook(
+                    Arc::clone(&hook),
+                );
                 if let Some(prev) = prev {
                     // lost on an earlier run, which reported it
                     let mut state = prev?;
@@ -346,7 +352,8 @@ where
         extra_attrs: Vec<AnyAttribute>,
     ) {
         // first, attempt to serialize the children to HTML, then check for errors
-        let _hook = halyard_throw_error::set_error_hook(self.hook);
+        let _hook =
+            halyard_reactive_graph::throw_error::set_error_hook(self.hook);
         let mut new_buf = String::with_capacity(Chil::MIN_LENGTH);
         let mut new_pos = *position;
         self.children.to_html_with_buf(
@@ -382,7 +389,9 @@ where
     ) where
         Self: Sized,
     {
-        let _hook = halyard_throw_error::set_error_hook(Arc::clone(&self.hook));
+        let _hook = halyard_reactive_graph::throw_error::set_error_hook(
+            Arc::clone(&self.hook),
+        );
 
         // first, attempt to serialize the children to HTML, then check for errors
         let mut new_buf = StreamBuilder::new(buf.clone_id());
@@ -424,8 +433,9 @@ where
             view_buf.next_id();
             let hook = Arc::clone(&self.hook);
             view_buf.push_async(async move {
-                let _hook =
-                    halyard_throw_error::set_error_hook(Arc::clone(&hook));
+                let _hook = halyard_reactive_graph::throw_error::set_error_hook(
+                    Arc::clone(&hook),
+                );
                 let _ = join_all(suspense_children).await;
 
                 let mut my_chunks = VecDeque::new();
@@ -480,8 +490,9 @@ where
         let position = position.to_owned();
         RenderEffect::new(
             move |prev: Option<BoundaryState<Chil::State, Fal::State>>| {
-                let _hook =
-                    halyard_throw_error::set_error_hook(Arc::clone(&hook));
+                let _hook = halyard_reactive_graph::throw_error::set_error_hook(
+                    Arc::clone(&hook),
+                );
                 if let Some(prev) = prev {
                     // lost on an earlier run, which reported it
                     let mut state = prev?;
@@ -568,8 +579,9 @@ where
 
         RenderEffect::new_with_async_value(
             move |prev: Option<BoundaryState<Chil::State, Fal::State>>| {
-                let _hook =
-                    halyard_throw_error::set_error_hook(Arc::clone(&hook));
+                let _hook = halyard_reactive_graph::throw_error::set_error_hook(
+                    Arc::clone(&hook),
+                );
                 if let Some(prev) = prev {
                     // lost on an earlier run, which reported it
                     let mut state = prev?;
@@ -662,7 +674,7 @@ impl ErrorHook for ErrorBoundaryErrorHook {
         key
     }
 
-    fn clear(&self, id: &halyard_throw_error::ErrorId) {
+    fn clear(&self, id: &halyard_reactive_graph::throw_error::ErrorId) {
         self.errors.update(|map| {
             map.remove(id);
         });

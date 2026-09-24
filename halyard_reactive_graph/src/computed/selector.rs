@@ -1,9 +1,9 @@
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     effect::RenderEffect,
     signal::ArcRwSignal,
     traits::{Track, Update},
 };
-use halyard_or_poisoned::OrPoisoned;
 use rustc_hash::FxHashMap;
 use std::{
     hash::Hash,
@@ -25,7 +25,7 @@ use std::{
 /// # use halyard_reactive_graph::owner::StoredValue; let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # tokio_test::block_on(async move {
 /// # tokio::task::LocalSet::new().run_until(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 /// let a = RwSignal::new(0);
 /// let is_selected = Selector::new(move || a.get());
@@ -42,18 +42,18 @@ use std::{
 /// assert_eq!(is_selected.selected(&5), false);
 /// assert_eq!(total_notifications.get_value(), 0);
 /// a.set(5);
-/// # halyard_any_spawner::Executor::tick().await;
+/// # halyard_reactive_graph::executor::Executor::tick().await;
 ///
 /// assert_eq!(is_selected.selected(&5), true);
 /// assert_eq!(total_notifications.get_value(), 1);
 /// a.set(5);
-/// # halyard_any_spawner::Executor::tick().await;
+/// # halyard_reactive_graph::executor::Executor::tick().await;
 ///
 /// assert_eq!(is_selected.selected(&5), true);
 /// assert_eq!(total_notifications.get_value(), 1);
 /// a.set(4);
 ///
-/// # halyard_any_spawner::Executor::tick().await;
+/// # halyard_reactive_graph::executor::Executor::tick().await;
 /// assert_eq!(is_selected.selected(&5), false);
 /// # }).await;
 /// # });

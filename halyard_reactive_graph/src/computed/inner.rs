@@ -1,3 +1,4 @@
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     error::{GraphError, ReportOnce},
     graph::{
@@ -7,7 +8,6 @@ use crate::{
     owner::{Owner, Storage, StorageAccess},
     reentry::{held_by_this_thread, lock_id},
 };
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     fmt::Debug,
     panic::Location,

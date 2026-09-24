@@ -6,20 +6,17 @@ authors = ["Greg Johnston"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/cgorski/halyard"
-description = "A fine-grained reactive graph for building user interfaces."
+description = "A fine-grained reactive graph for building user interfaces, with the task executor, errors and server-to-client data sharing it builds on."
 rust-version.workspace = true
 edition.workspace = true
 
 [dependencies]
-halyard_any_spawner = { workspace = true }
-halyard_or_poisoned = { workspace = true }
 futures = { workspace = true, default-features = true }
-halyard_hydration_context = { workspace = true, optional = true }
 pin-project-lite = { workspace = true, default-features = true }
 rustc-hash = { workspace = true, default-features = true }
 serde = { features = [
   "derive",
-], optional = true, workspace = true, default-features = true }
+], workspace = true, default-features = true }
 slotmap = { workspace = true, default-features = true }
 thiserror = { workspace = true, default-features = true }
 tracing = { optional = true, workspace = true, default-features = true }
@@ -30,7 +27,17 @@ send_wrapper = { features = [
 ], workspace = true, default-features = true }
 indexmap = { workspace = true, default-features = true }
 pastey = { workspace = true, default-features = true }
+# the executor for the browser
+wasm-bindgen-futures = { workspace = true, default-features = true }
+# the browser's side of `hydration_context`
+wasm-bindgen = { workspace = true, optional = true, default-features = true }
+js-sys = { workspace = true, optional = true, default-features = true }
 
+# the executor for the server
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { default-features = false, features = ["rt"], workspace = true }
+
+# to log in the browser's console when `tracing` is off
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 web-sys = { workspace = true, features = ["console"] }
 
@@ -38,15 +45,21 @@ web-sys = { workspace = true, features = ["console"] }
 tokio = { features = [
   "rt-multi-thread",
   "macros",
+  "time",
 ], workspace = true, default-features = true }
 tokio-test = { workspace = true, default-features = true }
-halyard_any_spawner = { workspace = true, features = ["tokio"] }
 typed-builder.workspace = true
+wasm-bindgen-test = { workspace = true, default-features = true }
+anyhow.workspace = true
 
 [features]
-serde = ["dep:serde"]
+# serde impls for signals
+serde = []
 tracing = ["dep:tracing"]
-hydration = ["dep:halyard_hydration_context"]
+# owners carry a `hydration_context::SharedContext`
+hydration = []
+# the browser's shared context (`hydration_context::HydrateSharedContext`)
+browser = ["hydration", "dep:wasm-bindgen", "dep:js-sys"]
 effects = [
 ] # whether to run effects: should be disabled for something like server rendering
 sandboxed-arenas = []

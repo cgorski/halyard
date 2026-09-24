@@ -1,4 +1,4 @@
-use halyard_any_spawner::Executor;
+use halyard_reactive_graph::executor::Executor;
 use halyard_reactive_graph::{
     computed::{ArcAsyncDerived, AsyncDerived},
     owner::Owner,

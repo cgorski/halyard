@@ -1,5 +1,5 @@
 use halyard::prelude::*;
-use halyard_router::params::Params;
+use halyard::router::params::Params;
 
 #[derive(PartialEq, Debug, Params)]
 struct UserInfo {
@@ -11,7 +11,7 @@ struct UserInfo {
 
 #[test]
 fn params_test() {
-    let mut map = halyard_router::params::ParamsMap::new();
+    let mut map = halyard::router::params::ParamsMap::new();
     map.insert("user_id", "12".to_owned());
     map.insert("email", "em@il".to_owned());
     map.insert("type", "12".to_owned());

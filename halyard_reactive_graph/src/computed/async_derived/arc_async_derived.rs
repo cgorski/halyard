@@ -2,6 +2,7 @@ use super::{
     inner::{ArcAsyncDerivedInner, AsyncDerivedState},
     AsyncDerivedReadyFuture, ScopedFuture,
 };
+use crate::or_poisoned::OrPoisoned;
 #[cfg(feature = "sandboxed-arenas")]
 use crate::owner::Sandboxed;
 use crate::{
@@ -27,7 +28,6 @@ use crate::{
 use async_lock::RwLock as AsyncRwLock;
 use core::fmt::Debug;
 use futures::{channel::oneshot, FutureExt, StreamExt};
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     future::Future,
     mem,
@@ -55,7 +55,7 @@ use std::{
 /// # use halyard_reactive_graph::signal::*; let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # use halyard_reactive_graph::prelude::*;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 ///
 /// let signal1 = RwSignal::new(0);
@@ -797,7 +797,7 @@ mod tests {
     use crate::traits::{GetUntracked, Set, UpdateUntracked};
 
     fn loaded(value: u32) -> ArcAsyncDerived<u32> {
-        _ = halyard_any_spawner::Executor::init_tokio();
+        _ = crate::executor::Executor::init_tokio();
         ArcAsyncDerived::new_mock(move || async move { value })
     }
 

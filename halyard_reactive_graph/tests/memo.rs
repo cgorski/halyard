@@ -12,7 +12,7 @@ use std::{
 
 #[cfg(feature = "effects")]
 pub mod imports {
-    pub use halyard_any_spawner::Executor;
+    pub use halyard_reactive_graph::executor::Executor;
     pub use halyard_reactive_graph::{
         computed::{ArcMemo, Memo},
         effect::{Effect, ImmediateEffect, RenderEffect},

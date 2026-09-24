@@ -11,20 +11,37 @@ The original license text is retained verbatim in the LICENSE file at the root o
 repository, and all original copyright and license notices in the source are retained.
 The crates in this repository were renamed (`leptos` -> `halyard`, `leptos_*` -> `halyard_*`,
 `tachys` -> `halyard_tachys`, etc.) so that they cannot collide with the upstream
-crates on crates.io; the directory names were kept to ease merging from upstream.
+crates on crates.io. Since 2026-09-24 the workspace has four crates of its own, each of which
+contains code that began as several upstream crates (listed in each crate's NOTICE), plus the
+two vendored crates below.
 
 Changes made in this fork are also licensed under the MIT License.
+
+What this crate contains
+------------------------
+`halyard` contains code that began as these upstream crates (each MIT, © 2022 Greg
+Johnston, part of the Leptos repository) and was folded into it:
+
+- leptos 0.8.20: the crate itself
+- leptos_router 0.8.15: `halyard::router` (src/router/)
+- leptos_router_macro: no longer separate: its macros are in `halyard_macro`
+- leptos_meta 0.8.6: `halyard::meta` (src/meta/)
+- leptos_axum 0.8.10: `halyard::axum` (src/axum/, the `axum` feature)
+- leptos_integration_utils: src/integration_utils/ (used by `halyard::axum`)
+- leptos_server: `halyard::server` (src/server/)
+- leptos_config: `halyard::config` (src/config/)
+- leptos_dom: `halyard::dom` and `halyard::logging` (src/dom/, src/logging.rs)
 
 Third-party code vendored into this repository
 ----------------------------------------------
 
-third_party/rstml — a copy of rstml 0.12.1 (https://github.com/rs-tml/rstml),
+third_party/halyard_rstml — a copy of rstml 0.12.1 (https://github.com/rs-tml/rstml),
     Copyright (c) the rstml authors, licensed under the MIT License. Only the
     Cargo manifest was changed (package renamed to `halyard_rstml`, dependency on the
-    vendored `halyard_syn_derive`); see third_party/rstml/Cargo.toml.upstream.
+    vendored `halyard_syn_derive`); see third_party/halyard_rstml/Cargo.toml.upstream.
 
-third_party/syn_derive — a copy of syn_derive 0.2.0 (https://github.com/Kyuuhachi/syn_derive),
+third_party/halyard_syn_derive — a copy of syn_derive 0.2.0 (https://github.com/Kyuuhachi/syn_derive),
     Copyright (c) Kyuuhachi, licensed under MIT OR Apache-2.0. The package was renamed to
     `halyard_syn_derive` and its dependency on the unmaintained `proc-macro-error2` crate was
-    replaced by `halyard_macro_diagnostics`; see third_party/syn_derive/src/lib.rs and
-    third_party/syn_derive/Cargo.toml.upstream.
+    replaced by a small `diagnostics` module; see third_party/halyard_syn_derive/src/lib.rs
+    and third_party/halyard_syn_derive/Cargo.toml.upstream.

@@ -14,7 +14,7 @@ subscribe to them to respond to changes in their values. Effects and computation
 nodes, because they can listen to changes in other values.
 
 ```rust
-use reactive_graph::{
+use halyard_reactive_graph::{
     computed::ArcMemo,
     effect::Effect,
     prelude::{Read, Set},
@@ -62,8 +62,13 @@ which changes can begin from many different entry points. It is not particularly
   will not run until the next "tick" of the async runtime. (This in turn means that the
   reactive system is _async runtime agnostic_: it can be used in the browser with
   `wasm-bindgen-futures`, in a native binary with `tokio`, or with any executor plugged in
-  through `halyard_any_spawner`'s custom executors.)
+  through the `executor` module's custom executors.)
 
 The reactive-graph algorithm used in this crate is based on that of
 [Reactively](https://github.com/modderme123/reactively), as described
 [in this article](https://dev.to/modderme123/super-charging-fine-grained-reactive-performance-47ph).
+
+Alongside the graph, this crate holds what the rest of halyard builds on: `executor` (the
+one global task executor: Tokio on the server, wasm-bindgen-futures in the browser, or a
+custom one), `hydration_context` (the data a server page sends to the browser), `throw_error`
+(the error values that error boundaries catch) and `or_poisoned`.

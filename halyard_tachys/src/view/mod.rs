@@ -3,7 +3,7 @@ use crate::{
     html::attribute::any_attribute::AnyAttribute, hydration::Cursor,
     ssr::StreamBuilder,
 };
-use halyard_or_poisoned::OrPoisoned;
+use halyard_reactive_graph::or_poisoned::OrPoisoned;
 use std::{
     cell::RefCell,
     future::Future,

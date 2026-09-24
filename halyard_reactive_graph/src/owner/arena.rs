@@ -1,4 +1,4 @@
-use halyard_or_poisoned::OrPoisoned;
+use crate::or_poisoned::OrPoisoned;
 use slotmap::{new_key_type, SlotMap};
 #[cfg(feature = "sandboxed-arenas")]
 use std::cell::RefCell;

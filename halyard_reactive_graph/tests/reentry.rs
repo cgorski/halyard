@@ -8,7 +8,7 @@
 //! A deadlock that holds the arena's lock wedges every other test in this binary, so on the
 //! old code run these one at a time (`cargo test --test reentry <name>`).
 
-use halyard_any_spawner::Executor;
+use halyard_reactive_graph::executor::Executor;
 use halyard_reactive_graph::{
     actions::Action,
     callback::{Callable, Callback},

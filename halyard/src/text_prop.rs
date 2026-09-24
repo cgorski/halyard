@@ -1,4 +1,4 @@
-use halyard_oco::Oco;
+use halyard_tachys::oco::Oco;
 use halyard_tachys::prelude::IntoAttributeValue;
 use std::sync::Arc;
 
@@ -103,7 +103,6 @@ macro_rules! textprop_reactive {
 
 mod stable {
     use super::TextProp;
-    use halyard_oco::Oco;
     #[allow(deprecated)]
     use halyard_reactive_graph::wrappers::read::MaybeSignal;
     use halyard_reactive_graph::{
@@ -113,6 +112,7 @@ mod stable {
         traits::Get,
         wrappers::read::{ArcSignal, Signal},
     };
+    use halyard_tachys::oco::Oco;
     use std::sync::Arc;
 
     textprop_reactive!(

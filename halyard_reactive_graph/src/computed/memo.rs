@@ -36,7 +36,7 @@ use std::{fmt::Debug, hash::Hash, panic::Location};
 /// # use halyard_reactive_graph::effect::Effect;
 /// # use halyard_reactive_graph::signal::signal;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # tokio::task::LocalSet::new().run_until(async {
 /// # fn really_expensive_computation(value: i32) -> i32 { value };
 /// let (value, set_value) = signal(0);
@@ -160,7 +160,7 @@ where
     /// # use halyard_reactive_graph::effect::Effect;
     /// # use halyard_reactive_graph::signal::signal;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # fn really_expensive_computation(value: i32) -> i32 { value };
     /// let (value, set_value) = signal(0);
     ///

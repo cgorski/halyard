@@ -1,3 +1,6 @@
+use crate::const_str_slice_concat::{
+    const_concat, const_concat_with_prefix, str_from_buffer,
+};
 #[cfg(any(debug_assertions, halyard_debuginfo))]
 use crate::hydration::set_currently_hydrating;
 #[cfg(erase_components)]
@@ -14,9 +17,6 @@ use crate::{
     view_error::{report_once, ViewError},
 };
 use futures::future::join;
-use halyard_const_str_slice_concat::{
-    const_concat, const_concat_with_prefix, str_from_buffer,
-};
 use std::{ops::Deref, sync::atomic::AtomicBool};
 
 mod custom;
@@ -76,8 +76,8 @@ where
 impl<E, At, Ch, NewChild> ElementChild<NewChild> for HtmlElement<E, At, Ch>
 where
     E: ElementWithChildren,
-    Ch: RenderHtml + halyard_next_tuple::NextTuple,
-    <Ch as halyard_next_tuple::NextTuple>::Output<NewChild::Output>: Render,
+    Ch: RenderHtml + crate::next_tuple::NextTuple,
+    <Ch as crate::next_tuple::NextTuple>::Output<NewChild::Output>: Render,
 
     NewChild: IntoRender,
     NewChild::Output: RenderHtml,
@@ -85,7 +85,7 @@ where
     type Output = HtmlElement<
         E,
         At,
-        <Ch as halyard_next_tuple::NextTuple>::Output<NewChild::Output>,
+        <Ch as crate::next_tuple::NextTuple>::Output<NewChild::Output>,
     >;
 
     fn child(self, child: NewChild) -> Self::Output {

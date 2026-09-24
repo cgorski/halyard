@@ -1,5 +1,5 @@
+use crate::dom::helpers::document;
 use crate::{children::TypedChildrenFn, mount, IntoView};
-use halyard_dom::helpers::document;
 use halyard_macro::component;
 use halyard_reactive_graph::{effect::Effect, graph::untrack, owner::Owner};
 use std::sync::Arc;

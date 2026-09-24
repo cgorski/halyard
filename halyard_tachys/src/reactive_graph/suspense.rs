@@ -11,8 +11,9 @@ use futures::{
     future::{AbortHandle, Abortable},
     select, FutureExt,
 };
-use halyard_any_spawner::Executor;
-use halyard_or_poisoned::OrPoisoned;
+use halyard_reactive_graph::executor::Executor;
+use halyard_reactive_graph::or_poisoned::OrPoisoned;
+use halyard_reactive_graph::throw_error::ErrorHook;
 use halyard_reactive_graph::{
     computed::{
         suspense::{LocalResourceNotifier, SuspenseContext},
@@ -24,7 +25,6 @@ use halyard_reactive_graph::{
     },
     owner::{on_cleanup, provide_context, use_context},
 };
-use halyard_throw_error::ErrorHook;
 use std::{
     cell::RefCell,
     fmt::Debug,
@@ -202,7 +202,9 @@ where
                 let state = Rc::clone(&inner);
                 async move {
                     let _guard = error_hook.as_ref().map(|hook| {
-                        halyard_throw_error::set_error_hook(Arc::clone(hook))
+                        halyard_reactive_graph::throw_error::set_error_hook(
+                            Arc::clone(hook),
+                        )
                     });
 
                     let value = fut.as_mut().await;
@@ -241,7 +243,9 @@ where
             let state = Rc::clone(&state.inner);
             async move {
                 let _guard = error_hook.as_ref().map(|hook| {
-                    halyard_throw_error::set_error_hook(Arc::clone(hook))
+                    halyard_reactive_graph::throw_error::set_error_hook(
+                        Arc::clone(hook),
+                    )
                 });
 
                 let value = fut.await;
@@ -429,7 +433,9 @@ where
                 let state = Rc::clone(&inner);
                 async move {
                     let _guard = error_hook.as_ref().map(|hook| {
-                        halyard_throw_error::set_error_hook(Arc::clone(hook))
+                        halyard_reactive_graph::throw_error::set_error_hook(
+                            Arc::clone(hook),
+                        )
                     });
 
                     let value = fut.as_mut().await;

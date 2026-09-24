@@ -3,22 +3,35 @@
 The goal of this document is to make it easier for contributors (and anyone
 who’s interested!) to understand the architecture of the framework.
 
-> halyard is a fork of Leptos (see `NOTICE`). This document is upstream's architecture
-> overview with the crate names updated; the crate layout is unchanged, and the
-> upstream directory names are kept (e.g. `halyard_router` lives in `router/`,
-> `halyard_tachys` in `tachys/`). Crates this fork adds: `halyard_macro_diagnostics`
-> (compile-error reporting for the proc macros, replacing `proc-macro-error2`) and the
-> vendored `third_party/halyard_rstml` + `third_party/halyard_syn_derive`. Note that upstream's
-> `leptos_reactive` is today the `reactive_graph` crate (`halyard_reactive_graph`) and
-> the renderer is `tachys` (`halyard_tachys`); `halyard_dom` is now a thin layer of
-> browser helpers on top of it.
+> halyard is a fork of Leptos (see `NOTICE`). This document began as upstream's
+> architecture overview. The crate layout is halyard's own: four crates, layered
+> bottom-up, and two vendored ones.
 >
-> halyard supports one way to build a site: the server (`ssr`, served by
-> `halyard_axum`) renders the page, and the browser build (`hydrate`) hydrates it with
-> WebAssembly, optionally as islands. There is no client-side-only mode. Async tasks run on
-> Tokio on the server and on wasm-bindgen-futures in the browser (both through
-> `halyard_any_spawner`, which also accepts a custom executor), resources travel with
-> the page as serde JSON, and everything builds on stable Rust.
+> ```text
+> halyard_reactive_graph   signals, effects, owners; executor, hydration_context, throw_error
+>         ^
+> halyard_tachys           the renderer (views, DOM, HTML, hydration); either, oco
+>         ^
+> halyard                  components, hydration, router, meta, server (resources),
+>         |                config, dom, axum (feature)
+>         +-- halyard_macro (proc macros) <- halyard_rstml <- halyard_syn_derive
+> ```
+>
+> Upstream's `leptos_reactive` is today the `reactive_graph` crate
+> (`halyard_reactive_graph`) and the renderer is `tachys` (`halyard_tachys`). Code that was
+> upstream's separate crates now sits in the lowest crate that needs it: the executor
+> (`any_spawner`), `hydration_context`, `throw_error` and `or_poisoned` in the reactive
+> graph; `either_of`, `oco_ref`, `next_tuple` and `const_str_slice_concat` in tachys; the
+> router, meta, the server integration, resources, configuration and DOM helpers in
+> `halyard`; the router's macros in `halyard_macro`. The macros' generated code refers only
+> to paths under `::halyard`, so an application depends on `halyard` alone.
+>
+> halyard supports one way to build a site: the server (`ssr`, served by `halyard::axum`
+> with the `axum` feature) renders the page, and the browser build (`hydrate`) hydrates it
+> with WebAssembly, optionally as islands. There is no client-side-only mode. Async tasks
+> run on Tokio on the server and on wasm-bindgen-futures in the browser (both through
+> `halyard_reactive_graph::executor`, which also accepts a custom executor), resources
+> travel with the page as serde JSON, and everything builds on stable Rust.
 
 The whole Halyard framework is built from a series of layers. Each of these layers
 depends on the one below it, but each can be used independently from the ones
@@ -59,7 +72,7 @@ slotmap.
 > in which the lifetime of data is tied to the lifetime of the UI, not Rust’s
 > lexical scopes.
 
-## The DOM Renderer: `halyard_dom`
+## The Renderer: `halyard_tachys` (and `halyard::dom`)
 
 The reactive system can be used to drive any kinds of side effects. One very
 common side effect is calling an imperative method, for example to update the
@@ -75,9 +88,9 @@ divinely ordained, but it’s a useful convention because it allows us to use
 zero-overhead derived signals as one of several ways to indicate dynamic
 content.
 
-`halyard_dom` also contains code for server-side rendering of the same
-UI views to HTML, either for out-of-order streaming (`src/ssr.rs`) or
-in-order streaming/async rendering (`src/ssr_in_order.rs`).
+`halyard_tachys` also contains the code for server-side rendering of the same
+UI views to HTML, in out-of-order or in-order streams (`src/ssr/`). `halyard::dom` is
+a thin layer of browser helpers (`window()`, `document()`, event listeners, timers).
 
 ## The Macros: `halyard_macro`
 
@@ -86,8 +99,11 @@ It’s entirely possible to write Halyard code with no macros at all. The
 the builder syntax and simple functions (see the `counter_without_macros`
 example). But the macros enable a JSX-like syntax for describing views.
 
-This package also contains the `Params` derive macro used for typed
-queries and route params in the router.
+This crate also contains the router's macros (`path!`, `#[lazy_route]`) and the `Params`
+derive macro used for typed queries and route params, and the small diagnostics module
+that turns macro errors into `compile_error!`s. A proc-macro crate can only export macros,
+so its generated code names everything it needs under `::halyard` (`::halyard::tachys`,
+`::halyard::reactive`, `::halyard::router`, ...).
 
 ### Macro-based Optimizations
 
@@ -165,67 +181,41 @@ than similar Rust frontend frameworks in its HTML rendering.
 >   </main>"#
 > ```
 
-## Resources (`halyard_server`)
-
-`halyard_server` holds the resources (`Resource`, `OnceResource`, `LocalResource`) and
-`SharedValue`: data loaded on the server while the page renders and sent to the browser
-with the page, as serde JSON, so that hydration starts from the same data without loading
-it again. halyard has no server functions (upstream's `server_fn` crates were removed): an
-application that needs an HTTP API routes it in axum next to `halyard_axum`'s routes.
-
 ## `halyard`
 
-This package is built on and reexports most of the layers already
-mentioned, and implements a number of control-flow components (`<Show/>`,
-`<ErrorBoundary/>`, `<For/>`, `<Suspense/>`, `<Transition/>`) that use
-public APIs of the other packages.
+This crate is built on the layers already mentioned and re-exports them
+(`halyard::reactive`, `halyard::tachys`). It implements the control-flow components
+(`<Show/>`, `<ErrorBoundary/>`, `<For/>`, `<Suspense/>`, `<Transition/>`), mounting and
+hydration, and the parts of the framework that were upstream's separate crates, each a
+module:
 
-This is the main entrypoint for users, but is relatively light itself.
-
-## `halyard_meta`
-
-This package exists to allow you to work with tags normally found in
-the `<head>`, from within your components.
-
-It is implemented as a distinct package, rather than part of
-`halyard_dom`, on the principle that “what can be implemented in userland,
-should be.” The framework can be used without it, so it’s not in core.
-
-## `halyard_router`
-
-The router originates as a direct port of `solid-router`, which is the
-origin of most of its terminology, architecture, and route-matching logic.
-
-Subsequent developments (like animated routing, and managing route transitions
-given the lack of `useTransition` in Halyard) have caused it to diverge
-slightly from Solid’s exact code, but it is still very closely related.
-
-The core principle here is “nested routing,” dividing a single page
-into independently-rendered parts. This is described in some detail in the docs.
-
-Like `halyard_meta`, it is implemented as a distinct package, because it
-can be replaced with another router or with none. The framework can be used
-without it, so it’s not in core.
-
-## Server Integrations
-
-The server integrations are the most “frameworky” layer of the whole framework.
-These **do** assume the use of `halyard`, `halyard_router`, and `halyard_meta`.
-They specifically draw routing data from `halyard_router`, and inject the
-metadata from `halyard_meta` into the `<head>` appropriately.
-
-But of course, if you one day create `halyard-helmet` and `halyard-better-router`,
-you can create new server integrations that plug them into the SSR rendering
-methods from `halyard_dom` instead. Everything involved is quite modular.
-
-These packages essentially provide helpers that save the templates and user apps
-from including a huge amount of boilerplate to connect the various other packages
-correctly. Again, early versions of the framework examples are illustrative here
-for reference: they include large amounts of manual SSR route handling, etc.
+- **`halyard::server`**: the resources (`Resource`, `OnceResource`, `LocalResource`) and
+  `SharedValue`: data loaded on the server while the page renders and sent to the browser
+  with the page, as serde JSON, so that hydration starts from the same data without loading
+  it again. halyard has no server functions (upstream's `server_fn` crates were removed):
+  an application that needs an HTTP API routes it in axum next to `halyard::axum`'s routes.
+- **`halyard::meta`**: tags normally found in the `<head>`, set from within components.
+  It stays a module of its own (rather than part of the renderer) on the principle that
+  “what can be implemented in userland, should be.”
+- **`halyard::router`**: the router originates as a direct port of `solid-router`, which is
+  the origin of most of its terminology, architecture, and route-matching logic. Subsequent
+  developments (like animated routing, and managing route transitions given the lack of
+  `useTransition` in Halyard) have caused it to diverge slightly from Solid’s exact code, but
+  it is still very closely related. The core principle here is “nested routing,” dividing a
+  single page into independently-rendered parts. Its macros (`path!`, `#[lazy_route]`) are
+  in `halyard_macro`.
+- **`halyard::axum`** (feature `axum`): the server integration, the most “frameworky” layer
+  of the whole framework. It draws routing data from the router, and injects the metadata
+  from `meta` into the `<head>` appropriately. It saves applications from including a huge
+  amount of boilerplate to connect the other parts correctly. What it shares with any other
+  server integration (building a page's response) is a private module,
+  `integration_utils`.
+- **`halyard::config`** and **`halyard::dom`**: the runtime configuration and the browser
+  helpers.
 
 ## `cargo-halyard` helpers
 
-`halyard_config` exists to support a feature of `cargo-halyard`, namely its
+`halyard::config` exists to support a feature of `cargo-halyard`, namely its
 configuration, which the build tool and the server read alike.
 
 It’s important to say that the main feature `cargo-halyard` remains its ability

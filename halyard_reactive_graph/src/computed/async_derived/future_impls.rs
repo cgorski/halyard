@@ -1,4 +1,5 @@
 use super::{inner::ArcAsyncDerivedInner, ArcAsyncDerived, AsyncDerived};
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     computed::suspense::SuspenseContext,
     diagnostics::SpecialNonReactiveZone,
@@ -10,7 +11,6 @@ use crate::{
     unwrap_signal,
 };
 use futures::pin_mut;
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     future::{Future, IntoFuture},
     pin::Pin,
@@ -238,7 +238,7 @@ mod tests {
     use futures::FutureExt;
 
     fn emptied() -> ArcAsyncDerived<u32> {
-        _ = halyard_any_spawner::Executor::init_tokio();
+        _ = crate::executor::Executor::init_tokio();
         let derived = ArcAsyncDerived::new_mock(|| async { 1 });
         derived.set(None);
         derived

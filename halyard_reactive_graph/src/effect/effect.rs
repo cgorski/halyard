@@ -1,3 +1,5 @@
+use crate::executor::Executor;
+use crate::or_poisoned::OrPoisoned;
 use crate::{
     channel::{channel, Receiver},
     effect::{inner::EffectInner, EffectFunction},
@@ -10,8 +12,6 @@ use crate::{
     traits::Dispose,
 };
 use futures::StreamExt;
-use halyard_any_spawner::Executor;
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     mem,
     sync::{atomic::AtomicBool, Arc, RwLock},
@@ -45,7 +45,7 @@ use std::{
 /// # use halyard_reactive_graph::owner::ArenaItem;
 /// # tokio_test::block_on(async move {
 /// # tokio::task::LocalSet::new().run_until(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// let a = RwSignal::new(0);
 /// let b = RwSignal::new(0);
 ///
@@ -162,7 +162,7 @@ impl Effect<LocalStorage> {
     /// that are read inside it change.
     ///
     /// This spawns a task on the local thread using
-    /// [`spawn_local`](halyard_any_spawner::Executor::spawn_local). For an effect that can be spawned on
+    /// [`spawn_local`](crate::executor::Executor::spawn_local). For an effect that can be spawned on
     /// any thread, use [`new_sync`](Effect::new_sync).
     pub fn new<T, M>(mut fun: impl EffectFunction<T, M> + 'static) -> Self
     where
@@ -220,7 +220,7 @@ impl Effect<LocalStorage> {
     /// # use halyard_reactive_graph::signal::signal;
     /// # tokio_test::block_on(async move {
     /// # tokio::task::LocalSet::new().run_until(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// #
     /// let (num, set_num) = signal(0);
     ///
@@ -252,7 +252,7 @@ impl Effect<LocalStorage> {
     /// # use halyard_reactive_graph::signal::signal;
     /// # tokio_test::block_on(async move {
     /// # tokio::task::LocalSet::new().run_until(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// #
     /// let (num, set_num) = signal(0);
     /// let (cb_num, set_cb_num) = signal(0);
@@ -291,7 +291,7 @@ impl Effect<LocalStorage> {
     /// # use halyard_reactive_graph::signal::signal;
     /// # tokio_test::block_on(async move {
     /// # tokio::task::LocalSet::new().run_until(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// #
     /// let (num, set_num) = signal(0);
     ///

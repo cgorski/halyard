@@ -6,8 +6,9 @@
 #![allow(private_macro_use)]
 #![deny(missing_docs)]
 
+// first, so that its `macro_rules!` (`abort!`, `emit_error!`, ...) are in scope below
 #[macro_use]
-extern crate halyard_macro_diagnostics;
+mod diagnostics;
 
 use component::DummyModel;
 use proc_macro::TokenStream;
@@ -17,6 +18,7 @@ use std::str::FromStr;
 use syn::{parse_macro_input, spanned::Spanned, token::Pub, Visibility};
 
 mod params;
+mod route;
 mod view;
 use crate::component::unmodified_fn_name_from_fn_name;
 mod component;
@@ -266,7 +268,7 @@ mod slot;
 #[proc_macro]
 #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip_all))]
 pub fn view(tokens: TokenStream) -> TokenStream {
-    halyard_macro_diagnostics::entry_point(|| view_macro_impl(tokens, false))
+    crate::diagnostics::entry_point(|| view_macro_impl(tokens, false))
 }
 
 /// The `template` macro behaves like [`view`](view!), except that it wraps the entire tree in a
@@ -276,7 +278,7 @@ pub fn view(tokens: TokenStream) -> TokenStream {
 #[proc_macro]
 #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip_all))]
 pub fn template(tokens: TokenStream) -> TokenStream {
-    halyard_macro_diagnostics::entry_point(|| {
+    crate::diagnostics::entry_point(|| {
         if cfg!(feature = "__internal_erase_components") {
             view(tokens)
         } else {
@@ -359,7 +361,7 @@ fn view_macro_impl(tokens: TokenStream, template: bool) -> TokenStream {
 /// the crate root rather than relative to the file from which it is called.
 #[proc_macro]
 pub fn include_view(tokens: TokenStream) -> TokenStream {
-    halyard_macro_diagnostics::entry_point(|| {
+    crate::diagnostics::entry_point(|| {
         let file_name =
             syn::parse::<syn::LitStr>(tokens).unwrap_or_else(|_| {
                 abort!(
@@ -545,7 +547,7 @@ pub fn include_view(tokens: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn component(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
-    halyard_macro_diagnostics::entry_point(|| {
+    crate::diagnostics::entry_point(|| {
         let is_transparent = if !args.is_empty() {
             let transparent = parse_macro_input!(args as syn::Ident);
 
@@ -639,7 +641,7 @@ pub fn component(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn island(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
-    halyard_macro_diagnostics::entry_point(|| {
+    crate::diagnostics::entry_point(|| {
         let (is_transparent, is_lazy) = if !args.is_empty() {
             let arg = parse_macro_input!(args as syn::Ident);
 
@@ -810,7 +812,7 @@ fn component_macro(
 /// ```
 #[proc_macro_attribute]
 pub fn slot(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
-    halyard_macro_diagnostics::entry_point(|| {
+    crate::diagnostics::entry_point(|| {
         if !args.is_empty() {
             abort!(
                 Span::call_site(),
@@ -823,6 +825,92 @@ pub fn slot(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
             .into_token_stream()
             .into()
     })
+}
+
+/// Constructs a path for use in a [`Route`] definition.
+///
+/// Note that this is an optional convenience. Manually defining route segments
+/// is equivalent.
+///
+/// # Examples
+///
+/// ```rust
+/// use halyard::router::{
+///     path, OptionalParamSegment, ParamSegment, StaticSegment,
+///     WildcardSegment,
+/// };
+///
+/// let path = path!("/foo/:bar/:baz?/*any");
+/// let output = (
+///     StaticSegment("foo"),
+///     ParamSegment("bar"),
+///     OptionalParamSegment("baz"),
+///     WildcardSegment("any"),
+/// );
+///
+/// assert_eq!(path, output);
+/// ```
+/// [`Route`]: https://docs.rs/leptos_router/latest/leptos_router/components/fn.Route.html
+#[proc_macro]
+pub fn path(tokens: TokenStream) -> TokenStream {
+    route::path_impl(tokens)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// When added to an [`impl LazyRoute`] implementation block, this will automatically
+/// add a [`lazy`] annotation to the `view` method, which will cause the code for the view
+/// to lazy-load concurrently with the `data` being loaded for the route.
+///
+/// ```rust
+/// use halyard::prelude::*;
+/// use halyard::router::{lazy_route, LazyRoute};
+///
+/// // the route definition
+/// #[derive(Debug)]
+/// struct BlogListingRoute {
+///     titles: Resource<Vec<String>>
+/// }
+///
+/// #[lazy_route]
+/// impl LazyRoute for BlogListingRoute {
+///     fn data() -> Self {
+///         Self {
+///             titles: Resource::new(|| (), |_| async {
+///                 vec![/* todo: load blog posts */]
+///             })
+///         }
+///     }
+///
+///     // this function will be lazy-loaded, concurrently with data()
+///     fn view(this: Self) -> AnyView {
+///         let BlogListingRoute { titles } = this;
+///
+///         // ... now you can use the `posts` resource with Suspense, etc.,
+///         // and return AnyView by calling .into_any() on a view
+///         # ().into_any()
+///     }
+/// }
+/// ```
+///
+/// [`impl LazyRoute`]: https://docs.rs/leptos_router/latest/leptos_router/trait.LazyRoute.html
+/// [`lazy`]: `halyard_macro::lazy`
+#[proc_macro_attribute]
+pub fn lazy_route(
+    args: proc_macro::TokenStream,
+    s: TokenStream,
+) -> TokenStream {
+    let dummy: proc_macro2::TokenStream = s.clone().into();
+    match route::lazy_route_impl(args, s) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            // emit the error, then the original item so downstream code
+            // still type-checks against it
+            let mut out = e.into_compile_error();
+            out.extend(dummy);
+            out.into()
+        }
+    }
 }
 
 /// Derives a trait that parses a map of string keys and values into a typed
@@ -938,7 +1026,7 @@ pub fn memo(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn lazy(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
-    halyard_macro_diagnostics::entry_point(|| lazy::lazy_impl(args, s))
+    crate::diagnostics::entry_point(|| lazy::lazy_impl(args, s))
 }
 
 /// Preloads a lazy function and returns a signal that evaluates to `true` once the function is loaded.
@@ -981,5 +1069,5 @@ pub fn lazy(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn lazy_preload(s: TokenStream) -> TokenStream {
-    halyard_macro_diagnostics::entry_point(|| lazy::lazy_preload_impl(s))
+    crate::diagnostics::entry_point(|| lazy::lazy_preload_impl(s))
 }

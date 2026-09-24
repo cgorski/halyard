@@ -1004,7 +1004,7 @@ mod tests {
     fn empty_lists() {
         let mut list = List::new(&[]);
         assert_eq!(list.update(&[]), []);
-        assert_eq!(list.shown(), []);
+        assert_eq!(list.shown(), Vec::<Key>::new());
         check_update(&mut list, &[1, 2]).unwrap();
         check_update(&mut list, &[]).unwrap();
         assert!(list.rows.is_empty());

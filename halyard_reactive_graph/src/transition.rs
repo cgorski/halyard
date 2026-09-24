@@ -1,7 +1,7 @@
 //! Utilities to wait for asynchronous primitives to resolve.
 
+use crate::or_poisoned::OrPoisoned;
 use futures::{channel::oneshot, future::join_all};
-use halyard_or_poisoned::OrPoisoned;
 use std::{
     future::Future,
     sync::{mpsc, OnceLock, RwLock},

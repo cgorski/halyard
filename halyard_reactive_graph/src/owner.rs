@@ -1,8 +1,8 @@
 //! The reactive ownership model, which manages effect cancellation, cleanups, and arena allocation.
 
 #[cfg(feature = "hydration")]
-use halyard_hydration_context::SharedContext;
-use halyard_or_poisoned::OrPoisoned;
+use crate::hydration_context::SharedContext;
+use crate::or_poisoned::OrPoisoned;
 use rustc_hash::FxHashMap;
 use std::{
     any::{Any, TypeId},

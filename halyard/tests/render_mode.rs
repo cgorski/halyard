@@ -30,11 +30,11 @@
 
 #![cfg(feature = "ssr")]
 
+use halyard::meta::{ServerMetaContext, Title};
 use halyard::{
     hydration::{HydrationScripts, RENDER_MODE, RENDER_MODE_META_NAME},
     prelude::*,
 };
-use halyard_meta::{ServerMetaContext, Title};
 
 const ERASED: bool = cfg!(erase_components);
 

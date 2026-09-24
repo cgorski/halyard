@@ -36,7 +36,7 @@ use std::{
 /// # use halyard_reactive_graph::signal::*; let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # use halyard_reactive_graph::prelude::*;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 ///
 /// let signal1 = RwSignal::new(0);
@@ -484,11 +484,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::or_poisoned::OrPoisoned;
     use crate::{
         owner::Owner,
         traits::{GetUntracked, Set, UpdateUntracked},
     };
-    use halyard_or_poisoned::OrPoisoned;
 
     fn set_version(derived: &AsyncDerived<u32>, version: usize) {
         derived.inner.try_with_value(|inner| {
@@ -500,7 +500,7 @@ mod tests {
     /// builds). It wraps.
     #[test]
     fn writing_at_the_version_limit_wraps() {
-        _ = halyard_any_spawner::Executor::init_tokio();
+        _ = crate::executor::Executor::init_tokio();
         let owner = Owner::new();
         owner.set();
         let derived = AsyncDerived::new_mock(|| async { 1_u32 });

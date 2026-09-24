@@ -4,9 +4,8 @@ halyard is a full-stack Rust web framework: server-side rendering, hydration and
 fine-grained reactivity, with an axum integration. It is its own project. It began on
 2026-09-22 as a fork of [Leptos](https://github.com/leptos-rs/leptos) 0.8.20 (MIT, © 2022
 Greg Johnston — see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE)) and no longer tracks
-it. Every crate is renamed (`leptos` → `halyard`, `leptos_router` → `halyard_router`,
-`tachys` → `halyard_tachys`, …; full map below) and published on crates.io under those
-names (`halyard = "0.1"`); its build tool is
+it. An application depends on one crate, `halyard` (`halyard = "0.1"`); the router, the
+head's tags and the axum integration are its modules (map below). Its build tool is
 [`cargo-halyard`](https://github.com/cgorski/cargo-halyard).
 
 ## Why it began as a fork
@@ -41,31 +40,28 @@ fixed at the source than worked around in every application:
    `Response` to `init` — exactly one request in every browser, started as early as the
    preload was.
 6. **Two unmaintained proc-macro helpers.** `paste` is replaced by
-   [`pastey`](https://crates.io/crates/pastey); `proc-macro-error2` is replaced by
-   `halyard_macro_diagnostics` (a few dozen lines on `syn::Error::to_compile_error`).
+   [`pastey`](https://crates.io/crates/pastey); `proc-macro-error2` is replaced by a
+   few dozen lines on `syn::Error::to_compile_error` (`halyard_macro/src/diagnostics.rs`).
    Because `rstml` pulled `proc-macro-error2` in through `syn_derive`, both are vendored
    under `third_party/` with that dependency removed. Neither crate is in the lockfile.
 
 ## Crate map
 
-| upstream (dir kept)                           | halyard                           |
-| --------------------------------------------- | --------------------------------- |
-| `leptos` (`leptos/`)                          | `halyard`                         |
-| `leptos_macro`                                | `halyard_macro`                   |
-| `leptos_router` (`router/`)                   | `halyard_router`                  |
-| `leptos_router_macro` (`router_macro/`)       | `halyard_router_macro`            |
-| `leptos_meta` (`meta/`)                       | `halyard_meta`                    |
-| `leptos_axum` (`integrations/axum/`)          | `halyard_axum`                    |
-| `leptos_integration_utils` (`integrations/utils/`) | `halyard_integration_utils`  |
-| `leptos_server`, `leptos_config`, `leptos_dom` | `halyard_server`, `halyard_config`, `halyard_dom` |
-| `tachys`                                      | `halyard_tachys`                  |
-| `reactive_graph`                              | `halyard_reactive_graph`          |
-| `hydration_context`                           | `halyard_hydration_context`       |
-| `any_spawner`, `either_of`, `next_tuple`, `or_poisoned`, `const_str_slice_concat` | `halyard_any_spawner`, `halyard_either_of`, `halyard_next_tuple`, `halyard_or_poisoned`, `halyard_const_str_slice_concat` |
-| `oco_ref` (`oco/`)                            | `halyard_oco`                     |
-| `throw_error` (`any_error/`)                  | `halyard_throw_error`             |
-| — (new)                                       | `halyard_macro_diagnostics`       |
-| `rstml` 0.12.1, `syn_derive` 0.2.0 (vendored, `third_party/`) | `halyard_rstml`, `halyard_syn_derive` |
+The workspace has four crates of its own, layered bottom-up, and two vendored ones. Each
+contains code that began as several upstream crates (its `NOTICE` lists them):
+
+| crate | what it is | began as (upstream) |
+| --- | --- | --- |
+| `halyard_reactive_graph` | signals, memos, effects, owners; the task executor (`executor`), the data a server page sends to the browser (`hydration_context`), error values (`throw_error`), `or_poisoned` | `reactive_graph`, `any_spawner`, `hydration_context`, `throw_error` (`any_error/`), `or_poisoned` |
+| `halyard_tachys` | the renderer: typed view trees, DOM and HTML output, hydration; `either`, `oco`, `next_tuple` | `tachys`, `either_of`, `oco_ref`, `next_tuple`, `const_str_slice_concat` |
+| `halyard_macro` | the proc macros: `view!`, `#[component]`, `#[island]`, `#[slot]`, `#[lazy]`, `path!`, `#[lazy_route]`, `Params` | `leptos_macro`, `leptos_router_macro` (and halyard's own diagnostics crate) |
+| `halyard` | the framework: components, hydration, `halyard::router`, `halyard::meta`, `halyard::server` (resources), `halyard::config`, `halyard::dom`, `halyard::axum` (feature `axum`) | `leptos`, `leptos_router`, `leptos_meta`, `leptos_axum`, `leptos_integration_utils`, `leptos_server`, `leptos_config`, `leptos_dom` |
+| `halyard_rstml`, `halyard_syn_derive` (vendored, `third_party/`) | the `view!` parser | `rstml` 0.12.1, `syn_derive` 0.2.0 |
+
+The 23 crates halyard had before were consolidated into these on 2026-09-24: an
+application depends on `halyard` alone, and the macros' generated code refers only to
+paths under `::halyard`. In `halyard`, `ssr` is also the router's and meta's `ssr`, and
+`axum` turns on the axum integration (and implies `ssr` and `nonce`).
 
 Upstream's actix integration, its view-patching hot reload and its stores crates were
 removed because nothing used them. `AutoReload` still reloads the page when the build tool
@@ -85,12 +81,14 @@ the `#[server]` macro, `ServerAction`, `ServerMultiAction`, `<ActionForm/>`,
 `<MultiActionForm/>` and the axum handlers for them) were removed too: no application uses
 them. Data reaches the page through resources, loaded on the server and sent with the page
 as serde JSON; `Action` runs any async function; an application that needs an HTTP API
-routes it in axum itself, and `halyard_router`'s `<Form/>` can post to it.
+routes it in axum itself, and the router's `<Form/>` can post to it.
 
-Inside `halyard` the re-export names are unchanged: `halyard::tachys`,
-`halyard::reactive`, `halyard::prelude::*`, and the `view!` and `#[component]` macros keep
-their names. Types named `Leptos*` are now `Halyard*` (`HalyardOptions`,
-`HalyardRoutes`, …).
+Inside `halyard`: `halyard::tachys` and `halyard::reactive` are the renderer and the
+reactive graph, `halyard::router`, `halyard::meta` and `halyard::axum` what were
+`leptos_router`, `leptos_meta` and `leptos_axum`, and `halyard::prelude::*` brings in what
+most components use, including the router's and the head's everyday components and hooks.
+The `view!` and `#[component]` macros keep their names. Types named `Leptos*` are now
+`Halyard*` (`HalyardOptions`, `HalyardRoutes`, …).
 
 ## Configuration
 
@@ -103,14 +101,16 @@ deployments keep working. Likewise `get_configuration(Some("Cargo.toml"))` reads
 
 ## Checks
 
-What CI runs (`.github/workflows/ci.yml`), each crate tested on its own (see the known
-issue below):
+What CI runs (`.github/workflows/ci.yml`), each crate tested on its own, and `halyard` in
+each of its builds:
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace -- -D warnings
 scripts/panic-ratchet.sh       # panic sites per crate may only fall (panic-baseline.txt)
 cargo test -p <crate>          # for each crate
+cargo test -p halyard --features ssr
+cargo test -p halyard --features axum   # its integration test needs `cargo halyard`
 cargo check -p halyard --no-default-features --features hydrate --target wasm32-unknown-unknown
 cargo test -p halyard --features ssr --test render_mode
 RUSTFLAGS="--cfg erase_components" cargo test -p halyard --features ssr --test render_mode
@@ -152,8 +152,8 @@ not follow Leptos.
 
 ## Known issues (fork backlog)
 
-- `cargo test --workspace` fails 8 targets because Cargo unifies the
-  `sandboxed-arenas` feature (enabled by the axum integration's tests) into
-  crates whose tests assume it is off. Every crate passes when tested on its
-  own (`cargo test -p <crate>`), which is how CI runs them. Inherited from
-  upstream; to be fixed by making those tests feature-aware.
+- `cargo test --workspace` passes, but covers `halyard` in its default build only: its
+  `ssr` and `axum` builds (the latter turns on `sandboxed-arenas` in the reactive graph)
+  are tested with `cargo test -p halyard --features ...`, as CI does.
+- `halyard_reactive_graph`'s `effect_immediate` tests are flaky with `--features effects`
+  (inherited; CI does not enable that feature for the crate).

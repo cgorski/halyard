@@ -1,3 +1,4 @@
+use crate::executor::Executor;
 use crate::{
     computed::{ArcMemo, Memo, ScopedFuture},
     diagnostics::is_suppressing_resource_load,
@@ -9,7 +10,6 @@ use crate::{
     unwrap_signal,
 };
 use futures::{channel::oneshot, select, FutureExt};
-use halyard_any_spawner::Executor;
 use send_wrapper::SendWrapper;
 use std::{
     future::Future,
@@ -32,7 +32,7 @@ use std::{
 /// # use halyard_reactive_graph::actions::*;
 /// # use halyard_reactive_graph::prelude::*;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 /// async fn send_new_todo_to_api(task: String) -> usize {
 ///     // do something...
@@ -68,7 +68,7 @@ use std::{
 /// assert_eq!(pending.get(), true); // is pending
 /// assert_eq!(result_of_call.get(), None); // has not yet gotten a response
 ///
-/// # halyard_any_spawner::Executor::tick().await;
+/// # halyard_reactive_graph::executor::Executor::tick().await;
 ///
 /// // after call has resolved
 /// assert_eq!(input.get(), None); // input clears out after resolved
@@ -145,7 +145,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = ArcAction::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -423,7 +423,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = ArcAction::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -451,7 +451,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = ArcAction::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -485,7 +485,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = ArcAction::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -520,7 +520,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = ArcAction::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -574,7 +574,7 @@ where
 /// # use halyard_reactive_graph::actions::*;
 /// # use halyard_reactive_graph::prelude::*;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 /// async fn send_new_todo_to_api(task: String) -> usize {
 ///     // do something...
@@ -610,7 +610,7 @@ where
 /// assert_eq!(pending.get(), true); // is pending
 /// assert_eq!(result_of_call.get(), None); // has not yet gotten a response
 ///
-/// # halyard_any_spawner::Executor::tick().await;
+/// # halyard_reactive_graph::executor::Executor::tick().await;
 ///
 /// // after call has resolved
 /// assert_eq!(input.get(), None); // input clears out after resolved
@@ -671,7 +671,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = Action::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -804,7 +804,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = Action::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -835,7 +835,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = Action::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -874,7 +874,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = Action::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -927,7 +927,7 @@ where
     /// # use halyard_reactive_graph::actions::*;
     /// # use halyard_reactive_graph::prelude::*;
     /// # tokio_test::block_on(async move {
-    /// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+    /// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
     /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
     /// let act = Action::new(|n: &u8| {
     ///     let n = n.to_owned();
@@ -1135,7 +1135,7 @@ impl<I, O> Copy for Action<I, O> {}
 /// # use halyard_reactive_graph::actions::*;
 /// # use halyard_reactive_graph::prelude::*;
 /// # tokio_test::block_on(async move {
-/// # halyard_any_spawner::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
+/// # halyard_reactive_graph::executor::Executor::init_tokio(); let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 /// # let _guard = halyard_reactive_graph::diagnostics::SpecialNonReactiveZone::enter();
 /// let act = Action::new(|n: &u8| {
 ///     let n = n.to_owned();

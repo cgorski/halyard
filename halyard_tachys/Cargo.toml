@@ -6,20 +6,12 @@ authors = ["Greg Johnston"]
 license = "MIT"
 readme = "../README.md"
 repository = "https://github.com/cgorski/halyard"
-description = "Tools for building reactivity-agnostic, renderer-generic, statically-typed view trees for user interface libraries."
+description = "Statically-typed view trees for user interfaces, rendered to the DOM or to HTML, with fine-grained reactivity."
 rust-version.workspace = true
 edition.workspace = true
 
 [dependencies]
-halyard_throw_error = { workspace = true }
-halyard_any_spawner = { workspace = true, optional = true }
-halyard_const_str_slice_concat = { workspace = true }
-halyard_either_of = { workspace = true }
-halyard_next_tuple = { workspace = true }
-halyard_or_poisoned = { workspace = true }
-halyard_reactive_graph = { workspace = true, optional = true }
-halyard_oco = { workspace = true, optional = true }
-async-trait = { workspace = true, default-features = true }
+halyard_reactive_graph = { workspace = true }
 pastey = { workspace = true, default-features = true }
 erased = { workspace = true, default-features = true }
 wasm-bindgen = { workspace = true, default-features = true }
@@ -148,7 +140,6 @@ web-sys = { features = [
   "HtmlTemplateElement",
   "HtmlOptionElement",
 ], workspace = true, default-features = true }
-drain_filter_polyfill = { workspace = true, default-features = true }
 indexmap = { workspace = true, default-features = true }
 rustc-hash = { workspace = true, default-features = true }
 futures = { workspace = true, default-features = true }
@@ -156,10 +147,11 @@ itertools = { workspace = true, default-features = true }
 send_wrapper = { workspace = true, default-features = true }
 thiserror = { workspace = true }
 tracing = { optional = true, workspace = true, default-features = true }
-serde = { optional = true, workspace = true, default-features = true }
+serde = { workspace = true, default-features = true }
 serde_json = { optional = true, workspace = true, default-features = true }
 
 [dev-dependencies]
+serde_json = { workspace = true, default-features = true }
 tokio-test = { workspace = true, default-features = true }
 tokio = { features = [
   "rt",
@@ -167,13 +159,11 @@ tokio = { features = [
 ], workspace = true, default-features = true }
 
 [features]
-delegation = []                                                       # enables event delegation
-error-hook = []
+delegation = [] # enables event delegation
 hydrate = []
-islands = ["dep:serde", "dep:serde_json"]
+# keyed lists serialize their keys (for the islands router)
+islands = ["dep:serde_json"]
 ssr = []
-oco = ["dep:halyard_oco"]
-reactive_graph = ["dep:halyard_reactive_graph", "dep:halyard_any_spawner"]
 tracing = ["dep:tracing"]
 mark_branches = []
 

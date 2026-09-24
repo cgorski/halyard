@@ -19,7 +19,7 @@ use std::{fmt::Display, ops::Deref, sync::Arc};
 ///     provide_meta_context;
 ///
 ///     view! {
-///         // use `halyard_meta` to insert a <meta> tag with the CSP
+///         // use `halyard::meta` to insert a <meta> tag with the CSP
 ///         <Meta
 ///             http_equiv="Content-Security-Policy"
 ///             content=move || {
@@ -36,7 +36,7 @@ use std::{fmt::Display, ops::Deref, sync::Arc};
 ///         />
 ///         // manually insert nonce during SSR on inline script
 ///         <script nonce=use_nonce()>"console.log('Hello, world!');"</script>
-///         // halyard_meta <Style/> and <Script/> automatically insert the nonce
+///         // halyard::meta's <Style/> and <Script/> automatically insert the nonce
 ///         <Style>"body { color: blue; }"</Style>
 ///         <p>"Test"</p>
 ///     }
@@ -130,7 +130,7 @@ impl AttributeValue for Nonce {
 ///     provide_meta_context;
 ///
 ///     view! {
-///         // use `halyard_meta` to insert a <meta> tag with the CSP
+///         // use `halyard::meta` to insert a <meta> tag with the CSP
 ///         <Meta
 ///             http_equiv="Content-Security-Policy"
 ///             content=move || {
@@ -147,7 +147,7 @@ impl AttributeValue for Nonce {
 ///         />
 ///         // manually insert nonce during SSR on inline script
 ///         <script nonce=use_nonce()>"console.log('Hello, world!');"</script>
-///         // halyard_meta <Style/> and <Script/> automatically insert the nonce
+///         // halyard::meta's <Style/> and <Script/> automatically insert the nonce
 ///         <Style>"body { color: blue; }"</Style>
 ///         <p>"Test"</p>
 ///     }
@@ -159,14 +159,19 @@ pub fn use_nonce() -> Option<Nonce> {
 }
 
 /// Generates a nonce and provides it via context.
-#[cfg(feature = "nonce")]
+///
+/// Server side only (not compiled for `wasm32`): the browser reads the nonce the server
+/// rendered, and never generates one.
+#[cfg(all(feature = "nonce", not(target_family = "wasm")))]
 pub fn provide_nonce() {
     crate::context::provide_context(Nonce::new())
 }
 
-#[cfg(feature = "nonce")]
+#[cfg(all(feature = "nonce", not(target_family = "wasm")))]
 impl Nonce {
     /// Generates a new nonce from 16 bytes (128 bits) of random data.
+    ///
+    /// Server side only (not compiled for `wasm32`).
     pub fn new() -> Self {
         use base64::{
             alphabet,
@@ -185,7 +190,10 @@ impl Nonce {
         rng.fill_bytes(&mut bytes);
         Nonce(NONCE_ENGINE.encode(bytes).into())
     }
+}
 
+#[cfg(feature = "nonce")]
+impl Nonce {
     /// Builds a nonce from a caller-supplied value rather than generating
     /// one — e.g. a nonce minted by a reverse proxy and forwarded to the
     /// application as a request header. The caller is responsible for the
@@ -197,7 +205,7 @@ impl Nonce {
     }
 }
 
-#[cfg(feature = "nonce")]
+#[cfg(all(feature = "nonce", not(target_family = "wasm")))]
 impl Default for Nonce {
     fn default() -> Self {
         Self::new()
