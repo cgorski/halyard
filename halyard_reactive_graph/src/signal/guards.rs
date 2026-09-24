@@ -1,19 +1,24 @@
 //! Guards that integrate with the reactive system, wrapping references to the values of signals.
 
+pub use super::commit::SignalWriteGuard;
 use crate::{
     computed::BlockingLock,
     error::{Access, GraphError, ReportOnce},
-    reentry::{held_by_this_thread, lock_id, Held, SINGLE_THREADED},
+    reentry::{
+        self, held_by_this_thread, lock_id, Held, Writing, SINGLE_THREADED,
+    },
     traits::{Notify, UntrackableGuard},
 };
 use core::fmt::Debug;
 use guardian::{ArcRwLockReadGuardian, ArcRwLockWriteGuardian};
 use std::{
+    any::Any,
     borrow::Borrow,
     fmt::Display,
     marker::PhantomData,
     ops::{Deref, DerefMut},
     panic::Location,
+    rc::Rc,
     sync::{Arc, PoisonError, RwLock},
 };
 
@@ -21,7 +26,7 @@ use std::{
 static REENTERED_READ: ReportOnce = ReportOnce::new();
 static REENTERED_WRITE: ReportOnce = ReportOnce::new();
 
-fn report_reentered(
+pub(crate) fn report_reentered(
     access: Access,
     defined_at: Option<&'static Location<'static>>,
 ) {
@@ -109,10 +114,22 @@ where
 }
 
 /// A guard that provides access to a signal's inner value.
+///
+/// Natively, nested reads of the same value on one thread share one lock guard: the lock is
+/// taken once per thread, and released when the last of them is dropped.
 pub struct Plain<T: 'static> {
-    guard: ArcRwLockReadGuardian<T>,
+    guard: ReadHold<T>,
     // after `guard`: the lock is released before it stops being recorded as held
     _held: Held,
+}
+
+/// How a [`Plain`] holds its lock.
+enum ReadHold<T: 'static> {
+    /// With one thread, a nested read takes the lock again: no writer can be waiting.
+    Own(ArcRwLockReadGuardian<T>),
+    /// Natively, nested reads share the guard: a second read of a std lock may wait forever
+    /// for a writer (on another thread) that is itself waiting for the first.
+    Shared(Rc<ArcRwLockReadGuardian<T>>),
 }
 
 impl<T: 'static> Debug for Plain<T> {
@@ -122,11 +139,13 @@ impl<T: 'static> Debug for Plain<T> {
 }
 
 impl<T: 'static> Plain<T> {
-    /// Takes a reference-counted read guard on the given lock, or `None` if it is being
-    /// written (it does not wait). A lock poisoned by a panic still gives its value.
+    /// Takes a reference-counted read guard on the given lock. A lock poisoned by a panic
+    /// still gives its value.
     ///
-    /// If this thread is the one writing it (the read is inside the value's own `update`),
-    /// that is logged, once.
+    /// Natively this waits while another thread writes the value. It returns `None` (and
+    /// logs that, once) if this thread is changing the value in place (the read is inside
+    /// its own in-place update), which would never end; and in the browser, if the lock is
+    /// busy at all (only this thread could hold it).
     pub fn try_new(inner: Arc<RwLock<T>>) -> Option<Self> {
         Self::try_new_at(inner, None)
     }
@@ -137,18 +156,46 @@ impl<T: 'static> Plain<T> {
         defined_at: Option<&'static Location<'static>>,
     ) -> Option<Self> {
         let lock = lock_id(&*inner);
-        match ArcRwLockReadGuardian::try_take(inner) {
-            Some(taken) => Some(Plain {
-                guard: taken.unwrap_or_else(PoisonError::into_inner),
-                _held: Held::new(lock),
-            }),
-            None => {
-                if SINGLE_THREADED || held_by_this_thread(lock) {
-                    report_reentered(Access::Read, defined_at);
-                }
-                None
-            }
+        let state = reentry::state(lock);
+        if state.is_some_and(|state| state.write_locks > 0) {
+            report_reentered(Access::Read, defined_at);
+            return None;
         }
+        let held = Held::new(lock);
+        // a read already alive on this thread: share its guard
+        if let Some(shared) = reentry::shared_read(lock).and_then(|shared| {
+            shared.downcast::<ArcRwLockReadGuardian<T>>().ok()
+        }) {
+            return Some(Plain {
+                guard: ReadHold::Shared(shared),
+                _held: held,
+            });
+        }
+        let taken = match ArcRwLockReadGuardian::try_take(Arc::clone(&inner)) {
+            Some(taken) => taken,
+            // written by another thread: a signal's write holds the lock only to swap the new
+            // value in, so wait for it (not if this thread uses the value already: a writer
+            // may be waiting for this thread)
+            None if !SINGLE_THREADED
+                && state.is_some_and(|state| !state.in_use()) =>
+            {
+                ArcRwLockReadGuardian::take(inner)
+            }
+            None => {
+                report_reentered(Access::Read, defined_at);
+                return None;
+            }
+        };
+        let guard = taken.unwrap_or_else(PoisonError::into_inner);
+        let guard = if SINGLE_THREADED {
+            ReadHold::Own(guard)
+        } else {
+            let guard = Rc::new(guard);
+            let shared: Rc<dyn Any> = guard.clone();
+            reentry::share_read(lock, &shared);
+            ReadHold::Shared(guard)
+        };
+        Some(Plain { guard, _held: held })
     }
 }
 
@@ -156,7 +203,10 @@ impl<T> Deref for Plain<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.guard.deref()
+        match &self.guard {
+            ReadHold::Own(guard) => guard.deref(),
+            ReadHold::Shared(guard) => guard.deref().deref(),
+        }
     }
 }
 
@@ -180,7 +230,9 @@ impl<T: Display> Display for Plain<T> {
 
 /// A guard that provides access to an async signal's value.
 pub struct AsyncPlain<T: 'static> {
-    pub(crate) guard: async_lock::RwLockReadGuardArc<T>,
+    guard: async_lock::RwLockReadGuardArc<T>,
+    // after `guard`: the lock is released before it stops being recorded as held
+    _held: Held,
 }
 
 impl<T: 'static> Debug for AsyncPlain<T> {
@@ -200,11 +252,45 @@ impl<T: 'static> AsyncPlain<T> {
         if guard.is_none() {
             report_reentered(Access::Read, None);
         }
-        guard.map(|guard| Self { guard })
+        guard.map(|guard| Self::recorded(guard, inner))
+    }
+
+    /// Wraps a read guard taken on `lock`, recording it as held by this thread.
+    pub(crate) fn recorded(
+        guard: async_lock::RwLockReadGuardArc<T>,
+        lock: &Arc<async_lock::RwLock<T>>,
+    ) -> Self {
+        Self {
+            guard,
+            _held: Held::new(lock_id(&**lock)),
+        }
     }
 }
 
 impl<T> Deref for AsyncPlain<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard.deref()
+    }
+}
+
+/// A guard on an async value, taken by awaiting it (`by_ref().await`).
+///
+/// Unlike [`AsyncPlain`], it may be held across `.await`s and moved between threads, so it is
+/// not recorded as held by one thread: a synchronous write to the same value from the thread
+/// that holds it waits for it to be dropped.
+pub struct AsyncAwaited<T: 'static> {
+    pub(crate) guard: async_lock::RwLockReadGuardArc<T>,
+}
+
+impl<T: 'static> Debug for AsyncAwaited<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AsyncAwaited").finish()
+    }
+}
+
+impl<T> Deref for AsyncAwaited<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -376,10 +462,24 @@ where
 
 /// A guard that provides mutable access to a signal's inner value, but does not notify of any
 /// changes.
+///
+/// It changes the value in place: while it is alive, the value cannot be read on this thread
+/// (reads give `None` from their `try_*` forms), and writes to it from this thread are
+/// deferred until it is dropped.
 pub struct UntrackedWriteGuard<T: 'static> {
     guard: ArcRwLockWriteGuardian<T>,
     // after `guard`: the lock is released before it stops being recorded as held
     _held: Held,
+    // last: a signal's writer turn, released (after applying the writes deferred meanwhile)
+    // once the lock is
+    _writing: Option<Writing>,
+}
+
+impl<T: 'static> Debug for UntrackedWriteGuard<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UntrackedWriteGuard")
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: 'static> UntrackedWriteGuard<T> {
@@ -402,7 +502,8 @@ impl<T: 'static> UntrackedWriteGuard<T> {
         match ArcRwLockWriteGuardian::try_take(inner) {
             Some(taken) => Some(Self {
                 guard: taken.unwrap_or_else(PoisonError::into_inner),
-                _held: Held::new(lock),
+                _held: Held::write_lock(lock),
+                _writing: None,
             }),
             None => {
                 if SINGLE_THREADED || held_by_this_thread(lock) {
@@ -413,25 +514,28 @@ impl<T: 'static> UntrackedWriteGuard<T> {
         }
     }
 
-    /// Takes a write guard on the given lock, waiting while another thread uses it; `None`
-    /// if this thread is using it (the write is inside the value's own `with` or `update`,
-    /// or a guard of its is alive here), which would never end. That is logged, once.
-    pub(crate) fn take(
+    /// Takes a write guard on a signal's value, for the write `writing` that has just begun
+    /// (this thread holds nothing else of the value): waits while other threads read it.
+    pub(crate) fn for_write(
         inner: Arc<RwLock<T>>,
+        writing: Writing,
         defined_at: Option<&'static Location<'static>>,
     ) -> Option<Self> {
-        let lock = lock_id(&*inner);
-        let taken = match ArcRwLockWriteGuardian::try_take(Arc::clone(&inner)) {
-            Some(taken) => taken,
-            None if SINGLE_THREADED || held_by_this_thread(lock) => {
-                report_reentered(Access::Write, defined_at);
-                return None;
+        let taken = if SINGLE_THREADED {
+            match ArcRwLockWriteGuardian::try_take(inner) {
+                Some(taken) => taken,
+                None => {
+                    report_reentered(Access::Write, defined_at);
+                    return None;
+                }
             }
-            None => ArcRwLockWriteGuardian::take(inner),
+        } else {
+            ArcRwLockWriteGuardian::take(inner)
         };
         Some(Self {
             guard: taken.unwrap_or_else(PoisonError::into_inner),
-            _held: Held::new(lock),
+            _held: Held::write_lock(writing.id()),
+            _writing: Some(writing),
         })
     }
 }

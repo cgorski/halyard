@@ -5,9 +5,9 @@ use super::{
 };
 use crate::{
     error::{GraphError, ReportOnce},
-    graph::{ReactiveNode, SubscriberSet},
+    graph::SubscriberSet,
     owner::{ArenaItem, FromLocal, LocalStorage, Storage, SyncStorage},
-    signal::guards::{UntrackedWriteGuard, WriteGuard},
+    signal::guards::UntrackedWriteGuard,
     traits::{
         DefinedAt, Dispose, IntoInner, IsDisposed, Notify, ReadUntracked,
         UntrackableGuard, Write,
@@ -56,9 +56,9 @@ use std::{
 /// ### Updating the Value
 /// - [`.set()`](crate::traits::Set) sets the signal to a new value.
 /// - [`.update()`](crate::traits::Update) updates the value of the signal by
-///   applying a closure that takes a mutable reference.
+///   applying a closure to a copy of it, which is then committed.
 /// - [`.write()`](crate::traits::Write) returns a guard through which the signal
-///   can be mutated, and which notifies subscribers when it is dropped.
+///   can be mutated, and which commits and notifies subscribers when it is dropped.
 ///
 /// > Each of these has a related `_untracked()` method, which updates the signal
 /// > without notifying subscribers. Untracked updates are not desirable in most
@@ -82,7 +82,7 @@ use std::{
 /// // ❌ you could call the getter within the setter
 /// // set_count.set(count.get() + 1);
 ///
-/// // ✅ however it's more efficient to use .update() and mutate the value in place
+/// // ✅ however it's simpler to use .update(), which changes a copy and commits it
 /// count.update(|count: &mut i32| *count += 1);
 /// assert_eq!(count.get(), 2);
 ///
@@ -275,6 +275,7 @@ where
                             defined_at: Location::caller(),
                             value: Arc::clone(&read.value),
                             inner: Arc::clone(&read.inner),
+                            turn: Arc::clone(&write.turn),
                         }),
                     })
                 } else {
@@ -389,10 +390,14 @@ where
 
 impl<T, S> Notify for RwSignal<T, S>
 where
+    T: 'static,
     S: Storage<ArcRwSignal<T>>,
 {
+    /// Deferred while this thread is using the signal.
     fn notify(&self) {
-        self.mark_dirty();
+        if let Some(inner) = self.inner.try_get_value() {
+            inner.notify();
+        }
     }
 }
 
@@ -403,20 +408,45 @@ where
 {
     type Value = T;
 
-    /// Waits while another thread uses the value; `None` if this thread is using it (the
-    /// write is inside this signal's own `with` or `update`, or a guard of its is alive),
-    /// which would never end. That is logged once.
-    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        let inner = self.inner.try_get_value()?;
-        let guard = UntrackedWriteGuard::take(inner.value, self.defined_at())?;
-        Some(WriteGuard::new(*self, guard))
+    /// A guard holding a copy of the value, committed when it is dropped (deferred while
+    /// this thread is using the signal).
+    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
+    where
+        T: Clone,
+    {
+        self.inner.try_get_value()?.writer().snapshot_guard()
     }
 
+    /// Changes the value in place. Waits while another thread writes it; `None` if this
+    /// thread is using it (the write is inside the signal's own `with` or `update`, or a
+    /// guard of it is alive), which would never end. That is logged once.
     #[allow(refining_impl_trait)]
     fn try_write_untracked(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
-        self.inner
-            .try_with_value(|n| n.try_write_untracked())
-            .flatten()
+        self.inner.try_get_value()?.try_write_untracked()
+    }
+
+    fn try_commit_value(&self, value: T) -> Option<T> {
+        match self.inner.try_get_value() {
+            Some(inner) => inner.try_commit_value(value),
+            None => Some(value),
+        }
+    }
+
+    fn try_update_snapshot<U>(
+        &self,
+        fun: impl FnOnce(&mut T) -> (bool, U),
+    ) -> Option<U>
+    where
+        T: Clone,
+    {
+        self.inner.try_get_value()?.try_update_snapshot(fun)
+    }
+
+    fn try_update_in_place<U>(
+        &self,
+        fun: impl FnOnce(&mut T) -> (bool, U),
+    ) -> Option<U> {
+        self.inner.try_get_value()?.try_update_in_place(fun)
     }
 }
 

@@ -6,7 +6,7 @@ use crate::{
     graph::{AnySource, ToAnySource},
     owner::{use_context, Storage},
     send_wrapper_ext::SendOption,
-    signal::guards::{AsyncPlain, Mapped, ReadGuard},
+    signal::guards::{AsyncAwaited, Mapped, ReadGuard},
     traits::{DefinedAt, Track},
     unwrap_signal,
 };
@@ -26,7 +26,7 @@ use std::{
 /// Implements [`Deref`](std::ops::Deref) to access the inner value. This should not be held longer
 /// than it is needed, as it prevents updates to the inner value.
 pub type AsyncDerivedGuard<T> =
-    ReadGuard<T, Mapped<AsyncPlain<SendOption<T>>, T>>;
+    ReadGuard<T, Mapped<AsyncAwaited<SendOption<T>>, T>>;
 
 /// A [`Future`] that is ready when an [`ArcAsyncDerived`] is finished loading or reloading,
 /// but does not contain its value.
@@ -223,7 +223,7 @@ where
             // The value was just seen to be there, and the read guard keeps it from being
             // emptied while the guard lives, so the mapping always finds it.
             (_, Poll::Ready(guard)) => Poll::Ready(ReadGuard::new(
-                Mapped::new_with_guard(AsyncPlain { guard }, |guard| {
+                Mapped::new_with_guard(AsyncAwaited { guard }, |guard| {
                     guard.as_ref().unwrap()
                 }),
             )),

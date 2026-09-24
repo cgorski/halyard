@@ -5,6 +5,7 @@ use crate::{
     owner::on_cleanup,
     traits::{DefinedAt, Dispose},
 };
+use indexmap::IndexSet;
 use std::{
     panic::Location,
     sync::{Arc, Mutex, PoisonError, RwLock, TryLockError},
@@ -177,18 +178,24 @@ impl DefinedAt for ImmediateEffect {
 ///
 /// NOTE: this is rarely needed, but it is useful for example when multiple signals
 /// need to be updated atomically (for example a double-bound signal tree).
+///
+/// A batch belongs to the thread that runs it: effects triggered on other threads meanwhile
+/// run as usual, on their own threads.
 pub fn batch<T>(f: impl FnOnce() -> T) -> T {
     struct ExecuteOnDrop;
     impl Drop for ExecuteOnDrop {
         fn drop(&mut self) {
-            // only the outermost batch holds this, and only it takes the set it created
+            // only the outermost batch holds this, and only it takes the set it created;
+            // the effects run after the set is released
             let effects = inner::BATCH
-                .write()
-                .or_poisoned()
-                .take()
-                .map(|effects| {
-                    effects.into_inner().unwrap_or_else(PoisonError::into_inner)
+                .try_with(|batch| {
+                    batch
+                        .try_borrow_mut()
+                        .ok()
+                        .and_then(|mut batch| batch.take())
                 })
+                .ok()
+                .flatten()
                 .unwrap_or_default();
             // TODO: Should we skip the effects if it's panicking?
             for effect in effects {
@@ -196,16 +203,18 @@ pub fn batch<T>(f: impl FnOnce() -> T) -> T {
             }
         }
     }
-    let mut execute_on_drop = None;
-    {
-        let mut batch = inner::BATCH.write().or_poisoned();
-        if batch.is_none() {
-            execute_on_drop = Some(ExecuteOnDrop);
-        } else {
-            // Nested batching has no effect.
-        }
-        *batch = Some(batch.take().unwrap_or_default());
-    }
+    // Nested batching has no effect.
+    let outermost = inner::BATCH
+        .try_with(|batch| match batch.try_borrow_mut() {
+            Ok(mut batch) if batch.is_none() => {
+                *batch = Some(IndexSet::new());
+                true
+            }
+            _ => false,
+        })
+        .unwrap_or(false);
+    // made only by the outermost batch: dropping one runs the batched effects
+    let execute_on_drop = if outermost { Some(ExecuteOnDrop) } else { None };
     let ret = f();
     drop(execute_on_drop);
     ret
@@ -224,15 +233,46 @@ mod inner {
     };
     use indexmap::IndexSet;
     use std::{
+        cell::RefCell,
         panic::Location,
         sync::{Arc, RwLock, Weak},
         thread::{self, ThreadId},
     };
 
-    /// Only the [super::batch] function ever writes to the outer RwLock.
-    /// While the effects will write to the inner one.
-    pub(super) static BATCH: RwLock<Option<RwLock<IndexSet<AnySubscriber>>>> =
-        RwLock::new(None);
+    thread_local! {
+        /// The effects deferred by the [super::batch] running on this thread, if any. Only
+        /// `batch` sets and takes it; the effects add themselves to it.
+        pub(super) static BATCH: RefCell<Option<IndexSet<AnySubscriber>>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Whether a batch is running on this thread.
+    fn batching() -> bool {
+        BATCH
+            .try_with(|batch| {
+                batch
+                    .try_borrow()
+                    .map(|batch| batch.is_some())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Adds an effect to this thread's batch; `false` if no batch is running.
+    fn add_to_batch(subscriber: AnySubscriber) -> bool {
+        BATCH
+            .try_with(|batch| match batch.try_borrow_mut() {
+                Ok(mut batch) => match batch.as_mut() {
+                    Some(effects) => {
+                        effects.insert(subscriber);
+                        true
+                    }
+                    None => false,
+                },
+                Err(_) => false,
+            })
+            .unwrap_or(false)
+    }
 
     /// Handles subscription logic for effects.
     ///
@@ -349,13 +389,10 @@ mod inner {
                 ReactiveNodeState::Dirty => true,
             };
 
-            {
-                if let Some(batch) = &*BATCH.read().or_poisoned() {
-                    let mut batch = batch.write().or_poisoned();
-                    let subscriber =
-                        self.read().or_poisoned().any_subscriber.clone();
-
-                    batch.insert(subscriber);
+            if batching() {
+                let subscriber =
+                    self.read().or_poisoned().any_subscriber.clone();
+                if add_to_batch(subscriber) {
                     return needs_update;
                 }
             }

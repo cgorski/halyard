@@ -136,6 +136,19 @@ impl<T> SendOption<T> {
         }
     }
 
+    /// A value of the same kind as this one (thread-safe or local) holding `value`: to
+    /// replace this one without changing its kind.
+    pub(crate) fn same_kind(&self, value: Option<T>) -> Self {
+        match &self.inner {
+            // a thread-safe value is only ever made by `new` (which needs `T: Send + Sync`) or
+            // cloned from one, so `T` is `Send + Sync` here
+            Inner::Threadsafe(_) => Self {
+                inner: Inner::Threadsafe(value),
+            },
+            Inner::Local(_) => Self::new_local(value),
+        }
+    }
+
     /// Consume the value.
     ///
     /// # Panics

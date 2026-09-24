@@ -927,19 +927,20 @@ pub fn params_derive(
 
 /// Generates a `slice` into a struct with a default getter and setter.
 ///
-/// Can be used to access deeply nested fields within a global state object.
+/// Can be used to access deeply nested fields within a global state object. The setter
+/// updates the signal on a copy of its value, so the state is `Clone`.
 ///
 /// ```rust
 /// # use halyard::prelude::*;
 /// # use halyard_macro::slice;
 ///
-/// #[derive(Default)]
+/// #[derive(Clone, Default)]
 /// pub struct Outer {
 ///     count: i32,
 ///     inner: Inner,
 /// }
 ///
-/// #[derive(Default)]
+/// #[derive(Clone, Default)]
 /// pub struct Inner {
 ///     inner_count: i32,
 ///     inner_name: String,

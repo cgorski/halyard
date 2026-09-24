@@ -28,6 +28,33 @@ pub(crate) enum GraphError {
         access: Access,
         defined_at: Option<&'static Location<'static>>,
     },
+    /// A signal was updated from inside its own update (or while its write guard was alive):
+    /// both started from the same committed value.
+    #[error(
+        "a signal{} was updated from inside its own update (or while a write guard of it was \
+         alive); the inner update started from the committed value and is applied after the \
+         outer one, so its result replaces the outer one's",
+        created(.defined_at)
+    )]
+    UpdatedInsideUpdate {
+        defined_at: Option<&'static Location<'static>>,
+    },
+    /// A signal's deferred writes kept coming while they were applied.
+    #[error(
+        "a signal{} was written {applied} times while its deferred writes were being applied \
+         (a subscriber that writes it on every change?); the rest are dropped",
+        created(.defined_at)
+    )]
+    RunawayWrites {
+        applied: usize,
+        defined_at: Option<&'static Location<'static>>,
+    },
+    /// A write to a signal could not be made.
+    #[error("a write to a signal{} was dropped: {why}", created(.defined_at))]
+    WriteDropped {
+        why: &'static str,
+        defined_at: Option<&'static Location<'static>>,
+    },
     /// A memo was read, after its sources changed, while this thread held a guard on its
     /// value: it cannot store a new value until that guard is dropped.
     #[error(
@@ -93,9 +120,9 @@ impl Access {
         match self {
             Access::Read => "the read gives nothing (its `try_*` form returns `None`)",
             Access::Write => {
-                "the write is refused (its `try_*` form returns `None`, `try_set` returns \
-                 the value), instead of waiting forever; write after the closure returns or \
-                 the guard is dropped"
+                "the in-place write is refused (its `try_*` form returns `None`), instead of \
+                 waiting forever; a signal's `set`, `update` and write guard are deferred \
+                 until this thread's use of it ends"
             }
         }
     }
@@ -179,7 +206,7 @@ mod tests {
             )),
             "{write}"
         );
-        assert!(write.contains("the write is refused"), "{write}");
+        assert!(write.contains("the in-place write is refused"), "{write}");
 
         let read = GraphError::Reentered {
             access: Access::Read,

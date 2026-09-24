@@ -1,7 +1,7 @@
 use halyard::prelude::RwSignal;
 use halyard_macro::slice;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct OuterState {
     count: i32,
     inner: InnerState,

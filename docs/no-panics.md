@@ -88,6 +88,7 @@ ratchet.
    clippy's `disallowed-methods`.
 2. **No user code under a guard.** `Callback`, `StoredValue::with_value`, `debounce`,
    memo and effect runners: take what is needed out of the lock, release it, then call.
+   For signals this is done: see "Re-entrant access to a signal" below.
 3. **The DOM layer returns typed errors.** `Renderer`/`Mountable` operations return
    `Result<_, DomError>`, and the view layer handles a failure by logging it with the
    node's DOM path and keeping the tree consistent (a placeholder, or skipping that
@@ -99,6 +100,56 @@ ratchet.
    `unwrap` becomes a typed error that renders a 500 with a request id.
 6. **Macros.** Every macro panic becomes a `syn::Error` on the offending span.
 7. **Per crate: panic lints to `deny`** once the crate's count is zero.
+
+## Re-entrant access to a signal
+
+Decided and implemented 2026-09-24 (`halyard_reactive_graph`: `reentry.rs`,
+`signal/commit.rs`; tests in `tests/reentrant_writes.rs` and `tests/reentry.rs`). A signal
+can be reached again by code that is already using it: a read inside its own `update`, a
+`set` inside its own `with`, a memo or an effect that writes what it reads. That never
+aborts, deadlocks or panics. The rule, for applications as for halyard itself:
+
+1. **An update works on a copy.** `update(|v| ...)` and `maybe_update` clone the committed
+   value, run the closure outside every lock, then commit the result and notify the
+   subscribers once. Inside the closure, reading the same signal (`get`, `with`, `read`, or
+   indirectly through memos and derived signals) gives the last committed value. `update`
+   needs `T: Clone`.
+2. **A write never lands in the middle of a read.** A write (`set`, `update`, `notify`, the
+   drop of a write guard) made while this thread is using the signal (inside its `with`,
+   while a read or write guard of it is alive, inside its `update`) is deferred, and applied
+   in order when this thread's outermost use of the signal ends. A deferred `update` runs its
+   closure at once, on the value it will be committed over (the committed value and this
+   thread's earlier deferred writes), and defers the result. So an `update` nested in an
+   `update` of the same signal starts from the same committed value as the outer one and is
+   committed after it, replacing its result; that is almost always a mistake, and it is
+   logged (once).
+3. **A write guard holds a copy.** `write()` returns a guard over a clone of the value,
+   committed (or deferred, as above) when it is dropped. Nothing is locked while it lives,
+   so the signal can still be read (the committed value) and written (deferred).
+   `write()` needs `T: Clone`.
+4. **Values that are not `Clone` change in place.** `set` works for every value, like any
+   write. `try_update`, `update_untracked` and the untracked guard (`write_untracked`)
+   change the value in place, under its lock: started while this thread is using the
+   signal, they return `None` without running; while they run, the signal cannot be read
+   on this thread (the `try_*` reads give `None`, logged once). Do not read a signal from
+   inside its own in-place update.
+5. **Threads serialize their writes.** Each signal has a *writer turn*, a mutex that is
+   not the value's lock: one thread writes at a time, so concurrent updates never lose one
+   another's changes. Reads never wait for an update's closure; they wait only while
+   another thread swaps a new value in. Nested reads on one thread share one lock guard.
+
+How: every thread keeps a record of the signals it is using (keyed by the address of the
+value's lock), with the writes it has deferred. It is consulted before any lock is tried,
+so the browser's single-threaded lock never sees a conflicting acquisition, and natively no
+thread waits for itself. Writes from other threads wait for their turn as before.
+
+In short, for application code: read a signal anywhere, write it anywhere; a write never
+takes effect in the middle of this thread's read of the same signal, and an update's
+closure sees the value as it was committed. Stored values (`StoredValue`) are not signals:
+their closures run on the borrowed value, and reaching the same value again from there is
+refused (`None` from the `try_*` forms). Resources and async derived values change in
+place; reaching one again from inside its own update is refused rather than waited for
+(natively it used to deadlock).
 
 ## Decision needed: reading a disposed signal
 
@@ -121,7 +172,7 @@ and offers `try_get()`; Dioxus's `read()` does the same with `try_read()`. Chang
 
 Recommendation: **A now, B next.** A is needed under both B and C, and lands without
 touching application code. B is the one that makes the guarantee total at a cost we can
-measure; do it before the application grows (the transaction form's 179 types).
+measure; do it before applications grow many more components that use the accessors.
 
 **Decided (2026-09-22): A, then B.** halyard stays a full client framework (SSR plus
 hydrated WebAssembly), and the guarantee is by type. The model is the standard library's
@@ -131,6 +182,217 @@ hydrated WebAssembly), and the guarantee is by type. The model is the standard l
 value alive, so reading through it is total (`get`, `with`, `run`). The panicking
 accessors on `Copy` handles are removed, not deprecated. Inside halyard, reactive
 rendering of a weak handle whose value is gone renders or updates nothing and logs once.
+
+## Design: weak arena handles (B)
+
+Written 2026-09-24; not implemented yet. It builds on "Re-entrant access to a signal".
+
+### The rule
+
+- A `Copy` arena handle is **weak**, like `std::rc::Weak`: it does not keep its value
+  alive. Every accessor that returns a value and would have to panic when the value is
+  gone is removed; its `try_*` form (an `Option`) stays.
+- A reference-counted handle (`Arc...`) is **strong**: every read through it is total.
+- A write through a weak handle whose value is gone (`set`, `update`, `notify`, `dispatch`,
+  `refetch`, running a callback that returns `()`) does nothing, and that is logged once.
+- Rendering a weak handle whose value is gone (as a `view!` child or attribute value)
+  renders or updates nothing, and that is logged once.
+- `weak.upgrade() -> Option<Arc...>` replaces the conversions `From<weak> for Arc...`,
+  which panic today; `From<Arc...> for weak` (a downgrade) stays.
+- In debug builds, a `try_*` read of a gone weak handle is logged once (creation site and
+  call site), so that code which quietly skips work because of it is still visible.
+
+### Types and methods
+
+"Reads" are `get`, `get_untracked`, `with`, `with_untracked`, `read`, `read_untracked`;
+"try reads" are their `try_*` forms. The 36 `unwrap_signal!` sites of today (13 default
+methods in `traits.rs`, 4 in `trait_options.rs`, 6 `From` conversions to `Arc` forms, 8
+`Action` methods, 2 `MultiAction` methods, 3 `AsyncDerived` methods) all go.
+
+| Weak (`Copy`) type | Removed | Kept | Changed or added | Strong form |
+|---|---|---|---|---|
+| `RwSignal`, `MappedSignal` | reads, `write`, `write_untracked`, `update_untracked`, `From` to `Arc` | try reads, `try_write`, `try_write_untracked`, `try_update_untracked`, `set`, `try_set`, `update`, `maybe_update`, `try_update`, `try_maybe_update`, `notify`, `track`, `read_only`, `write_only`, `split`, `unite`, `dispose` | writes to a gone value logged; `upgrade` | `ArcRwSignal`, `ArcMappedSignal` |
+| `ReadSignal` | reads, `From` | try reads, `track` | `upgrade` | `ArcReadSignal` |
+| `WriteSignal` | `write`, `write_untracked`, `update_untracked`, `From` | `set`, `update` and their `try_*` forms, `try_write`, `notify` | writes logged when gone; `upgrade` | `ArcWriteSignal` |
+| `Memo` | reads, `From` | try reads | `upgrade`; `Memo::new_try` (closure returns `Option`) | `ArcMemo` |
+| `Signal` | reads, `From` to `ArcSignal` | try reads | `upgrade`; `Signal::derive_try`; `map` | `ArcSignal` (built only from strong sources) |
+| `MaybeProp` | reads | try reads | renders directly (nothing when unset or gone) | none needed |
+| `StoredValue` | `get_value`, `with_value`, `read_value`, `write_value`, `From` | `try_get_value`, `try_with_value`, `try_read_value`, `try_write_value`, `set_value`, `update_value` and their `try_*` forms | `upgrade` | `ArcStoredValue` |
+| `Callback`, `UnsyncCallback` | `run` when `Out` is not `()` | `try_run`; `run` for `Out = ()` (a write: logged no-op when gone) | `upgrade` | new `ArcCallback`, `ArcUnsyncCallback` (total `run`) |
+| `Action` | nothing | `dispatch`, `dispatch_local`, `version`, `pending`, `input`, `value` | gone: `dispatch` is a logged no-op returning an inert abort handle; the accessors return gone weak handles (logged) instead of panicking | `ArcAction` |
+| `MultiAction` | nothing | `dispatch`, `submissions`, `version` | as `Action` | `ArcMultiAction` |
+| `AsyncDerived` | reads, `From` | try reads, `.await`, `ready`, `by_ref` | gone: the futures stay pending (logged once); they are awaited by code owned with the value, which is cancelled with it | `ArcAsyncDerived` |
+| `Resource`, `LocalResource`, `OnceResource` | reads | try reads, `.await`, `refetch` | as `AsyncDerived`; `refetch` logged when gone | `ArcResource`, `ArcLocalResource`, `ArcOnceResource` |
+| `NodeRef` | reads, `write`, `write_untracked` | try reads, `on_load`, `set` | `element() -> Option<E::Output>`: `None` when not mounted or gone (both mean "no element") | none needed |
+| `Trigger`, `SignalSetter` | nothing (no value to return) | `track`, `notify`, `set` | logged no-op when gone | `ArcTrigger` |
+| Router: `use_params_map`, `use_params`, `use_query_map`, `use_query`, `use_matched` (`Memo`), `use_url` (`ReadSignal`), `use_location` (`Location`: four `Memo`s and a `ReadSignal`), `query_signal` (`Memo`, `SignalSetter`) | as the types they return | as the types they return | signatures unchanged: the handles belong to the calling component | none needed |
+| `Option<weak handle>` (`trait_options.rs`) | reads | try reads | | |
+
+### Structural obstacles
+
+1. **The accessor traits are blanket traits** (`Get` for every `With`, `With` for every
+   `Read`, ...), and each holds both the total and the `try_*` form. They split: `TryGet`,
+   `TryWith`, `TryRead` (and `_untracked`, `Value` forms) for every readable handle, and
+   `Get`, `With`, `Read` only for strong handles, closures and plain values (a sealed
+   `Strong` marker in the blanket impls). A call of `get` on a weak handle then fails to
+   compile, with a `#[diagnostic::on_unimplemented]` message that names `try_get`, the
+   view, and `upgrade`. Generic code bounded on `Get`/`With` (about 110 bounds in the
+   library) moves to the `Try*` traits.
+2. **Rendering.** The `Render`/`RenderHtml`/attribute impls for signals in
+   `halyard_tachys::reactive_graph` (33 call sites, behind `#[allow(deprecated)]`) read
+   with `get`; they read with `try_get` and render nothing when it is `None`.
+3. **`Signal` and `ArcSignal` wrap derived closures** as well as handles. A closure that
+   reads weak handles is fallible, so `Signal::derive_try(|| Some(a.try_get()? + 1))`
+   joins `Signal::derive`, and `ArcSignal` is built only from strong sources.
+4. **Strong reads and in-place writes.** Under "Re-entrant access", an in-place update
+   (`try_update`, `update_untracked`, `write_untracked`) lends out the value: a read of the
+   same signal on the same thread inside it has nothing to return. For strong reads to be
+   total, the in-place forms exist only on weak handles (where every read is a `try_*`);
+   strong handles write through a copy (`update`, `write()`) or a replacement (`set`). A
+   value that is not `Clone` and must change in place is changed through its weak handle
+   (`arc.downgrade().try_update(...)`) or kept in a `StoredValue`.
+5. **Serde impls** of weak handles serialize through `try_with`; a gone value is a
+   serialization error, not a panic.
+
+### What an application writes
+
+The cost of B falls on application code, so halyard adds what keeps it short, without a
+panic and without a default that hides a gone value:
+
+- **Handles as view values.** A weak handle is a `view!` child (`{count}`), an attribute
+  or property value (`prop:value=name`, `disabled=busy`, `class:active=selected`), and
+  the source of `<For each=items>` and `<Show when=flag>`. When its value is gone it
+  renders nothing (logged once). Most `move || x.get()` closures disappear.
+- **`map` for derived values.** `count.map(|n| n * 2)` and, over a tuple of handles,
+  `(name, email).map(|(name, email)| ...)` give a derived `Signal` (the closure gets
+  references, nothing is cloned) that is gone when any source is gone; `.memo(...)` gives
+  a memoised one. With `?`, any shape is possible: `Signal::derive_try(move ||
+  Some(a.try_get()? + b.try_get()?))`.
+- **Event handlers.** Writes are unchanged (`set`, `update` are total: a gone value is a
+  logged no-op), and so are `dispatch` and callbacks returning `()`. Reads use a tuple
+  `try_get` and `let ... else`: `let Some((name, email)) = (name, email).try_get() else
+  { return };`. A handler runs only while its view is mounted, so this `else` is taken
+  only when the handler reads a handle owned by a part of the page that is already gone.
+- **Async tasks.** Read what the task needs before its first `.await`. After an `.await`,
+  read with `try_*` (the component may be gone: then there is nothing to update), or
+  take `upgrade()` before the `.await` when the task must still see the value. With
+  owner-bound tasks (change 1) the task is cancelled with its component, so the `None`
+  branch is rare.
+- **Strong handles and a clone helper** are for state shared beyond one component
+  (contexts, stores, long-lived tasks): `ArcRwSignal` plus `clone!(a, b => move |_| ...)`
+  to capture clones. As the default inside components they cost one clone per closure,
+  which the items above avoid.
+- Not offered: `get_or_default`/`unwrap_or` accessors (a silent default), or a panicking
+  `get` in debug builds (still a panic).
+
+A form with two fields, a derived `valid` memo, a Save button that dispatches an async
+action and reads a field after the `.await`, and a list. Today:
+
+```rust
+#[component]
+pub fn ContactForm(contacts: RwSignal<Vec<Contact>>) -> impl IntoView {
+    let name = RwSignal::new(String::new());
+    let email = RwSignal::new(String::new());
+    let valid = Memo::new(move |_| {
+        !name.get().trim().is_empty() && email.with(|e| e.contains('@'))
+    });
+    let save = Action::new(move |contact: &Contact| {
+        let contact = contact.clone();
+        async move {
+            let saved = api::save(contact).await?;
+            if email.get() == saved.email {          // panics if the form is gone
+                name.set(String::new());
+                email.set(String::new());
+            }
+            contacts.update(|list| list.push(saved));
+            Ok::<_, ApiError>(())
+        }
+    });
+    view! {
+        <form on:submit=move |ev| {
+            ev.prevent_default();
+            save.dispatch(Contact { name: name.get(), email: email.get() });
+        }>
+            <input prop:value=move || name.get()
+                on:input=move |ev| name.set(event_target_value(&ev)) />
+            <input prop:value=move || email.get()
+                on:input=move |ev| email.set(event_target_value(&ev)) />
+            <button disabled=move || !valid.get() || save.pending().get()>"Save"</button>
+        </form>
+        <ul>
+            <For each=move || contacts.get() key=|c| c.email.clone() let:contact>
+                <li>{contact.name}" <"{contact.email}">"</li>
+            </For>
+        </ul>
+    }
+}
+```
+
+Under B (same handles, same number of lines):
+
+```rust
+#[component]
+pub fn ContactForm(contacts: RwSignal<Vec<Contact>>) -> impl IntoView {
+    let name = RwSignal::new(String::new());
+    let email = RwSignal::new(String::new());
+    let valid = (name, email)
+        .memo(|(name, email)| !name.trim().is_empty() && email.contains('@'));
+    let save = Action::new(move |contact: &Contact| {
+        let contact = contact.clone();
+        async move {
+            let saved = api::save(contact).await?;
+            // the form may be gone by now: then there is nothing to clear
+            if email.try_with(|e| *e == saved.email) == Some(true) {
+                name.set(String::new());
+                email.set(String::new());
+            }
+            contacts.update(|list| list.push(saved)); // a logged no-op if gone
+            Ok::<_, ApiError>(())
+        }
+    });
+    view! {
+        <form on:submit=move |ev| {
+            ev.prevent_default();
+            let Some((name, email)) = (name, email).try_get() else { return };
+            save.dispatch(Contact { name, email });
+        }>
+            <input prop:value=name
+                on:input=move |ev| name.set(event_target_value(&ev)) />
+            <input prop:value=email
+                on:input=move |ev| email.set(event_target_value(&ev)) />
+            <button disabled=(valid, save.pending()).map(|(v, p)| !v || *p)>"Save"</button>
+        </form>
+        <ul>
+            <For each=contacts key=|c| c.email.clone() let:contact>
+                <li>{contact.name}" <"{contact.email}">"</li>
+            </For>
+        </ul>
+    }
+}
+```
+
+The one read that could panic today (after the `.await`) is now explicit; the view
+closures are gone; the handler says what happens if its fields are gone.
+
+### Size of the change
+
+Counted by compiling halyard with `#[deprecated]` twins of the removed accessors on every
+weak type (a scratch copy; every feature set: default, `ssr`, `axum`, and the browser
+build with islands; `#[allow(deprecated)]` lifted), on 2026-09-24:
+
+| Where | Call sites |
+|---|---|
+| Library code | 54: rendering of signals in `halyard_tachys` 33, router 13, `AnimatedShow` 4, resources 1, `TextProp` 1, callbacks 2 |
+| Tests | 181: `halyard_reactive_graph` 141, `halyard_macro` 18, `halyard` 22 |
+| Example app (`examples/`, outside the workspace; by search) | 5 |
+| Doc examples (by search; also counts strong handles, so an upper bound) | at most 299, most in `halyard_reactive_graph` |
+
+Plus the 36 accessor definitions and about 110 generic bounds (obstacle 1). The work, in
+order: the trait split and `upgrade`/`downgrade` (2 to 3 days, most of it in
+`halyard_reactive_graph` and its tests); rendering of handles, `map`/`memo`, tuple
+`try_get`, `For`/`Show` sources, `ArcCallback` (2 days); halyard's own call sites, doc
+examples and tests (2 days); then each application (about 15 pages today: mostly
+mechanical, a view closure becoming the handle, a handler read gaining a `let ... else`).
 
 ## Dependencies considered
 
@@ -156,4 +418,8 @@ they can be swapped later.
       (`spawn_local_scoped_with_cancellation`, the unscoped ones forbidden by lint), and
       `try_with_value` for a read after an `await`
 - [x] Decision: A then B (all-Rust, hardened)
-- [ ] Changes 1 to 7 above, and B
+- [x] Change 2 for signals: re-entrant access is total (updates on a copy, deferred
+      writes, write guards on a copy, writer turn); `AsyncDerived` re-entry no longer
+      deadlocks natively; `batch` of `ImmediateEffect`s is per thread
+- [x] Design of B written ("Design: weak arena handles (B)"), with its size
+- [ ] Changes 1 to 7 above (2 remains for `StoredValue` closures and the DOM layer), and B

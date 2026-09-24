@@ -5,6 +5,7 @@ mod arc_read;
 mod arc_rw;
 mod arc_trigger;
 mod arc_write;
+mod commit;
 pub mod guards;
 mod mapped;
 mod read;
@@ -51,7 +52,7 @@ pub use write::*;
 /// // ❌ you could call the getter within the setter
 /// // set_count.set(count.get() + 1);
 ///
-/// // ✅ however it's more efficient to use .update() and mutate the value in place
+/// // ✅ however it's simpler to use .update(), which changes a copy and commits it
 /// set_count.update(|count: &mut i32| *count += 1);
 /// assert_eq!(count.get(), 2);
 ///
@@ -95,7 +96,7 @@ pub fn arc_signal<T>(value: T) -> (ArcReadSignal<T>, ArcWriteSignal<T>) {
 /// // ❌ you could call the getter within the setter
 /// // set_count.set(count.get() + 1);
 ///
-/// // ✅ however it's more efficient to use .update() and mutate the value in place
+/// // ✅ however it's simpler to use .update(), which changes a copy and commits it
 /// set_count.update(|count: &mut i32| *count += 1);
 /// assert_eq!(count.get(), 2);
 ///
@@ -154,7 +155,7 @@ pub fn signal_local<T: 'static>(
 /// // ❌ you could call the getter within the setter
 /// // set_count.set(count.get() + 1);
 ///
-/// // ✅ however it's more efficient to use .update() and mutate the value in place
+/// // ✅ however it's simpler to use .update(), which changes a copy and commits it
 /// set_count.update(|count: &mut i32| *count += 1);
 /// assert_eq!(count.get(), 2);
 ///

@@ -91,7 +91,7 @@ pub fn create_slice<T, O, S>(
     setter: impl Fn(&mut T, S) + Copy + Send + Sync + 'static,
 ) -> (Signal<O>, SignalSetter<S>)
 where
-    T: Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
     O: PartialEq + Send + Sync + 'static,
 {
     (
@@ -128,13 +128,16 @@ where
 
 /// Creates a setter to access one slice of a signal. This is equivalent to the
 /// write-only half of [`create_slice`].
+///
+/// The setter updates the signal like [`Update::update`](crate::traits::Update::update): on
+/// a copy of its value, so `T` is `Clone`.
 #[track_caller]
 pub fn create_write_slice<T, O>(
     signal: RwSignal<T>,
     setter: impl Fn(&mut T, O) + Copy + Send + Sync + 'static,
 ) -> SignalSetter<O>
 where
-    T: Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     let setter = move |value| signal.update(|x| setter(x, value));
     setter.into_signal_setter()

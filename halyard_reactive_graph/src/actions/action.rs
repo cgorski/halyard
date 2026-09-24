@@ -6,7 +6,10 @@ use crate::{
     owner::{ArcStoredValue, ArenaItem, Owner},
     send_wrapper_ext::SendOption,
     signal::{ArcMappedSignal, ArcRwSignal, MappedSignal, RwSignal},
-    traits::{DefinedAt, Dispose, Get, GetUntracked, GetValue, Update, Write},
+    traits::{
+        DefinedAt, Dispose, Get, GetUntracked, GetValue, Set, Update,
+        WithUntracked,
+    },
     unwrap_signal,
 };
 use futures::{channel::oneshot, select, FutureExt};
@@ -228,9 +231,17 @@ where
     /// input, etc.
     #[track_caller]
     pub fn clear(&self) {
-        if let Some(mut guard) = self.value.try_write() {
-            **guard = None;
-        }
+        replace(&self.value, None);
+    }
+}
+
+/// Replaces the value of one of an action's signals, keeping its kind (thread-safe or local).
+/// Like every write, it is deferred while this thread is using the signal.
+fn replace<T: 'static>(signal: &ArcRwSignal<SendOption<T>>, value: Option<T>) {
+    if let Some(next) =
+        signal.try_with_untracked(|current| current.same_kind(value))
+    {
+        signal.set(next);
     }
 }
 
@@ -267,7 +278,7 @@ where
             // Update the state before loading (saturating, as the completions below)
             self.in_flight.update(|n| *n = n.saturating_add(1));
             let current_version = self.dispatched.try_get_value().unwrap_or(0);
-            self.input.try_update(|inp| **inp = Some(input));
+            replace(&self.input, Some(input));
 
             // Spawn the task
             crate::spawn({
@@ -291,12 +302,12 @@ where
                             if is_latest {
                                 // wrapping: every completion changes the version
                                 version.update(|n| *n = n.wrapping_add(1));
-                                value.update(|n| **n = Some(result));
+                                replace(&value, Some(result));
                             }
                         }
                     }
                     if in_flight.try_get_untracked() == Some(0) {
-                        input.update(|inp| **inp = None);
+                        replace(&input, None);
                     }
                 }
             });
@@ -322,7 +333,7 @@ where
             // Update the state before loading (saturating, as the completions below)
             self.in_flight.update(|n| *n = n.saturating_add(1));
             let current_version = self.dispatched.try_get_value().unwrap_or(0);
-            self.input.try_update(|inp| **inp = Some(input));
+            replace(&self.input, Some(input));
 
             // Spawn the task
             Executor::spawn_local({
@@ -346,12 +357,12 @@ where
                             if is_latest {
                                 // wrapping: every completion changes the version
                                 version.update(|n| *n = n.wrapping_add(1));
-                                value.update(|n| **n = Some(result));
+                                replace(&value, Some(result));
                             }
                         }
                     }
                     if in_flight.try_get_untracked() == Some(0) {
-                        input.update(|inp| **inp = None);
+                        replace(&input, None);
                     }
                 }
             });

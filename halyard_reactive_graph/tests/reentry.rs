@@ -138,11 +138,11 @@ fn a_stored_value_updated_from_inside_its_own_update_finishes() {
 }
 
 /// An effect whose closure writes a signal it is reading (`with` + `set`): the write blocked
-/// on the read lock this same thread held. The write is now refused (and logged), so the
-/// effect finishes and the value is unchanged.
+/// on the read lock this same thread held. The write is now deferred until the `with` ends,
+/// then applied, and the effect runs again for each change, to a fixed point.
 #[test]
 fn an_effect_that_writes_a_signal_it_reads_finishes() {
-    let (count, effect_value) =
+    let (first, last) =
         finishes("an effect that writes a signal it reads", || {
             let count = RwSignal::new(0);
             let effect = RenderEffect::new_isomorphic(move |_| {
@@ -153,38 +153,49 @@ fn an_effect_that_writes_a_signal_it_reads_finishes() {
                     *n
                 })
             });
-            (count.try_get_untracked(), effect.take_value())
+            let first = count.try_get_untracked();
+            // the effect runs again on the runtime's threads
+            let mut last = first;
+            for _ in 0..200 {
+                last = count.try_get_untracked();
+                if last == Some(3) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            drop(effect);
+            (first, last)
         });
-    assert_eq!(count, Some(0), "the write inside `with` is refused");
-    assert_eq!(effect_value, Some(0));
+    assert!(
+        first.is_some_and(|n| n >= 1),
+        "the write inside `with` is applied when it ends: {first:?}"
+    );
+    assert_eq!(last, Some(3));
 }
 
-/// The same with a reference-counted signal, whose write took the lock directly.
+/// The same with a reference-counted signal, whose write took the lock directly, and without
+/// an effect: two writes inside `with` are applied when it ends, in order.
 #[test]
-fn an_effect_that_writes_an_arc_signal_it_reads_finishes() {
-    let count =
-        finishes("an effect that writes an ArcRwSignal it reads", || {
+fn writes_to_an_arc_signal_inside_its_with_are_applied_in_order() {
+    let (inside, after) =
+        finishes("writes to an ArcRwSignal inside its with", || {
             let count = ArcRwSignal::new(0);
-            let effect = RenderEffect::new_isomorphic({
-                let count = count.clone();
-                move |_| {
-                    count.with(|n| {
-                        if *n < 3 {
-                            count.set(*n + 1);
-                        }
-                    })
-                }
+            let inside = count.with(|n| {
+                count.set(*n + 1);
+                count.set(*n + 2);
+                count.try_get_untracked()
             });
-            drop(effect);
-            count.try_get_untracked()
+            (inside, count.try_get_untracked())
         });
-    assert_eq!(count, Some(0), "the write inside `with` is refused");
+    assert_eq!(inside, Some(0), "inside, the committed value");
+    assert_eq!(after, Some(2));
 }
 
 /// Reading a signal inside its own `update` used to panic (its `try_get` called the
-/// panicking `read_untracked`); it now returns `None`, and the update applies.
+/// panicking `read_untracked`); the update now runs on a copy, so the read gives the
+/// committed value, and the update applies.
 #[test]
-fn reading_a_signal_inside_its_own_update_returns_none() {
+fn reading_a_signal_inside_its_own_update_gives_the_committed_value() {
     let (seen, count) = finishes("a signal read inside its own update", || {
         let count = RwSignal::new(0);
         let mut seen = Some(Some(-1));
@@ -194,7 +205,7 @@ fn reading_a_signal_inside_its_own_update_returns_none() {
         });
         (seen, count.try_get_untracked())
     });
-    assert_eq!(seen, Some(None));
+    assert_eq!(seen, Some(Some(0)));
     assert_eq!(count, Some(1));
 }
 

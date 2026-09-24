@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     owner::{StoredValue, SyncStorage},
-    signal::guards::{UntrackedWriteGuard, WriteGuard},
+    signal::guards::WriteGuard,
     traits::{
         DefinedAt, GetValue, IsDisposed, Notify, ReadUntracked, Track,
         UntrackableGuard, Write,
@@ -80,12 +80,9 @@ impl<T> ArcMappedSignal<T> {
             try_write: {
                 let this = inner.clone();
                 Arc::new(move || {
-                    // waits for another thread, refuses (and logs) re-entry, like the
-                    // signal's own write
-                    let guard = UntrackedWriteGuard::take(
-                        Arc::clone(&this.value),
-                        this.defined_at(),
-                    )?;
+                    // changes the signal's value in place: waits for another thread,
+                    // refuses (and logs) re-entry, like the signal's own in-place write
+                    let guard = this.writer().in_place_guard()?;
                     let mapped = WriteGuard::new(
                         this.clone(),
                         MappedMutArc::new(guard, map, map_mut),
@@ -165,15 +162,25 @@ where
     fn try_write_untracked(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        let mut guard = self.try_write()?;
+        let mut guard = self.guard()?;
         guard.untrack();
         Some(guard)
     }
 
+    /// Changes the mapped part of the signal's value in place (a mapped signal does not
+    /// copy the whole value).
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
+        self.guard()
+    }
+}
+
+impl<T> ArcMappedSignal<T> {
+    /// A guard changing the mapped part of the value in place, notifying when dropped.
+    fn guard(
+        &self,
+    ) -> Option<DoubleDeref<Box<dyn UntrackableGuard<Target = T>>>> {
         let inner = (self.try_write)()?;
-        let inner = DoubleDeref { inner };
-        Some(inner)
+        Some(DoubleDeref { inner })
     }
 }
 
@@ -333,16 +340,15 @@ where
     fn try_write_untracked(
         &self,
     ) -> Option<impl DerefMut<Target = Self::Value>> {
-        let mut guard = self.try_write()?;
+        let mut guard = self.inner.try_get_value()?.guard()?;
         guard.untrack();
         Some(guard)
     }
 
+    /// Changes the mapped part of the signal's value in place (a mapped signal does not
+    /// copy the whole value).
     fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        let inner = self.inner.try_get_value()?;
-        let inner = (inner.try_write)()?;
-        let inner = DoubleDeref { inner };
-        Some(inner)
+        self.inner.try_get_value()?.guard()
     }
 }
 

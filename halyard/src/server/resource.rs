@@ -188,7 +188,10 @@ where
 {
     type Value = Option<T>;
 
-    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
+    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
+    where
+        Self::Value: Clone,
+    {
         self.data.try_write()
     }
 
@@ -698,7 +701,10 @@ where
 {
     type Value = Option<T>;
 
-    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
+    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
+    where
+        Self::Value: Clone,
+    {
         self.data.try_write()
     }
 

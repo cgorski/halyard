@@ -1,6 +1,6 @@
-use super::guards::{UntrackedWriteGuard, WriteGuard};
+use super::guards::UntrackedWriteGuard;
 use crate::{
-    graph::{ReactiveNode, SubscriberSet},
+    graph::SubscriberSet,
     prelude::{IsDisposed, Notify},
     traits::{DefinedAt, IntoInner, UntrackableGuard, Write},
 };
@@ -8,7 +8,7 @@ use core::fmt::{Debug, Formatter, Result};
 use std::{
     hash::Hash,
     panic::Location,
-    sync::{Arc, PoisonError, RwLock},
+    sync::{Arc, Mutex, PoisonError, RwLock},
 };
 
 /// A reference-counted setter for a reactive signal.
@@ -22,9 +22,9 @@ use std::{
 /// ## Core Trait Implementations
 /// - [`.set()`](crate::traits::Set) sets the signal to a new value.
 /// - [`.update()`](crate::traits::Update) updates the value of the signal by
-///   applying a closure that takes a mutable reference.
+///   applying a closure to a copy of it, which is then committed.
 /// - [`.write()`](crate::traits::Write) returns a guard through which the signal
-///   can be mutated, and which notifies subscribers when it is dropped.
+///   can be mutated, and which commits and notifies subscribers when it is dropped.
 ///
 /// > Each of these has a related `_untracked()` method, which updates the signal
 /// > without notifying subscribers. Untracked updates are not desirable in most
@@ -44,7 +44,7 @@ use std::{
 /// // ❌ you could call the getter within the setter
 /// // set_count.set(count.get() + 1);
 ///
-/// // ✅ however it's more efficient to use .update() and mutate the value in place
+/// // ✅ however it's simpler to use .update(), which changes a copy and commits it
 /// set_count.update(|count: &mut i32| *count += 1);
 /// assert_eq!(count.get(), 2);
 ///
@@ -57,6 +57,8 @@ pub struct ArcWriteSignal<T> {
     pub(crate) defined_at: &'static Location<'static>,
     pub(crate) value: Arc<RwLock<T>>,
     pub(crate) inner: Arc<RwLock<SubscriberSet>>,
+    /// The writer turn: writes to the signal serialize on it (see `commit.rs`).
+    pub(crate) turn: Arc<Mutex<()>>,
 }
 
 impl<T> Clone for ArcWriteSignal<T> {
@@ -67,6 +69,7 @@ impl<T> Clone for ArcWriteSignal<T> {
             defined_at: self.defined_at,
             value: Arc::clone(&self.value),
             inner: Arc::clone(&self.inner),
+            turn: Arc::clone(&self.turn),
         }
     }
 }
@@ -129,28 +132,52 @@ impl<T> IntoInner for ArcWriteSignal<T> {
     }
 }
 
-impl<T> Notify for ArcWriteSignal<T> {
+impl<T: 'static> Notify for ArcWriteSignal<T> {
+    /// Deferred while this thread is using the signal.
     fn notify(&self) {
-        self.inner.mark_dirty();
+        self.notify_or_defer();
     }
 }
 
 impl<T: 'static> Write for ArcWriteSignal<T> {
     type Value = T;
 
-    /// Waits while another thread uses the value; `None` if this thread is using it (the
-    /// write is inside the signal's own `with` or `update`, or a guard of its is alive),
-    /// which would never end. That is logged once.
-    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>> {
-        UntrackedWriteGuard::take(Arc::clone(&self.value), self.defined_at())
-            .map(|guard| WriteGuard::new(self.clone(), guard))
+    /// A guard holding a copy of the value, committed when it is dropped (deferred while
+    /// this thread is using the signal).
+    fn try_write(&self) -> Option<impl UntrackableGuard<Target = Self::Value>>
+    where
+        T: Clone,
+    {
+        self.snapshot_guard()
     }
 
+    /// Changes the value in place. Waits while another thread writes it; `None` if this
+    /// thread is using it (the write is inside the signal's own `with` or `update`, or a
+    /// guard of it is alive), which would never end. That is logged once.
     #[allow(refining_impl_trait)]
     fn try_write_untracked(&self) -> Option<UntrackedWriteGuard<Self::Value>> {
-        UntrackedWriteGuard::try_new_at(
-            Arc::clone(&self.value),
-            self.defined_at(),
-        )
+        self.in_place_guard()
+    }
+
+    fn try_commit_value(&self, value: T) -> Option<T> {
+        self.set_value(value);
+        None
+    }
+
+    fn try_update_snapshot<U>(
+        &self,
+        fun: impl FnOnce(&mut T) -> (bool, U),
+    ) -> Option<U>
+    where
+        T: Clone,
+    {
+        self.update_snapshot(fun)
+    }
+
+    fn try_update_in_place<U>(
+        &self,
+        fun: impl FnOnce(&mut T) -> (bool, U),
+    ) -> Option<U> {
+        self.update_in_place(fun)
     }
 }

@@ -5,6 +5,8 @@ use super::{
 use crate::or_poisoned::OrPoisoned;
 #[cfg(feature = "sandboxed-arenas")]
 use crate::owner::Sandboxed;
+#[cfg(not(target_family = "wasm"))]
+use crate::reentry::held_by_this_thread;
 use crate::{
     channel::channel,
     computed::suspense::SuspenseContext,
@@ -14,6 +16,7 @@ use crate::{
         SubscriberSet, ToAnySource, ToAnySubscriber, WithObserver,
     },
     owner::{use_context, Owner},
+    reentry::{lock_id, Recorded},
     send_wrapper_ext::SendOption,
     signal::{
         guards::{AsyncPlain, Mapped, MappedMut, ReadGuard, WriteGuard},
@@ -118,9 +121,11 @@ pub struct ArcAsyncDerived<T> {
 
 /// Takes an async lock from synchronous code.
 ///
-/// Natively this waits while the lock is in use. In the browser there is nothing to wait
-/// for: a lock in use is held by the code that is running now (re-entry), so this returns
-/// `None` rather than panicking.
+/// Natively this waits while another thread uses the lock. If this thread holds it already
+/// (the value is reached again from inside its own update, or while a guard of it is alive:
+/// every guard taken here is recorded in [`crate::reentry`]), waiting would never end, so
+/// this only tries, and returns `None` if the lock is busy. In the browser there is nothing
+/// to wait for: a lock in use is held by the code that is running now.
 #[allow(dead_code)]
 pub(crate) trait BlockingLock<T> {
     fn blocking_read_arc(
@@ -129,60 +134,67 @@ pub(crate) trait BlockingLock<T> {
 
     fn blocking_write_arc(
         self: &Arc<Self>,
-    ) -> Option<async_lock::RwLockWriteGuardArc<T>>;
+    ) -> Option<Recorded<async_lock::RwLockWriteGuardArc<T>>>;
 
-    fn blocking_read(&self) -> Option<async_lock::RwLockReadGuard<'_, T>>;
+    fn blocking_read(
+        &self,
+    ) -> Option<Recorded<async_lock::RwLockReadGuard<'_, T>>>;
 
-    fn blocking_write(&self) -> Option<async_lock::RwLockWriteGuard<'_, T>>;
+    fn blocking_write(
+        &self,
+    ) -> Option<Recorded<async_lock::RwLockWriteGuard<'_, T>>>;
+}
+
+/// Whether taking `lock` may wait (natively): while this thread holds none of it.
+#[cfg(not(target_family = "wasm"))]
+fn may_wait<T>(lock: &AsyncRwLock<T>) -> bool {
+    !held_by_this_thread(lock_id(lock))
 }
 
 impl<T> BlockingLock<T> for AsyncRwLock<T> {
+    /// The caller records the guard ([`AsyncPlain`](crate::signal::guards::AsyncPlain)).
     fn blocking_read_arc(
         self: &Arc<Self>,
     ) -> Option<async_lock::RwLockReadGuardArc<T>> {
         #[cfg(not(target_family = "wasm"))]
-        {
-            Some(self.read_arc_blocking())
+        if may_wait(self) {
+            return Some(self.read_arc_blocking());
         }
-        #[cfg(target_family = "wasm")]
-        {
-            self.try_read_arc()
-        }
+        self.try_read_arc()
     }
 
     fn blocking_write_arc(
         self: &Arc<Self>,
-    ) -> Option<async_lock::RwLockWriteGuardArc<T>> {
+    ) -> Option<Recorded<async_lock::RwLockWriteGuardArc<T>>> {
+        let id = lock_id(&**self);
         #[cfg(not(target_family = "wasm"))]
-        {
-            Some(self.write_arc_blocking())
+        if may_wait(self) {
+            return Some(Recorded::new(self.write_arc_blocking(), id, true));
         }
-        #[cfg(target_family = "wasm")]
-        {
-            self.try_write_arc()
-        }
+        self.try_write_arc()
+            .map(|guard| Recorded::new(guard, id, true))
     }
 
-    fn blocking_read(&self) -> Option<async_lock::RwLockReadGuard<'_, T>> {
+    fn blocking_read(
+        &self,
+    ) -> Option<Recorded<async_lock::RwLockReadGuard<'_, T>>> {
+        let id = lock_id(self);
         #[cfg(not(target_family = "wasm"))]
-        {
-            Some(self.read_blocking())
+        if may_wait(self) {
+            return Some(Recorded::new(self.read_blocking(), id, false));
         }
-        #[cfg(target_family = "wasm")]
-        {
-            self.try_read()
-        }
+        self.try_read().map(|guard| Recorded::new(guard, id, false))
     }
 
-    fn blocking_write(&self) -> Option<async_lock::RwLockWriteGuard<'_, T>> {
+    fn blocking_write(
+        &self,
+    ) -> Option<Recorded<async_lock::RwLockWriteGuard<'_, T>>> {
+        let id = lock_id(self);
         #[cfg(not(target_family = "wasm"))]
-        {
-            Some(self.write_blocking())
+        if may_wait(self) {
+            return Some(Recorded::new(self.write_blocking(), id, true));
         }
-        #[cfg(target_family = "wasm")]
-        {
-            self.try_write()
-        }
+        self.try_write().map(|guard| Recorded::new(guard, id, true))
     }
 }
 
