@@ -12,6 +12,13 @@ who’s interested!) to understand the architecture of the framework.
 > `leptos_reactive` is today the `reactive_graph` crate (`halyard_reactive_graph`) and
 > the renderer is `tachys` (`halyard_tachys`); `halyard_dom` is now a thin layer of
 > browser helpers on top of it.
+>
+> halyard supports one way to build a site: the server (`ssr`, served by
+> `halyard_axum`) renders the page, and the browser build (`hydrate`) hydrates it with
+> WebAssembly, optionally as islands. There is no client-side-only mode. Async tasks run on
+> Tokio on the server and on wasm-bindgen-futures in the browser (both through
+> `halyard_any_spawner`, which also accepts a custom executor), resources travel with
+> the page as serde JSON, and everything builds on stable Rust.
 
 The whole Halyard framework is built from a series of layers. Each of these layers
 depends on the one below it, but each can be used independently from the ones

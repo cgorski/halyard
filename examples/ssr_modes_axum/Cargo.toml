@@ -11,7 +11,7 @@ console_error_panic_hook = "0.1.7"
 console_log = "1.0"
 halyard = { path = "../../halyard", features = [
   "hydration",
-] } #"nightly", "hydration"] }
+] }
 halyard_meta = { path = "../../halyard_meta" }
 halyard_axum = { path = "../../integrations/halyard_axum", optional = true }
 halyard_router = { path = "../../halyard_router" }

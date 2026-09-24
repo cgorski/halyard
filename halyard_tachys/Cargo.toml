@@ -166,9 +166,6 @@ tokio = { features = [
   "macros",
 ], workspace = true, default-features = true }
 
-[build-dependencies]
-rustc_version = { workspace = true, default-features = true }
-
 [features]
 delegation = []                                                       # enables event delegation
 error-hook = []
@@ -176,13 +173,9 @@ hydrate = []
 islands = ["dep:serde", "dep:serde_json"]
 ssr = []
 oco = ["dep:halyard_oco"]
-nightly = ["halyard_reactive_graph/nightly"]
 reactive_graph = ["dep:halyard_reactive_graph", "dep:halyard_any_spawner"]
 tracing = ["dep:tracing"]
 mark_branches = []
-# Restores the upstream behaviour of panicking on a hydration mismatch (after logging).
-# By default halyard logs one detailed error and lets the caller fall back to client rendering.
-panic-on-hydration-mismatch = []
 
 [package.metadata.cargo-all-features]
 denylist = ["tracing"]
@@ -199,9 +192,6 @@ skip_feature_sets = [
     "ssr",
     "delegation",
   ],
-  [
-    "nightly",
-  ],
 ]
 max_combination_size = 2
 
@@ -209,5 +199,4 @@ max_combination_size = 2
 unexpected_cfgs = { level = "warn", check-cfg = [
   'cfg(halyard_debuginfo)',
   'cfg(erase_components)',
-  'cfg(rustc_nightly)',
 ] }

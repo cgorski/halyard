@@ -31,8 +31,7 @@ fixed at the source than worked around in every application:
 3. **Hydration mismatches were panics with useless context.** halyard logs the view's
    source location (in debug / `--cfg halyard_debuginfo` builds), what was expected, what
    was found (tag/text snippet) and the DOM path, then abandons hydration cleanly and
-   renders the app on the client instead. The old behaviour is behind the
-   `panic-on-hydration-mismatch` feature (`tachys/src/hydration.rs`).
+   renders the app on the client instead (`tachys/src/hydration.rs`).
 4. **Bootstrap script had no rejection handler** (WebKit: "Unhandled Promise Rejection:
    TypeError: Load failed" when navigating away mid-load). The inline script now ends in a
    `.catch` that logs one concise `console.warn`.
@@ -72,6 +71,16 @@ fixed at the source than worked around in every application:
 Upstream's actix integration, its view-patching hot reload and its stores crates were
 removed because nothing used them. `AutoReload` still reloads the page when the build tool
 rebuilds, and swaps the stylesheet when only the CSS changed.
+
+halyard builds a site one way: pages rendered on the server (axum) and hydrated in the
+browser with WebAssembly, optionally as islands, with lazy routes and wasm splitting. The
+optional extras around that were removed because nothing used them: client-side-only
+rendering (the `csr` feature), the executors other than Tokio and wasm-bindgen-futures
+(glib, async-executor, the futures thread pool), resource encodings other than serde JSON
+(and `ToString`/`FromStr`) and the codec and TLS features that `halyard` forwarded to
+server functions, the `nightly` features (calling a signal as a function, static-string
+attributes), `subsecond` hot patching, and the `panic-on-hydration-mismatch` features.
+Server functions keep their own codec features for now.
 
 Inside `halyard` the re-export names are unchanged: `halyard::tachys`, `halyard::server_fn`,
 `halyard::reactive`, `halyard::prelude::*`, and the `view!`, `#[component]`, `#[server]`

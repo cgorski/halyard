@@ -39,7 +39,6 @@ use std::{hash::Hash, ops::DerefMut, panic::Location};
 /// let (count, set_count) = signal(0);
 ///
 /// // ✅ calling the setter sets the value
-/// //    `set_count(1)` on nightly
 /// set_count.set(1);
 /// assert_eq!(count.get(), 1);
 ///

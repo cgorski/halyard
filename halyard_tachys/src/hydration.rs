@@ -342,9 +342,8 @@ fn nth_child_suffix(index: Option<u32>, count: u32) -> Option<String> {
 /// (with the view's source location if available, what was expected, what was found, and
 /// where in the DOM), later ones are suppressed since they are consequences of the first.
 ///
-/// With the `panic-on-hydration-mismatch` feature this panics after logging (the upstream
-/// behaviour, useful in tests). Otherwise it marks hydration as failed (see
-/// [`hydration_failed`]) and returns so the caller can synthesize a detached node.
+/// It never panics: it marks hydration as failed (see [`hydration_failed`]) and returns so the
+/// caller can synthesize a detached node.
 fn report_mismatch(expected: &str, found: &Node) {
     let first = !hydration_failed();
     let hydrating = currently_hydrating();
@@ -368,29 +367,14 @@ fn report_mismatch(expected: &str, found: &Node) {
              earlier; this is the first node of an unexpected type.",
             dom_path(found)
         );
-        #[cfg(feature = "panic-on-hydration-mismatch")]
-        {
-            web_sys::console::error_2(
-                &wasm_bindgen::JsValue::from_str(&msg),
-                found,
-            );
-            panic!(
-                "Unrecoverable hydration error (`panic-on-hydration-mismatch` \
-                 is enabled). Please read the error message directly above \
-                 this for more details."
-            );
-        }
-        #[cfg(not(feature = "panic-on-hydration-mismatch"))]
-        {
-            web_sys::console::error_3(
-                &wasm_bindgen::JsValue::from_str(&msg),
-                found,
-                &wasm_bindgen::JsValue::from_str(
-                    "\n\nHydration of this tree is being abandoned; the \
-                     application will be rendered on the client instead.",
-                ),
-            );
-        }
+        web_sys::console::error_3(
+            &wasm_bindgen::JsValue::from_str(&msg),
+            found,
+            &wasm_bindgen::JsValue::from_str(
+                "\n\nHydration of this tree is being abandoned; the \
+                 application will be rendered on the client instead.",
+            ),
+        );
     }
     HYDRATION_FAILED.with(|f| f.set(true));
 }

@@ -113,7 +113,6 @@
 //!
 //! # Feature Flags
 //! - `ssr` Server-side rendering: Generate an HTML string (typically on the server)
-//! - `nightly`: On `nightly` Rust, enables the function-call syntax for signal getters and setters.
 //! - `tracing`: Enables support for the `tracing` crate.
 //!
 //! [`Halyard`]: <https://github.com/leptos-rs/leptos>

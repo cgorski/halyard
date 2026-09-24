@@ -23,13 +23,7 @@ xxhash-rust = { features = [
 const_format = { workspace = true, default-features = true }
 convert_case = { workspace = true, default-features = true }
 
-
-[build-dependencies]
-rustc_version = { workspace = true, default-features = true }
-
-
 [features]
-nightly = []
 ssr = []
 actix = []
 axum = []
@@ -42,7 +36,3 @@ rustdoc-args = ["--generate-link-to-definition"]
 
 [package.metadata.cargo-all-features]
 max_combination_size = 2
-skip_feature_sets = [["nightly"]]
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rustc_nightly)'] }

@@ -1,8 +1,6 @@
 //! Macros for use with the Halyard framework.
 
 #![forbid(unsafe_code)]
-// to prevent warnings from popping up when a nightly feature is stabilized
-#![allow(stable_features)]
 // FIXME? every use of quote! {} is warning here -- false positive?
 #![allow(unknown_lints)]
 #![allow(private_macro_use)]
@@ -91,7 +89,7 @@ mod slot;
 ///   <p>{count.get()}</p>
 ///   // ✅ this is good: Halyard sees the function and knows it's a dynamic value
 ///   <p>{move || count.get()}</p>
-///   // 🔥 with the `nightly` feature, `count` is a function, so `count` itself can be passed directly into the view
+///   // ✅ this is good too: a signal is a reactive value, so `count` itself can be passed directly into the view
 ///   <p>{count}</p>
 /// }
 /// # ;
@@ -830,8 +828,8 @@ pub fn slot(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
 /// Declares that a function is a [server function](https://docs.rs/server_fn/latest/server_fn/index.html).
 /// This means that its body will only run on the server, i.e., when the `ssr` feature on this crate is enabled.
 ///
-/// If you call a server function from the client (i.e., when the `csr` or `hydrate` features
-/// are enabled), it will instead make a network request to the server.
+/// If you call a server function from the client (i.e., when the `hydrate` feature
+/// is enabled), it will instead make a network request to the server.
 ///
 /// ## Named Arguments
 ///

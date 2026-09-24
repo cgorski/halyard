@@ -10,9 +10,7 @@ description = "Spawn asynchronous tasks in an executor-independent way."
 edition.workspace = true
 
 [dependencies]
-async-executor = { optional = true , workspace = true, default-features = true }
 futures = { workspace = true, default-features = true }
-glib = { optional = true , workspace = true, default-features = true }
 thiserror = { workspace = true , default-features = true }
 tokio = { optional = true, default-features = false, features = [
   "rt",
@@ -25,23 +23,17 @@ wasm-bindgen-futures = { optional = true , workspace = true, default-features = 
 web-sys = { workspace = true, features = ["console"] }
 
 [dev-dependencies]
-futures-lite = { default-features = false , workspace = true }
 tokio = { default-features = false, features = [
   "rt",
   "macros",
   "time",
 ] , workspace = true }
 wasm-bindgen-test = { workspace = true, default-features = true }
-serial_test = { workspace = true, default-features = true }
 
 [features]
-async-executor = ["dep:async-executor"]
 tracing = ["dep:tracing"]
 tokio = ["dep:tokio"]
-glib = ["dep:glib"]
 wasm-bindgen = ["dep:wasm-bindgen-futures"]
-futures-executor = ["futures/thread-pool", "futures/executor"]
-
 
 [package.metadata.docs.rs]
 all-features = true

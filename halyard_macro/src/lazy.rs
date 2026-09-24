@@ -51,7 +51,7 @@ pub fn lazy_impl(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {
         )
     };
 
-    let is_wasm = cfg!(feature = "csr") || cfg!(feature = "hydrate");
+    let is_wasm = cfg!(feature = "hydrate");
     if is_wasm {
         let mut fun = fun;
         let mut return_wrapper = None;

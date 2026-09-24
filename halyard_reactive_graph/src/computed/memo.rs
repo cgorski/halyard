@@ -63,7 +63,6 @@ use std::{fmt::Debug, hash::Hash, panic::Location};
 /// let memoized = Memo::new(move |_| really_expensive_computation(value.get()));
 /// Effect::new(move |_| {
 ///   // 🆗 reads the current value of the memo
-///   //    can be `memoized()` on nightly
 ///   println!("memoized = {}", memoized.get());
 /// });
 /// Effect::new(move |_| {

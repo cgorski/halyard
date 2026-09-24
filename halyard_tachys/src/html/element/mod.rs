@@ -805,7 +805,7 @@ where
         ">",
     ]));
 
-    #[allow(unused)] // the variables `class` and `style` might be used, but only with `nightly` feature
+    #[allow(unused)] // an element collects its own `class`, `style` and `inner_html`
     fn to_template(
         buf: &mut String,
         class: &mut String,

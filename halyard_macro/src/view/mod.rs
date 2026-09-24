@@ -743,16 +743,7 @@ fn node_to_tokens(
 }
 
 fn text_to_tokens(text: &LitStr) -> TokenStream {
-    // on nightly, can use static string optimization
-    if cfg!(all(feature = "nightly", rustc_nightly)) {
-        quote! {
-            ::halyard::tachys::view::static_types::Static::<#text>
-        }
-    }
-    // otherwise, just use the literal string
-    else {
-        quote! { #text }
-    }
+    quote! { #text }
 }
 
 pub(crate) fn element_to_tokens(
@@ -1646,16 +1637,6 @@ fn attribute_value(
         None => quote! { true },
         Some(value) => match &value.value {
             KVAttributeValue::Expr(expr) => {
-                if let Expr::Lit(lit) = expr {
-                    if cfg!(all(feature = "nightly", rustc_nightly)) {
-                        if let Lit::Str(str) = &lit.lit {
-                            return quote! {
-                                ::halyard::tachys::view::static_types::Static::<#str>
-                            };
-                        }
-                    }
-                }
-
                 // When `--cfg erase_components` is active and the attribute value
                 // is a syntactic zero-argument closure (`move || …` / `|| …`),
                 // wrap it in `__as_shared_reactive_fn` so downstream

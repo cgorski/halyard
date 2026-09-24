@@ -54,8 +54,7 @@ fn body_or_report(during: &'static str) -> Option<HtmlElement> {
 ///
 /// If the server-rendered DOM does not match the view (a *hydration mismatch*), one detailed
 /// error is logged to the console, the partially hydrated state is discarded, and the app is
-/// rendered on the client instead (which is why `f` must be `Fn`, not `FnOnce`). Enable the
-/// `panic-on-hydration-mismatch` feature to panic instead, e.g. in tests.
+/// rendered on the client instead (which is why `f` must be `Fn`, not `FnOnce`).
 ///
 /// If the page carries a `<meta name="halyard-render-mode">` tag (emitted by
 /// [`HydrationScripts`](crate::hydration::HydrationScripts)) whose value differs from this
@@ -392,15 +391,12 @@ where
 
     #[cfg(debug_assertions)]
     {
-        if !cfg!(feature = "csr") && FIRST_CALL.get() {
+        if !cfg!(feature = "hydrate") && FIRST_CALL.get() {
             logging::warn!(
-                "It seems like you're trying to use Halyard in client-side \
-                 rendering mode, but the `csr` feature is not enabled on the \
-                 `halyard` crate. Add `features = [\"csr\"]` to your \
-                 Cargo.toml for the crate to work properly.\n\nNote that \
-                 hydration and client-side rendering now use different \
-                 functions from halyard::mount. You are using a client-side \
-                 rendering mount function."
+                "`mount_to` is running in the browser, but the `hydrate` \
+                 feature is not enabled on the `halyard` crate, so effects \
+                 do not run and the view will not update. Add `features = \
+                 [\"hydrate\"]` to the browser build in your Cargo.toml."
             );
         }
         FIRST_CALL.set(false);

@@ -4,15 +4,10 @@
 //!
 //! Halyard is a maintained fork of the [Leptos](https://github.com/leptos-rs/leptos) web
 //! framework (MIT, © 2022 Greg Johnston; see the `NOTICE` file). It is a full-stack framework
-//! for building web applications in Rust. You can use it to build
-//! - single-page apps (SPAs) rendered entirely in the browser, using client-side routing and loading
-//!   or mutating data via async requests to the server.
-//! - multi-page apps (MPAs) rendered on the server, managing navigation, data, and mutations via
-//!   web-standard `<a>` and `<form>` tags.
-//! - progressively-enhanced single-page apps that are rendered on the server and then hydrated on the client,
-//!   enhancing your `<a>` and `<form>` navigations and mutations seamlessly when WASM is available.
-//!
-//! And you can do all three of these **using the same Halyard code**.
+//! for building web applications in Rust, in one way: pages are rendered on the server and
+//! then hydrated in the browser with WebAssembly, which enhances `<a>` and `<form>`
+//! navigations and mutations once the WASM has loaded. With islands, only the components
+//! marked `#[island]` are hydrated.
 //!
 //! The API is Leptos 0.8's with the crates renamed (`leptos` → `halyard`, `leptos_router` →
 //! `halyard_router`, ...; `LeptosOptions` → [`HalyardOptions`](halyard_config::HalyardOptions)),
@@ -25,9 +20,8 @@
 //!   [`HydrationScripts`](hydration::HydrationScripts) and the `wasm_file_name` option);
 //! - every runtime setting is read from `HALYARD_*` with the legacy `LEPTOS_*` as a fallback;
 //! - a hydration mismatch logs one detailed error and falls back to client-side rendering
-//!   instead of panicking (see `mount::hydrate_body` and the `panic-on-hydration-mismatch`
-//!   feature), and a server/client `--cfg erase_components` mismatch is detected up front
-//!   (see [`hydration::RENDER_MODE`]).
+//!   instead of panicking (see `mount::hydrate_body`), and a server/client
+//!   `--cfg erase_components` mismatch is detected up front (see [`hydration::RENDER_MODE`]).
 //!
 //! # Quick Links
 //!
@@ -45,26 +39,23 @@
 //!
 //! # Feature Flags
 //!
-//! - **`nightly`**: On `nightly` Rust, enables the function-call syntax for signal getters and setters.
-//!   Also enables some experimental optimizations that improve the handling of static strings and
-//!   the performance of the `template! {}` macro.
-//! - **`csr`** Client-side rendering: Generate DOM nodes in the browser.
 //! - **`ssr`** Server-side rendering: Generate an HTML string (typically on the server).
 //! - **`islands`** Activates “islands mode,” in which components are not made interactive on the
 //!   client unless they use the `#[island]` macro.
 //! - **`hydrate`** Hydration: use this to add interactivity to an SSRed Halyard app.
 //! - **`nonce`** Adds support for nonces to be added as part of a Content Security Policy.
-//! - **`rkyv`** In SSR/hydrate mode, enables using [`rkyv`](https://docs.rs/rkyv/latest/rkyv/) to serialize resources.
 //! - **`tracing`** Adds support for [`tracing`](https://docs.rs/tracing/latest/tracing/).
 //! - **`trace-component-props`** Adds `tracing` support for component props.
 //! - **`delegation`** Uses event delegation rather than the browser’s native event handling
 //!   system. (This improves the performance of creating large numbers of elements simultaneously,
 //!   in exchange for occasional edge cases in which events behave differently from native browser
 //!   events.)
-//! - **`rustls`** Use `rustls` for server functions.
 //!
-//! **Important Note:** You must enable one of `csr`, `hydrate`, or `ssr` to tell Halyard
-//! which mode your app is operating in. You should only enable one of these per build target,
+//! Resources send their data with the page as serde JSON (or, with `Resource::new_str`,
+//! through `ToString` and `FromStr`).
+//!
+//! **Important Note:** You must enable either `hydrate` or `ssr` to tell Halyard
+//! which build you are compiling. You should only enable one of these per build target,
 //! i.e., you should not have both `hydrate` and `ssr` enabled for your server binary, only `ssr`.
 //!
 //! # A Simple Counter
@@ -94,23 +85,10 @@
 //! }
 //! ```
 //!
-//! Halyard is easy to use with [Trunk](https://trunk-rs.github.io/trunk/) (or with a simple wasm-bindgen setup):
-//!
-//! ```rust
-//! use halyard::{mount::mount_to_body, prelude::*};
-//!
-//! #[component]
-//! fn SimpleCounter(initial_value: i32) -> impl IntoView {
-//!     // ...
-//!     # _ = initial_value;
-//! }
-//!
-//! pub fn main() {
-//! # if false { // can't run in doctest
-//!     mount_to_body(|| view! { <SimpleCounter initial_value=3 /> })
-//! # }
-//! }
-//! ```
+//! The server build (`ssr`) renders the page, usually through the axum integration
+//! (`halyard_axum`); the browser build (`hydrate`) hydrates it with
+//! `halyard::mount::hydrate_body` (or `hydrate_lazy`, for lazy routes and components, or
+//! `hydrate_islands` in islands mode).
 
 extern crate self as halyard;
 
@@ -283,10 +261,6 @@ pub use halyard_tachys::mathml as math;
 /// SVG element types.
 #[doc(inline)]
 pub use halyard_tachys::svg;
-
-#[cfg(feature = "subsecond")]
-/// Utilities for using binary hot-patching with [`subsecond`].
-pub mod subsecond;
 
 /// Utilities for simple isomorphic logging to the console or terminal.
 pub mod logging {

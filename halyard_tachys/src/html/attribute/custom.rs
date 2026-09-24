@@ -181,13 +181,6 @@ impl CustomAttributeKey for Arc<str> {
     const KEY: &'static str = "";
 }
 
-#[cfg(all(feature = "nightly", rustc_nightly))]
-impl<const K: &'static str> CustomAttributeKey
-    for crate::view::static_types::Static<K>
-{
-    const KEY: &'static str = K;
-}
-
 /// Adds a custom attribute to an element.
 pub trait CustomAttribute<K, V>
 where

@@ -11,11 +11,11 @@ dependencies = [
 
 [tasks.check-wasm]
 clear = true
-dependencies = ["check-hydrate", "check-csr"]
+dependencies = ["check-hydrate"]
 
 [tasks.check-wasm-release]
 clear = true
-dependencies = ["check-hydrate-release", "check-csr-release"]
+dependencies = ["check-hydrate-release"]
 
 [tasks.check-hydrate]
 command = "cargo"
@@ -26,15 +26,6 @@ args = [
   "--target=wasm32-unknown-unknown",
 ]
 
-[tasks.check-csr]
-command = "cargo"
-args = [
-  "check",
-  "--no-default-features",
-  "--features=csr",
-  "--target=wasm32-unknown-unknown",
-]
-
 [tasks.check-hydrate-release]
 command = "cargo"
 args = [
@@ -42,16 +33,6 @@ args = [
   "--release",
   "--no-default-features",
   "--features=hydrate",
-  "--target=wasm32-unknown-unknown",
-]
-
-[tasks.check-csr-release]
-command = "cargo"
-args = [
-  "check",
-  "--release",
-  "--no-default-features",
-  "--features=csr",
   "--target=wasm32-unknown-unknown",
 ]
 

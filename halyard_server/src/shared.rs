@@ -1,12 +1,4 @@
 use crate::{FromEncodedStr, IntoEncodedString};
-#[cfg(feature = "rkyv")]
-use codee::binary::RkyvCodec;
-#[cfg(feature = "serde-wasm-bindgen")]
-use codee::string::JsonSerdeWasmCodec;
-#[cfg(feature = "miniserde")]
-use codee::string::MiniserdeCodec;
-#[cfg(feature = "serde-lite")]
-use codee::SerdeLite;
 use codee::{
     string::{FromToStringCodec, JsonSerdeCodec},
     Decoder, Encoder,
@@ -75,98 +67,6 @@ where
     ///
     /// This uses the [`FromToStringCodec`] encoding.
     pub fn new_str(initial: impl FnOnce() -> T) -> Self {
-        SharedValue::new_with_encoding(initial)
-    }
-}
-
-#[cfg(feature = "serde-lite")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde-lite")))]
-impl<T> SharedValue<T, SerdeLite<JsonSerdeCodec>>
-where
-    SerdeLite<JsonSerdeCodec>: Encoder<T> + Decoder<T>,
-    <SerdeLite<JsonSerdeCodec> as Encoder<T>>::Error: Debug,
-    <SerdeLite<JsonSerdeCodec> as Decoder<T>>::Error: Debug,
-    <SerdeLite<JsonSerdeCodec> as Encoder<T>>::Encoded: IntoEncodedString,
-    <SerdeLite<JsonSerdeCodec> as Decoder<T>>::Encoded: FromEncodedStr,
-    <<SerdeLite<JsonSerdeCodec> as codee::Decoder<T>>::Encoded as FromEncodedStr>::DecodingError:
-        Debug,
-{
-    /// Wraps the initial value.
-    ///
-    /// If this is on the server, the function will be invoked and the value serialized. When it runs
-    /// on the client, it will be deserialized without running the function again.
-    ///
-    /// This uses the [`SerdeLite`] encoding.
-    pub fn new_serde_lite(initial: impl FnOnce() -> T) -> Self {
-        SharedValue::new_with_encoding(initial)
-    }
-}
-
-#[cfg(feature = "serde-wasm-bindgen")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde-wasm-bindgen")))]
-impl<T> SharedValue<T, JsonSerdeWasmCodec>
-where
-    JsonSerdeWasmCodec: Encoder<T> + Decoder<T>,
-    <JsonSerdeWasmCodec as Encoder<T>>::Error: Debug,
-    <JsonSerdeWasmCodec as Decoder<T>>::Error: Debug,
-    <JsonSerdeWasmCodec as Encoder<T>>::Encoded: IntoEncodedString,
-    <JsonSerdeWasmCodec as Decoder<T>>::Encoded: FromEncodedStr,
-    <<JsonSerdeWasmCodec as codee::Decoder<T>>::Encoded as FromEncodedStr>::DecodingError:
-        Debug,
-{
-    /// Wraps the initial value.
-    ///
-    /// If this is on the server, the function will be invoked and the value serialized. When it runs
-    /// on the client, it will be deserialized without running the function again.
-    ///
-    /// This uses the [`JsonSerdeWasmCodec`] encoding.
-    pub fn new_serde_wb(initial: impl FnOnce() -> T) -> Self {
-        SharedValue::new_with_encoding(initial)
-    }
-}
-
-#[cfg(feature = "miniserde")]
-#[cfg_attr(docsrs, doc(cfg(feature = "miniserde")))]
-impl<T> SharedValue<T, MiniserdeCodec>
-where
-    MiniserdeCodec: Encoder<T> + Decoder<T>,
-    <MiniserdeCodec as Encoder<T>>::Error: Debug,
-    <MiniserdeCodec as Decoder<T>>::Error: Debug,
-    <MiniserdeCodec as Encoder<T>>::Encoded: IntoEncodedString,
-    <MiniserdeCodec as Decoder<T>>::Encoded: FromEncodedStr,
-    <<MiniserdeCodec as codee::Decoder<T>>::Encoded as FromEncodedStr>::DecodingError:
-        Debug,
-{
-    /// Wraps the initial value.
-    ///
-    /// If this is on the server, the function will be invoked and the value serialized. When it runs
-    /// on the client, it will be deserialized without running the function again.
-    ///
-    /// This uses the [`MiniserdeCodec`] encoding.
-    pub fn new_miniserde(initial: impl FnOnce() -> T) -> Self {
-        SharedValue::new_with_encoding(initial)
-    }
-}
-
-#[cfg(feature = "rkyv")]
-#[cfg_attr(docsrs, doc(cfg(feature = "rkyv")))]
-impl<T> SharedValue<T, RkyvCodec>
-where
-    RkyvCodec: Encoder<T> + Decoder<T>,
-    <RkyvCodec as Encoder<T>>::Error: Debug,
-    <RkyvCodec as Decoder<T>>::Error: Debug,
-    <RkyvCodec as Encoder<T>>::Encoded: IntoEncodedString,
-    <RkyvCodec as Decoder<T>>::Encoded: FromEncodedStr,
-    <<RkyvCodec as codee::Decoder<T>>::Encoded as FromEncodedStr>::DecodingError:
-        Debug,
-{
-    /// Wraps the initial value.
-    ///
-    /// If this is on the server, the function will be invoked and the value serialized. When it runs
-    /// on the client, it will be deserialized without running the function again.
-    ///
-    /// This uses the [`RkyvCodec`] encoding.
-    pub fn new_rkyv(initial: impl FnOnce() -> T) -> Self {
         SharedValue::new_with_encoding(initial)
     }
 }

@@ -57,13 +57,9 @@ features = [
 workspace = true
 default-features = true
 
-[build-dependencies]
-rustc_version = { workspace = true, default-features = true }
-
 [features]
 tracing = ["dep:tracing"]
 ssr = ["dep:percent-encoding"]
-nightly = []
 
 [package.metadata.docs.rs]
 all-features = true
@@ -77,5 +73,4 @@ max_combination_size = 2
 unexpected_cfgs = { level = "warn", check-cfg = [
   'cfg(halyard_debuginfo)',
   'cfg(erase_components)',
-  'cfg(rustc_nightly)',
 ] }

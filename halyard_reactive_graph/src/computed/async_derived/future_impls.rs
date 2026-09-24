@@ -238,7 +238,7 @@ mod tests {
     use futures::FutureExt;
 
     fn emptied() -> ArcAsyncDerived<u32> {
-        _ = halyard_any_spawner::Executor::init_futures_executor();
+        _ = halyard_any_spawner::Executor::init_tokio();
         let derived = ArcAsyncDerived::new_mock(|| async { 1 });
         derived.set(None);
         derived

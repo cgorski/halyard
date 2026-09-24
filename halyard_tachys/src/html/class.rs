@@ -167,7 +167,7 @@ pub trait IntoClass: Send {
     }
 
     /// Renders the class to HTML for a `<template>`.
-    #[allow(unused)] // it's used with `nightly` feature
+    #[allow(unused)] // the default adds nothing to the template
     fn to_template(class: &mut String) {}
 
     /// Adds interactivity as necessary, given DOM nodes that were created from HTML that has
@@ -608,56 +608,6 @@ impl IntoClass for (&'static str, bool) {
         let (class_list, _, name) = state;
         Rndr::remove_class(class_list, name);
     }
-}
-
-#[cfg(all(feature = "nightly", rustc_nightly))]
-impl<const V: &'static str> IntoClass for crate::view::static_types::Static<V> {
-    const TEMPLATE: &'static str = V;
-
-    type AsyncOutput = Self;
-    type State = ();
-    type Cloneable = Self;
-    type CloneableOwned = Self;
-
-    fn html_len(&self) -> usize {
-        V.len()
-    }
-
-    fn to_html(self, class: &mut String) {
-        class.push_str(V);
-    }
-
-    fn to_template(class: &mut String) {
-        class.push_str(V);
-    }
-
-    fn hydrate<const FROM_SERVER: bool>(
-        self,
-        _el: &crate::renderer::types::Element,
-    ) -> Self::State {
-    }
-
-    fn build(self, el: &crate::renderer::types::Element) -> Self::State {
-        Rndr::set_attribute(el, "class", V);
-    }
-
-    fn rebuild(self, _state: &mut Self::State) {}
-
-    fn into_cloneable(self) -> Self::Cloneable {
-        self
-    }
-
-    fn into_cloneable_owned(self) -> Self::CloneableOwned {
-        self
-    }
-
-    fn dry_resolve(&mut self) {}
-
-    async fn resolve(self) -> Self::AsyncOutput {
-        self
-    }
-
-    fn reset(_state: &mut Self::State) {}
 }
 
 /* #[cfg(test)]

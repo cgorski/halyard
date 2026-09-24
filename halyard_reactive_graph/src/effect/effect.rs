@@ -579,9 +579,9 @@ mod tests {
 
     /// A stopped effect has no subscriber: this used to panic ("tried to set effect that has
     /// been stopped"). It is a subscriber that tracks nothing.
-    #[test]
-    fn a_stopped_effect_is_a_subscriber_that_tracks_nothing() {
-        _ = Executor::init_futures_executor();
+    #[tokio::test]
+    async fn a_stopped_effect_is_a_subscriber_that_tracks_nothing() {
+        _ = Executor::init_tokio();
         let owner = Owner::new();
         owner.set();
         let effect = Effect::new_isomorphic(|_| ());

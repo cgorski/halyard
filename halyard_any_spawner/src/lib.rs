@@ -4,7 +4,9 @@
 //! It only supports single executor per program, but that executor can be set at runtime, anywhere
 //! in your crate (or an application that depends on it).
 //!
-//! This can be extended to support any executor or runtime that supports spawning [`Future`]s.
+//! Two executors are built in: Tokio (the `tokio` feature, for the server) and
+//! `wasm-bindgen-futures` (the `wasm-bindgen` feature, for the browser). Any other executor or
+//! runtime that supports spawning [`Future`]s can be plugged in with a [`CustomExecutor`].
 //!
 //! This is a least common denominator implementation in many ways. Limitations include:
 //! - setting an executor is a one-time, global action
@@ -54,14 +56,6 @@ enum GlobalExecutor {
     Tokio,
     #[cfg(feature = "wasm-bindgen")]
     WasmBindgen,
-    #[cfg(feature = "glib")]
-    Glib,
-    /// `spawn` uses the pool; `spawn_local` uses this thread's `LocalPool`.
-    #[cfg(feature = "futures-executor")]
-    FuturesExecutor(futures::executor::ThreadPool),
-    /// `spawn` uses the executor; `spawn_local` uses this thread's `LocalExecutor`.
-    #[cfg(feature = "async-executor")]
-    AsyncExecutor(async_executor::Executor<'static>),
     Custom(Box<dyn CustomExecutor + Send + Sync>),
     /// `init_local_custom_executor`: each thread uses the executor it set.
     PerThread,
@@ -97,17 +91,6 @@ impl GlobalExecutor {
             GlobalExecutor::WasmBindgen => {
                 wasm_bindgen_futures::spawn_local(fut)
             }
-            #[cfg(feature = "glib")]
-            GlobalExecutor::Glib => {
-                let main_context = glib::MainContext::default();
-                main_context.spawn(fut);
-            }
-            #[cfg(feature = "futures-executor")]
-            GlobalExecutor::FuturesExecutor(pool) => pool.spawn_ok(fut),
-            #[cfg(feature = "async-executor")]
-            GlobalExecutor::AsyncExecutor(executor) => {
-                executor.spawn(fut).detach();
-            }
             GlobalExecutor::Custom(executor) => executor.spawn(fut),
             GlobalExecutor::PerThread => per_thread::spawn(fut),
         }
@@ -124,32 +107,6 @@ impl GlobalExecutor {
             GlobalExecutor::WasmBindgen => {
                 wasm_bindgen_futures::spawn_local(fut)
             }
-            #[cfg(feature = "glib")]
-            GlobalExecutor::Glib => {
-                let main_context = glib::MainContext::default();
-                // glib panics if another thread owns the context; acquiring it first (which
-                // the owning thread can do again) tells the two apart
-                match main_context.acquire() {
-                    Ok(_owned) => {
-                        main_context.spawn_local(fut);
-                    }
-                    Err(_) => {
-                        static REPORTED: error::ReportOnce =
-                            error::ReportOnce::new();
-                        let caller = Location::caller();
-                        REPORTED.report(|| {
-                            Unspawned::GlibContextOwnedElsewhere { caller }
-                        });
-                        drop(fut);
-                    }
-                };
-            }
-            #[cfg(feature = "futures-executor")]
-            GlobalExecutor::FuturesExecutor(_) => {
-                futures_local::spawn_local(fut)
-            }
-            #[cfg(feature = "async-executor")]
-            GlobalExecutor::AsyncExecutor(_) => async_local::spawn_local(fut),
             GlobalExecutor::Custom(executor) => executor.spawn_local(fut),
             GlobalExecutor::PerThread => per_thread::spawn_local(fut),
         }
@@ -157,17 +114,11 @@ impl GlobalExecutor {
 
     fn poll_local(&self) {
         match self {
-            // Tokio, the browser's event loop and glib's main loop drive their own tasks
+            // Tokio and the browser's event loop drive their own tasks
             #[cfg(feature = "tokio")]
             GlobalExecutor::Tokio => {}
             #[cfg(feature = "wasm-bindgen")]
             GlobalExecutor::WasmBindgen => {}
-            #[cfg(feature = "glib")]
-            GlobalExecutor::Glib => {}
-            #[cfg(feature = "futures-executor")]
-            GlobalExecutor::FuturesExecutor(_) => futures_local::poll(),
-            #[cfg(feature = "async-executor")]
-            GlobalExecutor::AsyncExecutor(_) => async_local::poll(),
             GlobalExecutor::Custom(executor) => executor.poll_local(),
             GlobalExecutor::PerThread => per_thread::poll_local(),
         }
@@ -188,11 +139,6 @@ pub enum ExecutorError {
     /// halyard's `mount` functions and server integrations set one every time they start.
     #[error("Global executor has already been set.")]
     AlreadySet,
-    /// The `futures` executor's thread pool could not be started (the system could not
-    /// create its threads, or the target has none). No executor was set, so another one can
-    /// be.
-    #[error("the futures executor's thread pool could not be started: {0}")]
-    ThreadPool(#[source] std::io::Error),
     /// This thread is exiting (its thread-local values are being destroyed), so it cannot
     /// hold an executor any more.
     #[error("this thread is exiting, so no executor can be set for it")]
@@ -303,54 +249,6 @@ impl Executor {
         set(GlobalExecutor::WasmBindgen)
     }
 
-    /// Globally sets the [`glib`] runtime as the executor used to spawn tasks.
-    ///
-    /// `spawn_local` on a thread other than the one that owns glib's default main context
-    /// drops the task (logged once).
-    ///
-    /// Returns `Err(ExecutorError::AlreadySet)` if a global executor has already been set.
-    ///
-    /// Requires the `glib` feature to be activated on this crate.
-    #[cfg(feature = "glib")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "glib")))]
-    pub fn init_glib() -> Result<(), ExecutorError> {
-        set(GlobalExecutor::Glib)
-    }
-
-    /// Globally sets the [`futures`] executor as the executor used to spawn tasks: `spawn`
-    /// uses a thread pool (one thread per CPU), started here, and `spawn_local` uses a
-    /// `LocalPool` for each thread, run by [`Executor::poll_local`].
-    ///
-    /// Returns `Err(ExecutorError::AlreadySet)` if a global executor has already been set,
-    /// and `Err(ExecutorError::ThreadPool)` if the thread pool could not be started (then no
-    /// executor is set).
-    ///
-    /// Requires the `futures-executor` feature to be activated on this crate.
-    #[cfg(feature = "futures-executor")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "futures-executor")))]
-    pub fn init_futures_executor() -> Result<(), ExecutorError> {
-        // a pool started only to be refused would leave its threads idle
-        if EXECUTOR.get().is_some() {
-            return Err(ExecutorError::AlreadySet);
-        }
-        set_futures_executor(futures::executor::ThreadPool::new())
-    }
-
-    /// Globally sets the [`async_executor`] executor as the executor used to spawn tasks:
-    /// `spawn` uses a global `Executor`, and `spawn_local` uses a `LocalExecutor` for each
-    /// thread, ticked by [`Executor::poll_local`].
-    ///
-    /// Returns `Err(ExecutorError::AlreadySet)` if a global executor has already been set.
-    ///
-    /// Requires the `async-executor` feature to be activated on this crate.
-    #[cfg(feature = "async-executor")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "async-executor")))]
-    pub fn init_async_executor() -> Result<(), ExecutorError> {
-        set(GlobalExecutor::AsyncExecutor(
-            async_executor::Executor::new(),
-        ))
-    }
-
     /// Globally sets a custom executor as the executor used to spawn tasks.
     ///
     /// Requires the custom executor to be `Send + Sync` as it will be stored statically.
@@ -393,15 +291,6 @@ impl Executor {
     }
 }
 
-/// Sets the `futures` executor, if its thread pool started.
-#[cfg(feature = "futures-executor")]
-fn set_futures_executor(
-    pool: std::io::Result<futures::executor::ThreadPool>,
-) -> Result<(), ExecutorError> {
-    let pool = pool.map_err(ExecutorError::ThreadPool)?;
-    set(GlobalExecutor::FuturesExecutor(pool))
-}
-
 /// A trait for custom executors.
 /// Custom executors can be used to integrate with any executor that supports spawning futures.
 ///
@@ -432,19 +321,6 @@ fn no_executor(method: Method) {
     REPORTED
         .get(method)
         .report(|| Unspawned::NotSet { method, caller });
-}
-
-/// A task was spawned while this thread's local executor is already destroyed.
-#[cfg(any(feature = "futures-executor", feature = "async-executor"))]
-#[cold]
-#[inline(never)]
-#[track_caller]
-fn thread_exiting(method: Method) {
-    static REPORTED: ReportOncePerMethod = ReportOncePerMethod::new();
-    let caller = Location::caller();
-    REPORTED
-        .get(method)
-        .report(|| Unspawned::ThreadExiting { method, caller });
 }
 
 /// The executors set with [`Executor::init_local_custom_executor`], one per thread.
@@ -507,100 +383,5 @@ mod per_thread {
         REPORTED
             .get(method)
             .report(|| Unspawned::NotSetOnThisThread { method, caller });
-    }
-}
-
-/// The `futures` executor's `LocalPool` for each thread.
-#[cfg(feature = "futures-executor")]
-mod futures_local {
-    use crate::{error::Method, thread_exiting, PinnedLocalFuture};
-    use futures::{
-        executor::{LocalPool, LocalSpawner},
-        task::LocalSpawnExt,
-    };
-    use std::cell::RefCell;
-
-    /// This thread's pool and a spawner into it, made together so that spawning never
-    /// borrows the pool (which is borrowed while it runs its tasks).
-    struct Local {
-        pool: RefCell<LocalPool>,
-        spawner: LocalSpawner,
-    }
-
-    thread_local! {
-        static LOCAL: Local = {
-            let pool = LocalPool::new();
-            let spawner = pool.spawner();
-            Local {
-                pool: RefCell::new(pool),
-                spawner,
-            }
-        };
-    }
-
-    #[track_caller]
-    pub(crate) fn spawn_local(fut: PinnedLocalFuture<()>) {
-        // either error means the pool is gone: the thread is exiting, and a thread-local
-        // value's destructor spawned this task
-        let spawned = LOCAL.try_with(|local| local.spawner.spawn_local(fut));
-        if !matches!(spawned, Ok(Ok(()))) {
-            thread_exiting(Method::SpawnLocal);
-        }
-    }
-
-    pub(crate) fn poll() {
-        _ = LOCAL.try_with(|local| {
-            // already borrowed: a task the pool is running polled it; nothing to do
-            if let Ok(mut pool) = local.pool.try_borrow_mut() {
-                pool.run_until_stalled();
-            }
-        });
-    }
-}
-
-/// The `async-executor` executor's `LocalExecutor` for each thread.
-#[cfg(feature = "async-executor")]
-mod async_local {
-    use crate::{error::Method, thread_exiting, PinnedLocalFuture};
-    use async_executor::LocalExecutor;
-
-    thread_local! {
-        static LOCAL: LocalExecutor<'static> = const { LocalExecutor::new() };
-    }
-
-    #[track_caller]
-    pub(crate) fn spawn_local(fut: PinnedLocalFuture<()>) {
-        if LOCAL.try_with(|local| local.spawn(fut).detach()).is_err() {
-            thread_exiting(Method::SpawnLocal);
-        }
-    }
-
-    pub(crate) fn poll() {
-        // `try_tick` runs one task without blocking, so a nested poll cannot deadlock
-        _ = LOCAL.try_with(|local| local.try_tick());
-    }
-}
-
-#[cfg(all(test, feature = "futures-executor"))]
-mod tests {
-    use super::*;
-
-    /// A thread pool that cannot start is a typed error, and sets no executor, so the
-    /// caller can set another one. (The only lib unit test that touches the global
-    /// executor, so the lib test binary's executor is unset before it.)
-    #[test]
-    fn a_thread_pool_that_cannot_start_is_an_error_and_sets_nothing() {
-        let result = set_futures_executor(Err(std::io::Error::other(
-            "no threads on this target",
-        )));
-        match result {
-            Err(ExecutorError::ThreadPool(source)) => {
-                assert_eq!(source.to_string(), "no threads on this target");
-            }
-            other => {
-                panic!("expected ExecutorError::ThreadPool, got {other:?}")
-            }
-        }
-        assert!(EXECUTOR.get().is_none());
     }
 }

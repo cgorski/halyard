@@ -42,26 +42,6 @@ pub(crate) enum Unspawned {
          dropped without running"
     )]
     OutsideTokioRuntime { caller: &'static Location<'static> },
-    /// The executor is glib, and `spawn_local` was called on a thread that does not own
-    /// glib's default main context.
-    #[cfg(feature = "glib")]
-    #[error(
-        "`Executor::spawn_local` was called at {caller} on a thread that does not own glib's \
-         default main context (another thread owns it: spawn local tasks from that thread); \
-         the task is dropped without running"
-    )]
-    GlibContextOwnedElsewhere { caller: &'static Location<'static> },
-    /// This thread's local executor is gone: the thread is exiting, and a thread-local
-    /// value's destructor spawned the task.
-    #[cfg(any(feature = "futures-executor", feature = "async-executor"))]
-    #[error(
-        "`{method}` was called at {caller} while this thread is exiting, after its local \
-         executor was destroyed; the task is dropped without running"
-    )]
-    ThreadExiting {
-        method: Method,
-        caller: &'static Location<'static>,
-    },
 }
 
 /// Which spawning function a dropped task was given to.
@@ -193,29 +173,6 @@ mod tests {
             let tokio =
                 Unspawned::OutsideTokioRuntime { caller: here }.to_string();
             assert!(tokio.contains("outside a Tokio runtime"), "{tokio}");
-        }
-
-        #[cfg(feature = "glib")]
-        {
-            let glib = Unspawned::GlibContextOwnedElsewhere { caller: here }
-                .to_string();
-            assert!(
-                glib.contains("does not own glib's default main context"),
-                "{glib}"
-            );
-        }
-
-        #[cfg(any(feature = "futures-executor", feature = "async-executor"))]
-        {
-            let exiting = Unspawned::ThreadExiting {
-                method: Method::SpawnLocal,
-                caller: here,
-            }
-            .to_string();
-            assert!(
-                exiting.contains("while this thread is exiting"),
-                "{exiting}"
-            );
         }
     }
 

@@ -44,14 +44,9 @@ halyard_server_fn = { path = "../halyard_server_fn", features = ["cbor"] }
 insta = { workspace = true, default-features = true }
 serde = { workspace = true, default-features = true }
 
-[build-dependencies]
-rustc_version = { workspace = true, default-features = true }
-
 [features]
-csr = []
 hydrate = []
 ssr = ["halyard_server_fn_macro/ssr"]
-nightly = ["halyard_server_fn_macro/nightly"]
 tracing = ["dep:tracing"]
 islands = []
 trace-components = []
@@ -71,14 +66,6 @@ __internal_erase_components = []
 denylist = ["tracing", "trace-component-props", "trace-components"]
 skip_feature_sets = [
   [
-    "csr",
-    "hydrate",
-  ],
-  [
-    "hydrate",
-    "csr",
-  ],
-  [
     "hydrate",
     "ssr",
   ],
@@ -94,15 +81,9 @@ skip_feature_sets = [
     "generic",
     "axum",
   ],
-  [
-    "nightly",
-  ],
 ]
 max_combination_size = 2
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--generate-link-to-definition"]
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rustc_nightly)'] }

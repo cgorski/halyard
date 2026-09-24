@@ -8,7 +8,7 @@ halyard_const_str_slice_concat 31
 halyard_dom 0
 halyard_hydration_context 0
 halyard_integration_utils 0
-halyard_macro 36
+halyard_macro 35
 halyard_macro_diagnostics 4
 halyard_meta 0
 halyard_reactive_graph 3
@@ -17,5 +17,5 @@ halyard_router_macro 3
 halyard_rstml 17
 halyard_server 0
 halyard_server_fn 0
-halyard_server_fn_macro 15
+halyard_server_fn_macro 14
 halyard_tachys 0

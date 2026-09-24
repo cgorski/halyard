@@ -42,11 +42,9 @@ pub use write::*;
 /// let (count, set_count) = arc_signal(0);
 ///
 /// // ✅ calling the getter clones and returns the value
-/// //    this can be `count()` on nightly
 /// assert_eq!(count.get(), 0);
 ///
 /// // ✅ calling the setter sets the value
-/// //    this can be `set_count(1)` on nightly
 /// set_count.set(1);
 /// assert_eq!(count.get(), 1);
 ///
@@ -88,11 +86,9 @@ pub fn arc_signal<T>(value: T) -> (ArcReadSignal<T>, ArcWriteSignal<T>) {
 /// let (count, set_count) = signal(0);
 ///
 /// // ✅ calling the getter clones and returns the value
-/// //    this can be `count()` on nightly
 /// assert_eq!(count.get(), 0);
 ///
 /// // ✅ calling the setter sets the value
-/// //    this can be `set_count(1)` on nightly
 /// set_count.set(1);
 /// assert_eq!(count.get(), 1);
 ///
@@ -149,11 +145,9 @@ pub fn signal_local<T: 'static>(
 /// let (count, set_count) = create_signal(0);
 ///
 /// // ✅ calling the getter clones and returns the value
-/// //    this can be `count()` on nightly
 /// assert_eq!(count.get(), 0);
 ///
 /// // ✅ calling the setter sets the value
-/// //    this can be `set_count(1)` on nightly
 /// set_count.set(1);
 /// assert_eq!(count.get(), 1);
 ///

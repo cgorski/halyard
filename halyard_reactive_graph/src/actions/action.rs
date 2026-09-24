@@ -1179,61 +1179,78 @@ mod tests {
     use super::*;
     use crate::traits::Set;
     use std::time::{Duration, Instant};
+    use tokio::task::LocalSet;
 
     fn doubler() -> ArcAction<u32, u32> {
-        _ = Executor::init_futures_executor();
+        _ = Executor::init_tokio();
         ArcAction::new(|n: &u32| {
             let n = *n;
             async move { n * 2 }
         })
     }
 
+    /// Yields to the runtime until `done` holds, for at most five seconds.
+    async fn yield_until(done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() && Instant::now() < deadline {
+            Executor::tick().await;
+        }
+    }
+
     /// Dispatching counts the call in flight; at the counter's limit that overflowed (a panic
     /// in debug builds). It saturates, and the action still runs.
-    #[test]
-    fn dispatching_with_the_in_flight_counter_at_its_limit_saturates() {
-        let owner = Owner::new();
-        owner.set();
-        let action = doubler();
-        action.in_flight.set(usize::MAX);
+    #[tokio::test]
+    async fn dispatching_with_the_in_flight_counter_at_its_limit_saturates() {
+        LocalSet::new()
+            .run_until(async {
+                let owner = Owner::new();
+                owner.set();
+                let action = doubler();
+                action.in_flight.set(usize::MAX);
 
-        // the local task does not run until the local executor is polled
-        action.dispatch_local(1);
-        assert_eq!(action.in_flight.try_get_untracked(), Some(usize::MAX));
+                // the local task does not run until this test yields
+                action.dispatch_local(1);
+                assert_eq!(
+                    action.in_flight.try_get_untracked(),
+                    Some(usize::MAX)
+                );
 
-        // the pool may already have finished the call (and taken it out of flight)
-        action.dispatch(1);
-        let in_flight = action.in_flight.try_get_untracked();
-        assert!(
-            matches!(in_flight, Some(n) if n >= usize::MAX - 1),
-            "{in_flight:?}"
-        );
+                // the call may already have finished (and been taken out of flight)
+                action.dispatch(1);
+                let in_flight = action.in_flight.try_get_untracked();
+                assert!(
+                    matches!(in_flight, Some(n) if n >= usize::MAX - 1),
+                    "{in_flight:?}"
+                );
+            })
+            .await;
     }
 
     /// A completed call bumps the version; at its limit that overflowed (a panic in debug
     /// builds, on whatever thread ran the task). It wraps, so the version still changes.
-    #[test]
-    fn completing_with_the_version_at_its_limit_wraps() {
-        let owner = Owner::new();
-        owner.set();
+    #[tokio::test]
+    async fn completing_with_the_version_at_its_limit_wraps() {
+        LocalSet::new()
+            .run_until(async {
+                let owner = Owner::new();
+                owner.set();
 
-        let local = doubler();
-        local.version.set(usize::MAX);
-        local.dispatch_local(1);
-        Executor::poll_local();
-        assert_eq!(local.version.try_get_untracked(), Some(0));
-        assert_eq!(local.value().try_get_untracked(), Some(Some(2)));
+                let local = doubler();
+                local.version.set(usize::MAX);
+                local.dispatch_local(1);
+                yield_until(|| local.version.try_get_untracked() == Some(0))
+                    .await;
+                assert_eq!(local.version.try_get_untracked(), Some(0));
+                assert_eq!(local.value().try_get_untracked(), Some(Some(2)));
 
-        let threaded = doubler();
-        threaded.version.set(usize::MAX);
-        threaded.dispatch(2);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while threaded.version.try_get_untracked() != Some(0)
-            && Instant::now() < deadline
-        {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert_eq!(threaded.version.try_get_untracked(), Some(0));
-        assert_eq!(threaded.value().try_get_untracked(), Some(Some(4)));
+                let threaded = doubler();
+                threaded.version.set(usize::MAX);
+                threaded.dispatch(2);
+                yield_until(|| threaded.version.try_get_untracked() == Some(0))
+                    .await;
+                assert_eq!(threaded.version.try_get_untracked(), Some(0));
+                assert_eq!(threaded.value().try_get_untracked(), Some(Some(4)));
+            })
+            .await;
     }
 }

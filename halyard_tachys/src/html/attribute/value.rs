@@ -267,63 +267,6 @@ impl<'a> AttributeValue for Cow<'a, str> {
     }
 }
 
-#[cfg(all(feature = "nightly", rustc_nightly))]
-impl<const V: &'static str> AttributeValue
-    for crate::view::static_types::Static<V>
-{
-    type AsyncOutput = Self;
-    type State = ();
-    type Cloneable = Self;
-    type CloneableOwned = Self;
-
-    fn html_len(&self) -> usize {
-        V.len()
-    }
-
-    fn to_html(self, key: &str, buf: &mut String) {
-        <&str as AttributeValue>::to_html(V, key, buf);
-    }
-
-    fn to_template(key: &str, buf: &mut String) {
-        buf.push(' ');
-        buf.push_str(key);
-        buf.push_str("=\"");
-        buf.push_str(V);
-        buf.push('"');
-    }
-
-    fn hydrate<const FROM_SERVER: bool>(
-        self,
-        _key: &str,
-        _el: &crate::renderer::types::Element,
-    ) -> Self::State {
-    }
-
-    fn build(
-        self,
-        el: &crate::renderer::types::Element,
-        key: &str,
-    ) -> Self::State {
-        <&str as AttributeValue>::build(V, el, key);
-    }
-
-    fn rebuild(self, _key: &str, _state: &mut Self::State) {}
-
-    fn into_cloneable(self) -> Self::Cloneable {
-        self
-    }
-
-    fn into_cloneable_owned(self) -> Self::CloneableOwned {
-        self
-    }
-
-    fn dry_resolve(&mut self) {}
-
-    async fn resolve(self) -> Self::AsyncOutput {
-        self
-    }
-}
-
 impl<'a> AttributeValue for &'a String {
     type AsyncOutput = Self;
     type State = (crate::renderer::types::Element, &'a String);

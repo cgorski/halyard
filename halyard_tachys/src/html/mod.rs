@@ -20,12 +20,12 @@ use std::{borrow::Cow, sync::atomic::AtomicBool};
 /// (event handlers, directives, properties) to avoid `SendWrapper` cross-thread
 /// panics on multithreaded servers. If one is missing in the browser, the `ssr`
 /// feature was activated unintentionally via Cargo feature unification in a
-/// client-side (CSR or hydrate) build.
+/// client-side (hydrate) build.
 pub(crate) const FEATURE_CONFLICT_DIAGNOSTIC: &str =
     "Value is None because the `ssr` feature is active. When `ssr` is \
      enabled, tachys skips creating client-side values (event handlers, \
      directives, properties) to avoid cross-thread panics on multithreaded \
-     servers. If you are building a client-side (CSR or hydrate) target, this \
+     servers. If you are building the client-side (hydrate) target, this \
      means the `ssr` feature is being activated unintentionally via Cargo \
      feature unification; another dependency in your workspace is enabling \
      it. Run `cargo tree -e features -i tachys` to identify the source.";

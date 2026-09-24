@@ -25,19 +25,13 @@ halyard_tachys = { workspace = true, optional = true, features = ["reactive_grap
 send_wrapper = { workspace = true, default-features = true }
 thiserror = { workspace = true }
 
-# serialization formats
+# serialization (serde JSON)
 serde = { workspace = true, default-features = true }
-js-sys = { optional = true, workspace = true, default-features = true }
-wasm-bindgen = { workspace = true, optional = true, default-features = true }
 serde_json = { workspace = true, default-features = true }
 
 [features]
 ssr = []
 hydration = []
-miniserde = ["codee/miniserde"]
-rkyv = ["codee/rkyv"]
-serde-wasm-bindgen = ["codee/json_serde_wasm"]
-serde-lite = ["codee/serde_lite"]
 tachys = ["dep:halyard_tachys"]
 tracing = ["dep:tracing"]
 

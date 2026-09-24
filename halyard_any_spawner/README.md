@@ -4,7 +4,9 @@ utility that can be used to spawn tasks in a variety of executors.
 It only supports single executor per program, but that executor can be set at runtime, anywhere
 in your crate (or an application that depends on it).
 
-This can be extended to support any executor or runtime that supports spawning [`Future`]s.
+Two executors are built in: Tokio (the `tokio` feature, for the server) and
+`wasm-bindgen-futures` (the `wasm-bindgen` feature, for the browser). Any other executor or
+runtime that supports spawning [`Future`]s can be plugged in by implementing `CustomExecutor`.
 
 This is a least common denominator implementation in many ways. Limitations include:
 
@@ -18,15 +20,15 @@ set) is dropped without running, and the first one dropped for each reason is lo
 ```rust
 use halyard_any_spawner::{Executor, ExecutorError};
 
-match Executor::init_futures_executor() {
+match Executor::init_tokio() {
     // `AlreadySet`: an executor was set before, and it stays
     Ok(()) | Err(ExecutorError::AlreadySet) => {}
     Err(error) => eprintln!("no executor: {error}"),
 }
 
-// spawn a thread-safe Future
+// spawn a thread-safe Future (with Tokio: from inside the runtime)
 Executor::spawn(async { /* ... */ });
 
-// spawn a Future that is !Send
+// spawn a Future that is !Send (with Tokio: inside a `LocalSet`)
 Executor::spawn_local(async { /* ... */ });
 ```

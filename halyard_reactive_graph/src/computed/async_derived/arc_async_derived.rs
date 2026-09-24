@@ -797,7 +797,7 @@ mod tests {
     use crate::traits::{GetUntracked, Set, UpdateUntracked};
 
     fn loaded(value: u32) -> ArcAsyncDerived<u32> {
-        _ = halyard_any_spawner::Executor::init_futures_executor();
+        _ = halyard_any_spawner::Executor::init_tokio();
         ArcAsyncDerived::new_mock(move || async move { value })
     }
 

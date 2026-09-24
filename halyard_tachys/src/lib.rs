@@ -3,16 +3,6 @@
 //! This view tree is generic over rendering backends, and agnostic about reactivity/change
 //! detection.
 
-// this is specifically used for `unsized_const_params` below
-// this allows us to use const generic &'static str for static text nodes and attributes
-#![allow(incomplete_features)]
-#![cfg_attr(
-    all(feature = "nightly", rustc_nightly),
-    feature(unsized_const_params)
-)]
-// support for const generic &'static str has now moved back and forth between
-// these two features a couple times; we'll just enable both
-#![cfg_attr(all(feature = "nightly", rustc_nightly), feature(adt_const_params))]
 #![deny(missing_docs)]
 
 /// Commonly-used traits.

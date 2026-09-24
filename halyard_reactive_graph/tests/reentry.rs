@@ -20,10 +20,22 @@ use halyard_reactive_graph::{
     wrappers::write::SignalSetter,
 };
 use std::{
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, OnceLock},
     thread,
     time::Duration,
 };
+use tokio::runtime::{Builder, Runtime};
+
+/// The Tokio runtime whose worker threads run the tasks the scenarios spawn (a render
+/// effect spawns one that waits for changes).
+fn runtime() -> &'static Runtime {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        Builder::new_multi_thread()
+            .build()
+            .expect("a Tokio runtime for the tests")
+    })
+}
 
 /// Runs `scenario` under a fresh reactive owner on a thread of its own, and returns what it
 /// returns; fails the test if it has not finished after five seconds (it deadlocked) or if
@@ -32,9 +44,11 @@ fn finishes<T: Send + 'static>(
     what: &str,
     scenario: impl FnOnce() -> T + Send + 'static,
 ) -> T {
-    _ = Executor::init_futures_executor();
+    _ = Executor::init_tokio();
+    let runtime = runtime().handle().clone();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
+        let _runtime = runtime.enter();
         let owner = Owner::new();
         owner.set();
         let out = scenario();

@@ -13,7 +13,7 @@
 //! nodes, because they can listen to changes in other values.
 //!
 //! ```rust
-//! # halyard_any_spawner::Executor::init_futures_executor();
+//! # halyard_any_spawner::Executor::init_tokio();
 //! # let owner = halyard_reactive_graph::owner::Owner::new(); owner.set();
 //! use halyard_reactive_graph::{
 //!     computed::ArcMemo,
@@ -61,15 +61,13 @@
 //!   that while updating a signal will immediately update its value, effects that depend on it
 //!   will not run until the next "tick" of the async runtime. (This in turn means that the
 //!   reactive system is *async runtime agnostic*: it can be used in the browser with
-//!   `wasm-bindgen-futures`, in a native binary with `tokio`, in a GTK application with `glib`,
-//!   etc.)
+//!   `wasm-bindgen-futures`, in a native binary with `tokio`, or with any executor plugged in
+//!   through `halyard_any_spawner`'s custom executors.)
 //!
 //! The reactive-graph algorithm used in this crate is based on that of
 //! [Reactively](https://github.com/modderme123/reactively), as described
 //! [in this article](https://dev.to/modderme123/super-charging-fine-grained-reactive-performance-47ph).
 
-#![cfg_attr(all(feature = "nightly", rustc_nightly), feature(unboxed_closures))]
-#![cfg_attr(all(feature = "nightly", rustc_nightly), feature(fn_traits))]
 #![deny(missing_docs)]
 
 use std::{fmt::Arguments, future::Future};
@@ -99,9 +97,6 @@ pub use into_reactive_value::*;
 pub mod callback;
 
 use computed::ScopedFuture;
-
-#[cfg(all(feature = "nightly", rustc_nightly))]
-mod nightly;
 
 /// Reexports frequently-used traits.
 pub mod prelude {

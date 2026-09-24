@@ -12,10 +12,7 @@ edition.workspace = true
 
 [dependencies]
 halyard_throw_error = { workspace = true }
-halyard_any_spawner = { workspace = true, features = [
-  "wasm-bindgen",
-  "futures-executor",
-] }
+halyard_any_spawner = { workspace = true, features = ["wasm-bindgen"] }
 base64 = { optional = true, workspace = true, default-features = true }
 cfg-if = { workspace = true, default-features = true }
 halyard_hydration_context = { workspace = true }
@@ -55,9 +52,6 @@ slotmap = { workspace = true, default-features = true }
 futures = { workspace = true, default-features = true }
 send_wrapper = { workspace = true, default-features = true }
 wasm_split_helpers = { workspace = true, default-features = true }
-subsecond = { workspace = true, default-features = true, optional = true }
-dioxus-cli-config = { workspace = true, default-features = true, optional = true }
-dioxus-devtools = { workspace = true, default-features = true, optional = true }
 
 [features]
 hydration = [
@@ -66,7 +60,6 @@ hydration = [
   "halyard_hydration_context/browser",
   "halyard_dom/hydration",
 ]
-csr = ["halyard_macro/csr", "halyard_reactive_graph/effects", "getrandom?/wasm_js"]
 hydrate = [
   "halyard_macro/hydrate",
   "hydration",
@@ -74,8 +67,6 @@ hydrate = [
   "halyard_reactive_graph/effects",
   "getrandom?/wasm_js",
 ]
-default-tls = ["halyard_server_fn/default-tls"]
-rustls = ["halyard_server_fn/rustls"]
 ssr = [
   "halyard_macro/ssr",
   "halyard_server/ssr",
@@ -83,15 +74,6 @@ ssr = [
   "hydration",
   "halyard_tachys/ssr",
 ]
-nightly = ["halyard_macro/nightly", "halyard_reactive_graph/nightly", "halyard_tachys/nightly"]
-rkyv = ["halyard_server_fn/rkyv", "halyard_server/rkyv"]
-bitcode = ["halyard_server_fn/bitcode"]
-bitcode-serde = ["halyard_server_fn/bitcode-serde"]
-serde-lite = ["halyard_server_fn/serde-lite", "halyard_server/serde-lite"]
-cbor = ["halyard_server_fn/cbor"]
-msgpack = ["halyard_server_fn/msgpack"]
-postcard = ["halyard_server_fn/postcard"]
-multipart = ["halyard_server_fn/multipart"]
 tracing = [
   "dep:tracing",
   "halyard_reactive_graph/tracing",
@@ -108,19 +90,6 @@ trace-component-props = [
 ]
 delegation = ["halyard_tachys/delegation"]
 islands-router = ["halyard_tachys/mark_branches"]
-# Restores the upstream behaviour of panicking on a hydration mismatch (after logging),
-# instead of logging once and falling back to client-side rendering.
-panic-on-hydration-mismatch = ["halyard_tachys/panic-on-hydration-mismatch"]
-subsecond = [
-  "halyard_reactive_graph/subsecond",
-  "dep:subsecond",
-  "dep:dioxus-cli-config",
-  "dep:dioxus-devtools",
-  "web-sys/Location",
-  "web-sys/MessageEvent",
-  "web-sys/WebSocket",
-  "web-sys/Window",
-]
 
 [dev-dependencies]
 tokio = { features = [
@@ -128,14 +97,12 @@ tokio = { features = [
   "macros",
 ], workspace = true, default-features = true }
 tokio-test = { workspace = true, default-features = true }
-halyard_any_spawner = { workspace = true, features = ["futures-executor", "tokio"] }
+halyard_any_spawner = { workspace = true, features = ["tokio"] }
 # for tests/render_mode.rs (dev-dependency cycles are allowed by cargo).
 # Path only, no version: halyard_meta depends on this crate, so it is
 # published later; cargo strips versionless dev-dependencies when publishing.
 halyard_meta = { path = "../halyard_meta", features = ["ssr"] }
 
-[build-dependencies]
-rustc_version = { workspace = true, default-features = true }
 
 # Having an erasure feature rather than normal --cfg erase_components for the proc macro crate is a workaround for this rust issue:
 # https://github.com/rust-lang/cargo/issues/4423
@@ -149,57 +116,13 @@ halyard_macro = { workspace = true, features = ["__internal_erase_components"] }
 [package.metadata.cargo-all-features]
 denylist = [
   "tracing",
-  "template_macro",
-  "rustls",
-  "default-tls",
-  "wasm-bindgen",
-  "rkyv",                  # was causing clippy issues on nightly
   "trace-component-props",
   "islands",
-  "bitcode",
-  "bitcode-serde",
-  "serde-lite",
-  "cbor",
-  "msgpack",
-  "postcard",
-  "multipart",
 ]
 skip_feature_sets = [
   [
-    "csr",
-    "ssr",
-  ],
-  [
-    "csr",
-    "hydrate",
-  ],
-  [
     "ssr",
     "hydrate",
-  ],
-  [
-    "serde",
-    "serde-lite",
-  ],
-  [
-    "serde",
-    "miniserde",
-  ],
-  [
-    "serde",
-    "rkyv",
-  ],
-  [
-    "miniserde",
-    "rkyv",
-  ],
-  [
-    "serde-lite",
-    "rkyv",
-  ],
-  [
-    "default-tls",
-    "rustls",
   ],
 ]
 max_combination_size = 2
@@ -211,6 +134,5 @@ rustdoc-args = ["--generate-link-to-definition", "--cfg", "erase_components"]
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
   'cfg(halyard_debuginfo)',
-  'cfg(rustc_nightly)',
   'cfg(erase_components)',
 ] }

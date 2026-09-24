@@ -306,7 +306,7 @@ fn lazy_route_impl(
                 async fn preload() {
                     // TODO for 0.9 this is not precise
                     // we don't split routes for wasm32 ssr
-                    // but we don't require a `hydrate`/`csr` feature on halyard_router
+                    // but we don't require a `hydrate` feature on halyard_router
                     #[cfg(target_arch = "wasm32")]
                     #preload_ident().await;
                 }

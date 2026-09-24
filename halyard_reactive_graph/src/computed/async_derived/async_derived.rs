@@ -500,7 +500,7 @@ mod tests {
     /// builds). It wraps.
     #[test]
     fn writing_at_the_version_limit_wraps() {
-        _ = halyard_any_spawner::Executor::init_futures_executor();
+        _ = halyard_any_spawner::Executor::init_tokio();
         let owner = Owner::new();
         owner.set();
         let derived = AsyncDerived::new_mock(|| async { 1_u32 });
